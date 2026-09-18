@@ -877,6 +877,7 @@ class SignalRepository:
                     "risk_source": row["risk_source"],
                     "currentLTP": row["current_price"],
                     "exitPrice": row["exit_price"],
+                    "closed_at_ist": row["closed_at_ist"],
                     "max_target_hit": row["max_target_hit"],
                     "status": row["status"],
                     "result": row["result"],
