@@ -24,6 +24,7 @@ from urllib.parse import quote
 from datetime import date, datetime
 from curl_cffi import requests as cffi_requests
 from app.config import SESSION_REFRESH_SECONDS
+from integrations.angel_one_market_data import AngelOneMarketData
 from utils.time import now_ist
 logger   = logging.getLogger(__name__)
 NSE_BASE = "https://www.nseindia.com"
@@ -338,6 +339,7 @@ class NSESession:
 
 # ?? Singleton ??????????????????????????????????????????????????????????????????
 _nse = NSESession()
+_angel_fno = AngelOneMarketData.from_environment()
 _price_snapshots: OrderedDict[str, float] = OrderedDict()
 _price_snapshot_lock = RLock()
 MAX_PRICE_SNAPSHOTS = 1_000
@@ -442,6 +444,27 @@ def fetch_all_fno_oi_change() -> list[dict]:
             api_referer=f"{NSE_BASE}/market-data/oi-spurts",
         )
     if not data:
+        if _angel_fno and _angel_fno.configured:
+            try:
+                fallback = _angel_fno.fno_quotes()
+                if fallback:
+                    logger.warning("Using Angel One NFO futures fallback for %s OI rows", len(fallback))
+                    return [
+                        {
+                            "symbol": symbol,
+                            "ltp": quote.get("ltp", 0),
+                            "underlyingValue": quote.get("ltp", 0),
+                            "oi": quote.get("oi", 0),
+                            "oiChange": quote.get("oi_change", 0),
+                            "oiChangePct": quote.get("oi_change_pct", 0),
+                            "pChange": quote.get("change_pct", 0),
+                            "change": 0,
+                            "_data_source": quote.get("source"),
+                        }
+                        for symbol, quote in fallback.items()
+                    ]
+            except Exception:
+                logger.exception("Angel One NFO futures OI fallback failed")
         return []
     rows = data.get("data", [])
     enriched_rows: list[dict] = []

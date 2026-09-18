@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -190,6 +191,54 @@ class AngelOneMarketData:
                         "source": "angel_one_read_only",
                     }
         return output
+
+    def fno_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
+        """Return nearest-expiry NFO futures quotes keyed by underlying symbol."""
+        self._login()
+        instruments = self._get_instruments()
+        wanted = {str(symbol).upper().strip() for symbol in symbols or () if str(symbol).strip()}
+        today = date.today()
+        selected: dict[str, AngelInstrument] = {}
+        for (exchange, _raw_symbol), instrument in instruments.items():
+            if exchange != "NFO" or not str(instrument.symbol).upper().endswith("FUT"):
+                continue
+            name = str(instrument.symbol).upper()
+            match = re.match(r"^([A-Z&]+)\d{2}[A-Z]{3}\d{2}FUT$", name)
+            if not match:
+                continue
+            underlying = match.group(1)
+            if wanted and underlying not in wanted:
+                continue
+            try:
+                expiry = datetime.strptime(str(instrument.expiry), "%d%b%Y").date()
+            except (TypeError, ValueError):
+                continue
+            if expiry < today:
+                continue
+            previous = selected.get(underlying)
+            if previous is None or str(instrument.expiry) < str(previous.expiry):
+                selected[underlying] = instrument
+        if not selected:
+            return {}
+        raw = self.full_quotes([item.symbol for item in selected.values()], exchange="NFO")
+        if not hasattr(self, "_fno_previous_oi"):
+            self._fno_previous_oi: dict[str, float] = {}
+        result: dict[str, dict] = {}
+        for underlying, instrument in selected.items():
+            quote = raw.get(instrument.symbol)
+            if not quote:
+                continue
+            current_oi = float(quote.get("oi") or 0)
+            previous_oi = self._fno_previous_oi.get(underlying, current_oi)
+            self._fno_previous_oi[underlying] = current_oi
+            oi_change = current_oi - previous_oi
+            result[underlying] = {
+                **quote,
+                "oi_change": oi_change,
+                "oi_change_pct": (oi_change / previous_oi * 100) if previous_oi else 0.0,
+                "source": "angel_one_nfo_futures_fallback",
+            }
+        return result
 
     def intraday_candles(self, symbol: str, *, interval: str = "FIVE_MINUTE",
                          exchange: str = "NSE", days: int = 1) -> list[dict]:

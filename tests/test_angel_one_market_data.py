@@ -1,5 +1,5 @@
 from analytics.intraday import candle_vwap
-from integrations.angel_one_market_data import AngelOneMarketData
+from integrations.angel_one_market_data import AngelInstrument, AngelOneMarketData
 
 
 def test_candle_vwap_uses_true_ohlcv_volume_weighting():
@@ -38,3 +38,20 @@ def test_render_angel_variable_aliases_configure_read_only_client(monkeypatch):
     assert client.configured is True
     assert client.client_code == "client"
     assert not {"place_order", "modify_order", "cancel_order"}.intersection(dir(client))
+
+
+def test_fno_quotes_maps_nearest_future_to_underlying(monkeypatch):
+    client = AngelOneMarketData(api_key="k", client_code="c", password="p", totp_secret="t")
+    instruments = {
+        ("NFO", "INDIGO25SEP26FUT"): AngelInstrument(
+            "INDIGO25SEP26FUT", "1", "NFO", "25SEP2026", "FUTIDX"
+        ),
+    }
+    monkeypatch.setattr(client, "_login", lambda: None)
+    monkeypatch.setattr(client, "_get_instruments", lambda: instruments)
+    monkeypatch.setattr(client, "full_quotes", lambda symbols, exchange="NFO": {
+        "INDIGO25SEP26FUT": {"ltp": 5000, "oi": 100000, "change_pct": 1.2}
+    })
+    result = client.fno_quotes(["INDIGO"])
+    assert result["INDIGO"]["oi"] == 100000
+    assert result["INDIGO"]["source"] == "angel_one_nfo_futures_fallback"
