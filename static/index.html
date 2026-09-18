@@ -92,6 +92,11 @@
            class="text-[10px] bg-indigo-950 border border-indigo-800 text-indigo-300 px-2.5 py-1 rounded-full"
            x-text="marketDataSource === 'angel_one_read_only_overlay' ? 'Angel One quotes' : 'NSE public feed'"></div>
 
+      <div x-show="lastRefreshAt"
+           class="text-[10px] px-2.5 py-1 rounded-full border"
+           :class="isStale ? 'bg-amber-950 border-amber-800 text-amber-300' : 'bg-gray-800 border-gray-700 text-gray-400'"
+           x-text="(isStale ? 'Stale scan · ' : 'Updated · ') + lastRefreshAt"></div>
+
       <!-- Active signals badge -->
       <div x-show="totalActive > 0"
            class="bg-blue-950 border border-blue-800 px-2.5 py-1 rounded-full text-xs">
@@ -364,19 +369,23 @@
 
                 <!-- Entry -->
                 <td class="px-3 py-2.5 text-right mono font-semibold lv-entry"
-                    x-text="row.actionable ? '?' + fmt2(levels(row).entry) : '?'"></td>
+                    :title="row.actionable ? 'Reference entry' : 'Reference only; not a trade recommendation'"
+                    x-text="row.ltp ? '?' + fmt2(levels(row).entry) : '?'"></td>
 
                 <!-- TG1 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg1"
-                    x-text="row.actionable ? '?' + fmt2(levels(row).tg1) : '?'"></td>
+                    :title="row.actionable ? 'Reference target 1' : 'Reference only; not a trade recommendation'"
+                    x-text="row.ltp ? '?' + fmt2(levels(row).tg1) : '?'"></td>
 
                 <!-- TG2 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg2"
-                    x-text="row.actionable ? '?' + fmt2(levels(row).tg2) : '?'"></td>
+                    :title="row.actionable ? 'Reference target 2' : 'Reference only; not a trade recommendation'"
+                    x-text="row.ltp ? '?' + fmt2(levels(row).tg2) : '?'"></td>
 
                 <!-- SL -->
                 <td class="px-3 py-2.5 text-right mono lv-sl"
-                    x-text="row.actionable ? '?' + fmt2(levels(row).sl) : '?'"></td>
+                    :title="row.actionable ? 'Reference stop loss' : 'Reference only; not a trade recommendation'"
+                    x-text="row.ltp ? '?' + fmt2(levels(row).sl) : '?'"></td>
 
                 <!-- Confidence tier -->
                 <td class="px-3 py-2.5">
@@ -1079,7 +1088,7 @@ function scanner() {
   return {
     /* ?? state ?? */
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
-    marketDataSource: '', dataStatus: 'NOT_RUN', newsRefreshTimer: null,
+    marketDataSource: '', dataStatus: 'NOT_RUN', lastRefreshAt: '', isStale: false, newsRefreshTimer: null,
     marketOverview: null, marketOverviewError: '',
     news: [], newsSymbol: '', newsLoading: false, newsHighOnly: false,
     intelligence: null, intelligenceLoading: false, participantOI: null,
@@ -1285,8 +1294,10 @@ function scanner() {
 
     async fetchSignals(force=false) {
       this.loading = true; this.error = '';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45000);
       try {
-        const r = await fetch('/api/oi-signals' + (force ? '?refresh=true' : ''));
+        const r = await fetch('/api/oi-signals' + (force ? '?refresh=true' : ''), {signal: controller.signal});
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
         this.signals      = d.signals || [];
@@ -1296,14 +1307,18 @@ function scanner() {
         this.mediumConf   = d.medium_confidence || 0;
         this.marketDataSource = d.primary_market_data_source || '';
         this.dataStatus    = d.data_status || 'NOT_RUN';
+        this.lastRefreshAt = d.last_refresh_at_ist || d.timestamp || '';
+        this.isStale       = Boolean(d.is_stale);
         this.availableSectors = d.available_sectors || this.availableSectors;
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';
         this.autoSaveSignals(this.signals);
         await this.loadServerHistory();
       } catch(e) {
-        this.error = 'NSE fetch failed: ' + e.message + '. Auto-retry in 60s.';
-      } finally { this.loading = false; }
+        this.error = e.name === 'AbortError'
+          ? 'Live scan is taking longer than 45s; showing the last received data and retrying.'
+          : 'NSE fetch failed: ' + e.message + '. Auto-retry in 60s.';
+      } finally { clearTimeout(timeout); this.loading = false; }
     },
 
     groupHistory(events) {
