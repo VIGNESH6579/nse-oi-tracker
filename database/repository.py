@@ -891,7 +891,7 @@ class SignalRepository:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT status, max_target_hit, risk_reward, entry, exit_price, direction
+                SELECT status, result, max_target_hit, risk_reward, entry, exit_price, direction
                 FROM signal_events WHERE trade_date = ? AND archived = 0
                 """,
                 (trade_date,),
