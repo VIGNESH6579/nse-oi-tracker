@@ -602,6 +602,31 @@ class SignalRepository:
             snapshot_id = int(cursor.lastrowid)
             for signal in signals:
                 payload, plan = self._event_payload(signal, captured_at)
+                symbol = str(payload.get("symbol") or "").upper()
+                signal_name = str(payload.get("signal") or "NEUTRAL")
+                direction = str(payload["direction"])
+                existing = connection.execute(
+                    """
+                    SELECT id FROM signal_events
+                    WHERE trade_date = ? AND archived = 0
+                      AND symbol = ? AND signal = ? AND direction = ?
+                      AND entry = ? AND stop_loss = ? AND target_1 = ? AND target_2 = ?
+                      AND status IN ('OPEN', 'TG1_HIT')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (
+                        trade_date, symbol, signal_name, direction,
+                        plan["entry"], plan["stop_loss"], plan["target_1"], plan["target_2"],
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    # Keep the first event as the setup record; refresh its last
+                    # observed price/payload without creating another trade row.
+                    connection.execute(
+                        "UPDATE signal_events SET current_price = ?, payload_json = ? WHERE id = ?",
+                        (float(payload.get("ltp") or 0), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
+                    )
+                    continue
                 connection.execute(
                     """
                     INSERT INTO signal_events (
@@ -614,9 +639,9 @@ class SignalRepository:
                         snapshot_id,
                         trade_date,
                         captured_at.isoformat(),
-                        str(payload.get("symbol") or "").upper(),
-                        str(payload.get("signal") or "NEUTRAL"),
-                        str(payload["direction"]),
+                        symbol,
+                        signal_name,
+                        direction,
                         int(payload.get("confidence") or 0),
                         plan["entry"],
                         plan["stop_loss"],

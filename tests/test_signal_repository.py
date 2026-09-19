@@ -37,6 +37,19 @@ def test_snapshots_are_deduplicated_and_events_are_server_owned(tmp_path):
     assert events[0]["risk_source"] == "percentage_fallback_pending_atr"
 
 
+def test_repeated_open_setup_is_not_counted_as_a_new_trade(tmp_path):
+    repository = SignalRepository(tmp_path / "tracker.sqlite3")
+    first_at = datetime(2026, 9, 10, 10, 0, tzinfo=IST)
+
+    repository.record_scan([_signal("REPEAT", 100.0)], first_at)
+    repository.record_scan([_signal("REPEAT", 100.0)], first_at + timedelta(minutes=2))
+
+    events, total = repository.history_for_date("2026-09-10")
+    assert total == 1
+    assert len(events) == 1
+    assert events[0]["symbol"] == "REPEAT"
+
+
 def test_target_progression_and_market_close_are_recorded(tmp_path):
     repository = SignalRepository(tmp_path / "tracker.sqlite3")
     captured_at = datetime(2026, 9, 10, 10, 0, tzinfo=IST)
