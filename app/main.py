@@ -669,7 +669,13 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
 
 
 async def scheduled_ban_refresh() -> None:
-    await asyncio.to_thread(refresh_ban_list)
+    """Daily F&O ban list; hard 90 s cap so a hung fetch is always reported."""
+    try:
+        await asyncio.wait_for(asyncio.to_thread(refresh_ban_list), timeout=90)
+    except asyncio.TimeoutError:
+        logger.warning("FNO_BAN_LIST_UNAVAILABLE: refresh timed out after 90 s")
+    except Exception:
+        logger.exception("F&O ban list refresh failed")
 
 
 def render_startup_backfill_enabled() -> bool:
@@ -785,8 +791,10 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(restore_latest_backup, settings.database_path)
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
-    asyncio.create_task(startup_universe_maintenance())
-    asyncio.create_task(scheduled_ban_refresh())
+    if render_startup_backfill_enabled():
+        # Network work at startup only on Render (never in tests/dev).
+        asyncio.create_task(startup_universe_maintenance())
+        asyncio.create_task(scheduled_ban_refresh())
     # Render Free has an ephemeral filesystem; run one bounded backfill without
     # blocking health/startup. The deployment setting controls whether it runs.
     if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):

@@ -10,7 +10,6 @@ import logging
 import re
 import threading
 import time
-import urllib.request
 
 logger = logging.getLogger(__name__)
 URLS = ["https://nsearchives.nseindia.com/content/fo/fo_secban.csv",
@@ -32,9 +31,13 @@ def parse_ban_csv(text: str) -> frozenset[str]:
 
 
 def _fetch(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8", "ignore")
+    # Same session/TLS-impersonating client as the (working) bhavcopy download;
+    # plain urllib is rejected by NSE's edge from cloud IPs.
+    from app.nse_fetcher import fetch_nse_archive_text
+    text = fetch_nse_archive_text(url)
+    if not text:
+        raise RuntimeError("empty or blocked response")
+    return text
 
 
 def refresh_ban_list(fetch=_fetch) -> bool:

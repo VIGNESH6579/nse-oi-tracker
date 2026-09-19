@@ -548,6 +548,11 @@ def fetch_equity_bhavcopy(trade_date: date) -> str | None:
     )
 
 
+def fetch_nse_archive_text(url: str, referer: str | None = None) -> str | None:
+    """Generic NSE archive download through the working session/TLS-impersonating client."""
+    return _nse.get_archive_text(url, referer=referer or f"{NSE_BASE}/all-reports-derivatives")
+
+
 def fetch_participant_oi_report(trade_date: date) -> str | None:
     """Fetch the NSE F&O participant-wise OI end-of-day CSV for one date.
 
