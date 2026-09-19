@@ -17,6 +17,9 @@ from datetime import date, datetime, timedelta
 from threading import RLock
 from urllib.parse import quote
 
+from utils.jsonstream import iter_json_array
+from utils.time import now_ist
+
 import pyotp
 from curl_cffi import requests
 
@@ -161,17 +164,36 @@ class AngelOneMarketData:
         return {"state": "breaker_open" if retry_at else ("authenticated" if self._jwt else "not_authenticated"),
                 "last_error_code": self._last_error_code, "retry_at": retry_at}
 
+    _INDEX_NAMES = frozenset({"NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE", "NIFTY MID SELECT", "NIFTY NEXT 50", "INDIA VIX"})
+
     def _get_instruments(self) -> dict[tuple[str, str], AngelInstrument]:
+        """Load only the rows this app uses (NSE equities/indices, NFO stock/index futures).
+
+        The full master has >100k rows (mostly options). It is streamed and
+        filtered row by row so peak memory stays small on a 512 MB instance.
+        """
         with self._lock:
             if self._instruments:
                 return self._instruments
-            response = requests.get(INSTRUMENT_MASTER_URL, timeout=30)
+            response = requests.get(INSTRUMENT_MASTER_URL, timeout=60)
             response.raise_for_status()
-            records = response.json()
+            text = response.text
+            del response
             result: dict[tuple[str, str], AngelInstrument] = {}
-            for row in records:
+            for row in iter_json_array(text):
+                if not isinstance(row, dict):
+                    continue
                 exchange = str(row.get("exch_seg") or "").upper()
                 raw_symbol = str(row.get("symbol") or "").upper()
+                instrument_type = str(row.get("instrumenttype") or "").upper()
+                if exchange == "NFO":
+                    if instrument_type not in ("FUTSTK", "FUTIDX"):
+                        continue
+                elif exchange == "NSE":
+                    if not (raw_symbol.endswith("-EQ") or instrument_type == "AMXIDX" or raw_symbol in self._INDEX_NAMES):
+                        continue
+                else:
+                    continue
                 symbol = self._lookup_symbol(raw_symbol, exchange=exchange)
                 token = str(row.get("token") or "")
                 if exchange and symbol and token:
@@ -182,6 +204,7 @@ class AngelOneMarketData:
                         expiry=row.get("expiry"),
                         instrument_type=row.get("instrumenttype"),
                     ))
+            del text
             self._instruments = result
             return result
 
@@ -245,18 +268,28 @@ class AngelOneMarketData:
                     }
         return output
 
-    def fno_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
-        """Return nearest-expiry NFO futures quotes keyed by underlying symbol."""
+    _FUT_RE = re.compile(r"^(.+?)\d{2}[A-Z]{3}\d{2}FUT$")
+
+    def fno_quotes(self, symbols: list[str] | None = None, *, today: date | None = None) -> dict[str, dict]:
+        """Nearest-expiry NFO futures quotes keyed by underlying.
+
+        * Expiry is chosen by parsed DATE (the old string comparison could pick
+          next month: "28OCT2026" < "30SEP2026" as text).
+        * Within ``ANGEL_ROLL_DAYS`` (default 5) of expiry the next-month OI is
+          added so rollover does not look like OI unwinding.
+        * ``oi_change`` is measured from the first OI seen today (session
+          baseline), not from the previous 2-minute scan.
+        """
         self._login()
         instruments = self._get_instruments()
         wanted = {str(symbol).upper().strip() for symbol in symbols or () if str(symbol).strip()}
-        today = date.today()
-        selected: dict[str, AngelInstrument] = {}
+        today = today or now_ist().date()
+        roll_days = int(os.getenv("ANGEL_ROLL_DAYS", "5"))
+        by_underlying: dict[str, list[tuple[date, AngelInstrument]]] = {}
         for (exchange, _raw_symbol), instrument in instruments.items():
             if exchange != "NFO" or not str(instrument.symbol).upper().endswith("FUT"):
                 continue
-            name = str(instrument.symbol).upper()
-            match = re.match(r"^([A-Z&]+)\d{2}[A-Z]{3}\d{2}FUT$", name)
+            match = self._FUT_RE.match(str(instrument.symbol).upper())
             if not match:
                 continue
             underlying = match.group(1)
@@ -268,27 +301,38 @@ class AngelOneMarketData:
                 continue
             if expiry < today:
                 continue
-            previous = selected.get(underlying)
-            if previous is None or str(instrument.expiry) < str(previous.expiry):
-                selected[underlying] = instrument
-        if not selected:
+            by_underlying.setdefault(underlying, []).append((expiry, instrument))
+        if not by_underlying:
             return {}
-        raw = self.full_quotes([item.symbol for item in selected.values()], exchange="NFO")
-        if not hasattr(self, "_fno_previous_oi"):
-            self._fno_previous_oi: dict[str, float] = {}
+        plan: dict[str, tuple[AngelInstrument, AngelInstrument | None]] = {}
+        for underlying, contracts in by_underlying.items():
+            contracts.sort(key=lambda item: item[0])
+            near_expiry, near = contracts[0]
+            nxt = contracts[1][1] if len(contracts) > 1 and (near_expiry - today).days <= roll_days else None
+            plan[underlying] = (near, nxt)
+        wanted_symbols = [inst.symbol for near, nxt in plan.values() for inst in (near, nxt) if inst is not None]
+        raw = self.full_quotes(wanted_symbols, exchange="NFO")
+        if not hasattr(self, "_fno_open_oi"):
+            self._fno_open_oi: dict[str, tuple[date, float]] = {}
         result: dict[str, dict] = {}
-        for underlying, instrument in selected.items():
-            quote = raw.get(instrument.symbol)
+        for underlying, (near, nxt) in plan.items():
+            quote = raw.get(near.symbol)
             if not quote:
                 continue
             current_oi = float(quote.get("oi") or 0)
-            previous_oi = self._fno_previous_oi.get(underlying, current_oi)
-            self._fno_previous_oi[underlying] = current_oi
-            oi_change = current_oi - previous_oi
+            if nxt is not None:
+                current_oi += float((raw.get(nxt.symbol) or {}).get("oi") or 0)
+            baseline = self._fno_open_oi.get(underlying)
+            if baseline is None or baseline[0] != today:
+                baseline = (today, current_oi)
+                self._fno_open_oi[underlying] = baseline
+            oi_change = current_oi - baseline[1]
             result[underlying] = {
                 **quote,
+                "oi": current_oi,
                 "oi_change": oi_change,
-                "oi_change_pct": (oi_change / previous_oi * 100) if previous_oi else 0.0,
+                "oi_change_pct": (oi_change / baseline[1] * 100) if baseline[1] else 0.0,
+                "oi_includes_next_month": nxt is not None,
                 "source": "angel_one_nfo_futures_fallback",
             }
         return result
@@ -300,8 +344,16 @@ class AngelOneMarketData:
         instrument = self.instrument(symbol, exchange=exchange)
         if not instrument:
             return []
-        end = datetime.now().replace(second=0, microsecond=0)
-        start = end - timedelta(days=max(1, days))
+        # Angel expects IST wall-clock times. The old naive datetime.now() used the
+        # server's UTC clock, so intraday requests covered the wrong window (often
+        # yesterday's session) and any "session VWAP" was built from stale candles.
+        end = now_ist().replace(second=0, microsecond=0, tzinfo=None)
+        if interval != "ONE_DAY" and days <= 1:
+            start = end.replace(hour=9, minute=15)      # today's session only
+            if start >= end:
+                start = end - timedelta(minutes=10)
+        else:
+            start = end - timedelta(days=max(1, days))
         response = requests.post(
             f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
             headers=self._headers(),

@@ -107,9 +107,22 @@ def classify_regime(
     return "RANGE_BOUND"
 
 
+def _after_corporate_action(rows: list, limit: float = 0.25) -> list:
+    """Drop bars before a >25% one-day close jump (split/bonus/demerger in raw bhavcopy).
+
+    Unadjusted history would otherwise poison ATR/EMA. Fewer bars simply makes the
+    confirmation gate fail closed ("atr_unavailable") until enough clean bars exist.
+    """
+    for index in range(len(rows) - 1, 0, -1):
+        previous, current = float(rows[index - 1]["close"]), float(rows[index]["close"])
+        if previous > 0 and abs(current / previous - 1) > limit:
+            return rows[index:]
+    return rows
+
+
 def technical_context(candles: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """Return explainable daily validation context and missing-data diagnostics."""
-    rows = _ordered(candles)
+    rows = _after_corporate_action(_ordered(candles))
     closes = [float(row["close"]) for row in rows]
     latest_close = closes[-1] if closes else None
     ema20 = ema(closes, 20)

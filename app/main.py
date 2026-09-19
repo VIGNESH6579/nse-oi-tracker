@@ -65,6 +65,9 @@ from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_da
 from collector.index_backfill import backfill_index_bars
 from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s, last_snapshot_info
 from collector.universe import universe_source, cached_universe_size
+from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
+from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles
+from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -207,7 +210,7 @@ def _refresh_signals() -> list[dict]:
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
-        if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") != "NEUTRAL" and int(signal.get("confidence") or 0) >= 70:
+        if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS and int(signal.get("confidence") or 0) >= 70:
             try:
                 global _last_vwap_request_at
                 cache_key = (symbol.upper(), "FIVE_MINUTE")
@@ -225,9 +228,12 @@ def _refresh_signals() -> list[dict]:
                     _last_vwap_request_at = time.monotonic()
                 else:
                     candles = []
-                broker_vwap = candle_vwap(candles)
+                summary = summarize_candles(candles)
+                broker_vwap = summary.get("vwap") if summary.get("available") else candle_vwap(candles)
+                _data_quality["candle_ok" if broker_vwap is not None else "candle_empty"] += 1
                 if broker_vwap is not None:
                     context = {
+                        **summary,
                         "vwap": broker_vwap, "available": True,
                         "source": "angel_one_5m_ohlcv",
                         "data_frequency": "FIVE_MINUTE",
@@ -236,10 +242,12 @@ def _refresh_signals() -> list[dict]:
                     }
                     _vwap_cache[cache_key] = (time.monotonic(), dict(context))
             except Exception:
+                _data_quality["candle_fail"] += 1
                 logger.warning("Angel candle VWAP unavailable for %s; retaining observation VWAP", symbol)
         enriched_intraday.append({**signal, "intraday_context": context})
     signals = enriched_intraday
     if signals:
+        bars_by_symbol: dict = {}
         try:
             symbols = [str(signal.get("symbol") or "") for signal in signals]
             bars_by_symbol = repository.daily_equity_bars_for_symbols(symbols)
@@ -262,25 +270,20 @@ def _refresh_signals() -> list[dict]:
         except Exception:
             logger.exception("Could not attach daily technical context to scanner results")
         try:
-            announcements = normalize_nse_announcements(fetch_corporate_announcements())
-            repository.upsert_corporate_announcements(announcements)
-            signals = [{**signal, "news_context": latest_event_risk(announcements, str(signal.get("symbol") or ""))} for signal in signals]
+            signals = _apply_confirmation_gate(signals, bars_by_symbol)
         except Exception:
-            logger.exception("Could not attach NSE disclosure context to scanner results")
+            logger.exception("Confirmation gate failed; failing closed")
+            signals = [{**signal, "actionable": False, "trade_recommendation": "NO_TRADE",
+                        "confirmation_gate": "FAILED", "missing_confirmations": ["gate_error"]} for signal in signals]
         try:
-            market_context = normalize_market_overview(
-                fetch_market_indices(), fetch_fii_dii_activity(),
-            )
-            cache.set("market-overview", market_context, ttl=settings.cache_ttl_seconds)
-            signals = [
-                {
-                    **signal,
-                    "cas_context": confidence_analysis(
-                        signal.get("technical_context"), signal.get("news_context"), market_context,
-                    ),
-                }
-                for signal in signals
-            ]
+            market_context = cache.get("market-overview")
+            if market_context is None:
+                # VIX/index regime only, refreshed at most once per cache TTL. News/announcements
+                # and FII/DII cash flow were removed from the scan: no intraday signal value.
+                market_context = normalize_market_overview(fetch_market_indices(), [])
+                cache.set("market-overview", market_context, ttl=settings.cache_ttl_seconds)
+            signals = [{**signal, "cas_context": confidence_analysis(signal.get("technical_context"), None, market_context)}
+                       for signal in signals]
         except Exception:
             logger.exception("Could not attach public VIX/regime/CAS context to scanner results")
     monotonic_now = time.monotonic()
@@ -619,6 +622,56 @@ def memory_watchdog() -> float | None:
     return rss
 
 
+_data_quality: dict[str, int] = {"candle_ok": 0, "candle_empty": 0, "candle_fail": 0}
+_gate_stats: dict = {"passed": 0, "failed": 0, "top_missing": {}, "at": None}
+_bias_cache: tuple[float, str] = (0.0, "UNKNOWN")
+
+
+def _market_bias_cached() -> str:
+    """Nifty 5-minute regime (BULL/BEAR/NEUTRAL/UNKNOWN), cached 90 s; soft input only."""
+    global _bias_cache
+    if time.monotonic() - _bias_cache[0] < 90:
+        return _bias_cache[1]
+    bias = "UNKNOWN"
+    if angel_market_data is not None:
+        try:
+            bias = bias_from_candles(angel_market_data.intraday_candles("NIFTY", interval="FIVE_MINUTE", exchange="NSE", days=1))
+        except Exception:
+            logger.warning("Nifty regime unavailable; treating as UNKNOWN")
+    _bias_cache = (time.monotonic(), bias)
+    return bias
+
+
+def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[dict]:
+    """Attach the transparent confirmation gate to every candidate (fail closed)."""
+    now = now_ist()
+    today = now.date().isoformat()
+    banned = banned_symbols()
+    bias = _market_bias_cached()
+    out, missing_counts = [], {}
+    for signal in signals:
+        symbol = str(signal.get("symbol") or "")
+        tech = signal.get("technical_context") or {}
+        bars = [bar for bar in bars_by_symbol.get(symbol, []) if str(bar.get("trade_date")) != today]
+        gate = evaluate_gate(
+            signal, oi_ctx=signal.get("oi_window") or {}, intraday=signal.get("intraday_context"),
+            atr14=tech.get("atr14"), avg_volume=average_daily_volume(bars),
+            prev_close=float(bars[-1]["close"]) if bars else None,
+            ema20=tech.get("ema20"), ema50=tech.get("ema50"),
+            banned=symbol.upper() in banned, market_bias=bias, now=now,
+        )
+        for reason in gate["missing_confirmations"]:
+            missing_counts[reason] = missing_counts.get(reason, 0) + 1
+        out.append({**signal, **gate})
+    passed = sum(1 for item in out if item.get("actionable"))
+    _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), at=now.isoformat(timespec="seconds"))
+    return out
+
+
+async def scheduled_ban_refresh() -> None:
+    await asyncio.to_thread(refresh_ban_list)
+
+
 def render_startup_backfill_enabled() -> bool:
     """Only run automatic backfill on Render; local/dev uses the HTTP trigger."""
     return bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
@@ -708,6 +761,14 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
     scheduler.add_job(
+        scheduled_ban_refresh,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone=IST),
+        id="fno-ban-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
         scheduled_backfill_topup,
         CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=IST),
         id="post-close-bhavcopy-topup",
@@ -725,6 +786,7 @@ async def lifespan(app: FastAPI):
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
     asyncio.create_task(startup_universe_maintenance())
+    asyncio.create_task(scheduled_ban_refresh())
     # Render Free has an ephemeral filesystem; run one bounded backfill without
     # blocking health/startup. The deployment setting controls whether it runs.
     if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):
@@ -811,6 +873,15 @@ async def health():
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "memory_rss_peak_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "memory_rss_current_mb": _current_rss_mb(),
+        "data_quality": {
+            "rows_last_scan": oi_engine._last_scan_stats.get("rows"),
+            "candidates_last_scan": oi_engine._last_scan_stats.get("candidates"),
+            "oi_window": oi_engine.oi_window.depth(),
+            **_data_quality,
+            "market_bias": _bias_cache[1],
+            **ban_info(),
+            "gate_last_scan": _gate_stats,
+        },
         "fno_universe_source": universe_source(),
         "fno_universe_size": cached_universe_size(),
         **last_snapshot_info(),
@@ -1142,21 +1213,6 @@ async def candidate_confidence_analysis(symbol: str):
         "cas": candidate.get("cas_context") or confidence_analysis(
             candidate.get("technical_context"), candidate.get("news_context"), cache.get("market-overview"),
         ),
-    }
-
-
-@app.get("/api/news")
-async def corporate_news(symbol: str = Query(""), limit: int = Query(100, ge=1, le=500), refresh: bool = Query(False)):
-    """Latest public NSE corporate disclosures, labeled for event risk not sentiment."""
-    if refresh:
-        announcements = normalize_nse_announcements(await asyncio.to_thread(fetch_corporate_announcements))
-        await asyncio.to_thread(repository.upsert_corporate_announcements, announcements)
-    rows = await asyncio.to_thread(repository.recent_corporate_announcements, symbol=symbol or None, limit=limit)
-    return {
-        "source": "NSE corporate announcements",
-        "symbol": symbol.upper().strip() or None,
-        "announcements": rows,
-        "methodology_caveat": "Labels indicate potential event volatility only; they do not infer news sentiment or a trade direction.",
     }
 
 

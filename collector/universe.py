@@ -72,7 +72,18 @@ def _http_get(url: str, timeout: float = 30.0) -> bytes:
 
 
 def _from_angel() -> frozenset[str]:
-    return parse_angel_master(json.loads(_http_get(ANGEL_MASTER_URL)))
+    """Stream the >100k-row master; hold only stock-future underlyings (memory-safe)."""
+    from utils.jsonstream import iter_json_array
+    text = _http_get(ANGEL_MASTER_URL, timeout=60).decode("utf-8", "ignore")
+    try:
+        return parse_angel_master(
+            row for row in iter_json_array(text)
+            if isinstance(row, dict)
+            and str(row.get("exch_seg") or "").upper() == "NFO"
+            and str(row.get("instrumenttype") or "").upper() == "FUTSTK"
+        )
+    finally:
+        del text
 
 
 def _from_nse() -> frozenset[str]:
