@@ -562,6 +562,7 @@ class SignalRepository:
         *,
         source: str = "nse_oi_spurts",
         is_stale: bool = False,
+        stop_loss_cooldown_minutes: int = 60,
     ) -> SnapshotWrite:
         """Persist one scan atomically, deduplicating identical minute snapshots."""
         captured_at = as_ist(captured_at)
@@ -605,6 +606,21 @@ class SignalRepository:
                 symbol = str(payload.get("symbol") or "").upper()
                 signal_name = str(payload.get("signal") or "NEUTRAL")
                 direction = str(payload["direction"])
+                cooldown_since = (captured_at - timedelta(minutes=stop_loss_cooldown_minutes)).isoformat()
+                recent_stop = connection.execute(
+                    """
+                    SELECT 1 FROM signal_events
+                    WHERE trade_date = ? AND archived = 0
+                      AND symbol = ? AND direction = ? AND status = 'SL_HIT'
+                      AND closed_at_ist >= ?
+                    LIMIT 1
+                    """,
+                    (trade_date, symbol, direction, cooldown_since),
+                ).fetchone()
+                if recent_stop is not None:
+                    # Do not turn a stopped-out setup into an immediate repeat
+                    # trade while the same directional pressure persists.
+                    continue
                 existing = connection.execute(
                     """
                     SELECT id FROM signal_events
