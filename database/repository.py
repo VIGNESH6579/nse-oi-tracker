@@ -331,6 +331,34 @@ class SignalRepository:
             result[str(record.pop("symbol"))].append(record)
         return result
 
+    def purge_non_fno_bars(self, symbols: Iterable[str]) -> dict[str, int]:
+        """Delete equity bars for symbols outside the F&O universe.
+
+        No-op when the universe is empty (fail-closed: never wipe on a failed
+        lookup). VACUUM only when a large share was removed.
+        """
+        keep = sorted({str(sym).upper() for sym in symbols if sym})
+        if not keep:
+            return {"before": 0, "deleted": 0, "after": 0, "vacuumed": 0}
+        with self._connect() as connection:
+            before = connection.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]
+            connection.execute("CREATE TEMP TABLE IF NOT EXISTS keep_symbols(symbol TEXT PRIMARY KEY)")
+            connection.execute("DELETE FROM keep_symbols")
+            connection.executemany("INSERT OR IGNORE INTO keep_symbols(symbol) VALUES (?)", [(sym,) for sym in keep])
+            connection.execute("DELETE FROM daily_equity_bars WHERE symbol NOT IN (SELECT symbol FROM keep_symbols)")
+            after = connection.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]
+            connection.commit()
+        deleted = before - after
+        vacuumed = 0
+        if before and deleted / before > 0.2:
+            raw = sqlite3.connect(self.database_path)
+            try:
+                raw.execute("VACUUM")
+                vacuumed = 1
+            finally:
+                raw.close()
+        return {"before": before, "deleted": deleted, "after": after, "vacuumed": vacuumed}
+
     def daily_equity_bar_summary(self) -> dict[str, Any]:
         """Compact technical-data freshness diagnostics for /api/health."""
         with self._connect() as connection:
@@ -633,11 +661,25 @@ class SignalRepository:
                 total += 1.0
         return total
 
+    _SKIP_PAYLOAD_KEYS = ("ltp", "confidence", "confidence_score", "signal", "price_age_s", "stale_price")
+
     @staticmethod
     def _record_skip(connection: sqlite3.Connection, *, trade_date: str, captured_at: datetime, symbol: str, direction: str, reason: str, payload: dict[str, Any]) -> None:
+        """Store one compact row per (day, symbol, direction, reason).
+
+        The old version wrote a full payload on every scan for every blocked
+        candidate, so the table (and the durable snapshot) grew without bound.
+        """
+        exists = connection.execute(
+            "SELECT 1 FROM setup_skips WHERE trade_date = ? AND symbol = ? AND direction = ? AND skip_reason = ? LIMIT 1",
+            (trade_date, symbol, direction, reason),
+        ).fetchone()
+        if exists:
+            return
+        small = {key: payload[key] for key in SignalRepository._SKIP_PAYLOAD_KEYS if key in payload}
         connection.execute(
             "INSERT INTO setup_skips(trade_date, captured_at_ist, symbol, direction, skip_reason, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (trade_date, captured_at.isoformat(), symbol, direction, reason, json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)),
+            (trade_date, captured_at.isoformat(), symbol, direction, reason, json.dumps(small, sort_keys=True, separators=(",", ":"), default=str)),
         )
 
     def skip_reasons_for_date(self, trade_date: str) -> list[dict[str, Any]]:

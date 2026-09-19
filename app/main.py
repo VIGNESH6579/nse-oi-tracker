@@ -63,7 +63,8 @@ from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
-from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s
+from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s, last_snapshot_info
+from collector.universe import universe_source, cached_universe_size
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -99,6 +100,19 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class _HealthAccessFilter(logging.Filter):
+    """Drop /api/health access lines (Render probes it every 5 s) so real logs stay visible."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            return "/api/health" not in record.getMessage()
+        except Exception:
+            return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
 STALE_SIGNAL_GRACE_SECONDS = 180
 _last_good_signals: list[dict] = []
 _last_good_signals_at = 0.0
@@ -509,6 +523,14 @@ def _backfill_end_date() -> date:
 async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> dict[str, object]:
     started = time.monotonic()
     started_at = now_ist().isoformat()
+    symbols = await asyncio.to_thread(bundled_fno_symbols)
+    if not symbols:
+        # Fail closed: never fall back to storing all ~2,600 equities.
+        logger.warning("Backfill skipped: F&O universe unavailable")
+        return {"requested": 0, "downloaded": 0, "stored": 0, "skipped": 0, "failed": 0,
+                "skipped_reason": "fno_universe_unavailable",
+                "started_at_ist": started_at, "duration_seconds": 0.0,
+                "daily_equity_data": repository.daily_equity_bar_summary()}
     async with _backfill_lock:
         result = await asyncio.to_thread(
             backfill_recent_bhavcopies,
@@ -516,7 +538,7 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
             end_date=_backfill_end_date(),
             required_days=required_days,
             max_downloads=max_downloads,
-            symbols=bundled_fno_symbols(),
+            symbols=symbols,
         )
     result.update({
         "started_at_ist": started_at,
@@ -533,19 +555,68 @@ async def automatic_startup_backfill() -> None:
     if not bhavcopy_backfill_required(summary):
         return
     logger.info("Daily bhavcopy is missing recent dates; automatic bounded backfill is starting. Monitor /api/health.")
+    current = now_ist()
+    minutes = current.hour * 60 + current.minute
+    in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
+    # During market hours fetch only the newest 16 dates (enough for ATR14);
+    # the rest is topped up after the close to protect the 512 MB instance.
+    limit = min(16, settings.backfill_target_days) if in_market_hours else settings.backfill_target_days
     try:
-        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=settings.backfill_target_days)
-        logger.info("Automatic bhavcopy backfill finished: %s", result)
+        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
+        logger.info("Automatic bhavcopy backfill finished (market_hours=%s cap=%d): %s", in_market_hours, limit, result)
     except Exception:
         logger.exception("Automatic bhavcopy backfill failed")
 
 
 async def scheduled_durable_snapshot() -> None:
     """Persist today's working database during market hours."""
+    memory_watchdog()
     current = now_ist()
     minutes = current.hour * 60 + current.minute
     if current.weekday() < 5 and 540 <= minutes <= 945:
         await asyncio.to_thread(upload_database_snapshot, settings.database_path)
+
+
+async def startup_universe_maintenance() -> None:
+    """Load the real F&O universe and drop non-F&O bars (fail-closed, background)."""
+    try:
+        symbols = await asyncio.to_thread(bundled_fno_symbols)
+        if not symbols:
+            logger.warning("Bar purge skipped: F&O universe unavailable")
+            return
+        result = await asyncio.to_thread(repository.purge_non_fno_bars, symbols)
+        logger.info("F&O universe applied source=%s symbols=%d purge=%s", universe_source(), len(symbols), result)
+    except Exception:
+        logger.exception("F&O universe maintenance failed")
+
+
+async def scheduled_backfill_topup() -> None:
+    """After the close: top up missing history to the full target (cheap when complete)."""
+    if not settings.startup_backfill:
+        return
+    try:
+        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=settings.backfill_target_days)
+        logger.info("Post-close bhavcopy top-up finished: %s", result)
+    except Exception:
+        logger.exception("Post-close bhavcopy top-up failed")
+
+
+def _current_rss_mb() -> float | None:
+    try:
+        with open("/proc/self/statm") as handle:
+            return round(int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1048576, 2)
+    except Exception:
+        return None
+
+
+def memory_watchdog() -> float | None:
+    """Warn (and collect garbage) when RSS nears Render Free's 512 MB limit."""
+    rss = _current_rss_mb()
+    limit = float(os.getenv("MEMORY_WARN_MB", "430"))
+    if rss is not None and rss > limit:
+        logger.warning("MEMORY_HIGH rss_mb=%.1f warn_mb=%.0f; running gc", rss, limit)
+        gc.collect()
+    return rss
 
 
 def render_startup_backfill_enabled() -> bool:
@@ -636,6 +707,14 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        scheduled_backfill_topup,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=IST),
+        id="post-close-bhavcopy-topup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     app.state.scheduler = scheduler
     gc.freeze()
@@ -645,6 +724,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(restore_latest_backup, settings.database_path)
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
+    asyncio.create_task(startup_universe_maintenance())
     # Render Free has an ephemeral filesystem; run one bounded backfill without
     # blocking health/startup. The deployment setting controls whether it runs.
     if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):
@@ -729,6 +809,11 @@ async def health():
         "angel":         angel_state,
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
+        "memory_rss_peak_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
+        "memory_rss_current_mb": _current_rss_mb(),
+        "fno_universe_source": universe_source(),
+        "fno_universe_size": cached_universe_size(),
+        **last_snapshot_info(),
         "last_refresh_at_ist": _last_refresh_at_ist,
         "last_refresh_was_stale": _last_refresh_was_stale,
         "last_snapshot_id": _last_snapshot_id,
