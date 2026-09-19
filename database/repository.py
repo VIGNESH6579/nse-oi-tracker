@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from signal_engine.risk import build_risk_plan
+from config.settings import get_settings
 from utils.time import as_ist, ist_trade_date
 
 
@@ -153,6 +154,19 @@ class SignalRepository:
 
                 CREATE INDEX IF NOT EXISTS idx_alert_trade_date
                     ON alert_deliveries(trade_date, created_at_ist DESC);
+
+                CREATE TABLE IF NOT EXISTS setup_skips (
+                    id INTEGER PRIMARY KEY,
+                    trade_date TEXT NOT NULL,
+                    captured_at_ist TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    skip_reason TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_setup_skips_date
+                    ON setup_skips(trade_date, captured_at_ist DESC);
 
                 CREATE TABLE IF NOT EXISTS corporate_announcements (
                     announcement_id TEXT PRIMARY KEY,
@@ -589,6 +603,51 @@ class SignalRepository:
         )
         return payload, plan_data
 
+    @staticmethod
+    def _clock(value: str) -> tuple[int, int]:
+        hour, minute = (int(part) for part in value.split(":", 1))
+        return hour, minute
+
+    @classmethod
+    def _inside_entry_window(cls, captured_at: datetime) -> bool:
+        settings = get_settings()
+        current = captured_at.hour * 60 + captured_at.minute
+        start_h, start_m = cls._clock(settings.entry_start)
+        end_h, end_m = cls._clock(settings.entry_end)
+        return start_h * 60 + start_m <= current < end_h * 60 + end_m
+
+    @staticmethod
+    def _realized_r(connection: sqlite3.Connection, trade_date: str) -> float:
+        rows = connection.execute(
+            "SELECT status, max_target_hit FROM signal_events WHERE trade_date = ? AND archived = 0",
+            (trade_date,),
+        ).fetchall()
+        total = 0.0
+        for row in rows:
+            status = str(row["status"])
+            if status == "SL_HIT":
+                total -= 1.0
+            elif int(row["max_target_hit"] or 0) >= 2:
+                total += 2.0
+            elif int(row["max_target_hit"] or 0) >= 1:
+                total += 1.0
+        return total
+
+    @staticmethod
+    def _record_skip(connection: sqlite3.Connection, *, trade_date: str, captured_at: datetime, symbol: str, direction: str, reason: str, payload: dict[str, Any]) -> None:
+        connection.execute(
+            "INSERT INTO setup_skips(trade_date, captured_at_ist, symbol, direction, skip_reason, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (trade_date, captured_at.isoformat(), symbol, direction, reason, json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)),
+        )
+
+    def skip_reasons_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT captured_at_ist, symbol, direction, skip_reason, payload_json FROM setup_skips WHERE trade_date = ? ORDER BY captured_at_ist, id",
+                (trade_date,),
+            ).fetchall()
+        return [{**dict(row), "payload": json.loads(str(row["payload_json"]))} for row in rows]
+
     def record_scan(
         self,
         signals: list[dict[str, Any]],
@@ -640,6 +699,39 @@ class SignalRepository:
                 symbol = str(payload.get("symbol") or "").upper()
                 signal_name = str(payload.get("signal") or "NEUTRAL")
                 direction = str(payload["direction"])
+                existing = connection.execute(
+                    """
+                    SELECT id FROM signal_events
+                    WHERE trade_date = ? AND archived = 0
+                      AND symbol = ? AND direction = ?
+                      AND status IN ('OPEN', 'TG1_HIT')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (trade_date, symbol, direction),
+                ).fetchone()
+                if existing is not None:
+                    connection.execute(
+                        "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ?, payload_json = ? WHERE id = ?",
+                        (float(payload.get("ltp") or 0), captured_at.isoformat(), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
+                    )
+                    continue
+                settings = get_settings()
+                skip_reason = None
+                if direction not in {"BUY", "SELL"}:
+                    skip_reason = "invalid_direction"
+                elif not self._inside_entry_window(captured_at):
+                    skip_reason = "window"
+                elif bool(payload.get("stale_price")) or float(payload.get("price_age_s") or 0) > settings.stale_price_s:
+                    skip_reason = "stale_price"
+                elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')", (trade_date,)).fetchone()[0] or 0) >= settings.max_open:
+                    skip_reason = "cap"
+                elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0", (trade_date,)).fetchone()[0] or 0) >= settings.max_setups_day:
+                    skip_reason = "cap"
+                elif self._realized_r(connection, trade_date) <= settings.daily_stop_r:
+                    skip_reason = "daily_stop"
+                if skip_reason:
+                    self._record_skip(connection, trade_date=trade_date, captured_at=captured_at, symbol=symbol, direction=direction, reason=skip_reason, payload=payload)
+                    continue
                 cooldown_since = (captured_at - timedelta(minutes=stop_loss_cooldown_minutes)).isoformat()
                 recent_stop = connection.execute(
                     """
@@ -654,6 +746,7 @@ class SignalRepository:
                 if recent_stop is not None:
                     # Do not turn a stopped-out setup into an immediate repeat
                     # trade while the same directional pressure persists.
+                    self._record_skip(connection, trade_date=trade_date, captured_at=captured_at, symbol=symbol, direction=direction, reason="cooldown", payload=payload)
                     continue
                 daily_stop_count = connection.execute(
                     """
@@ -663,26 +756,24 @@ class SignalRepository:
                     """,
                     (trade_date, symbol, direction),
                 ).fetchone()[0]
-                if int(daily_stop_count or 0) >= int(os.getenv("MAX_SL_PER_SYMBOL_DIR_DAY", "2")):
+                if int(daily_stop_count or 0) >= settings.max_sl_per_symbol_dir_day:
+                    self._record_skip(connection, trade_date=trade_date, captured_at=captured_at, symbol=symbol, direction=direction, reason="cooldown", payload=payload)
                     continue
-                existing = connection.execute(
-                    """
-                    SELECT id FROM signal_events
-                    WHERE trade_date = ? AND archived = 0
-                      AND symbol = ? AND direction = ?
-                      AND status IN ('OPEN', 'TG1_HIT')
-                    ORDER BY id DESC LIMIT 1
-                    """
-                    , (trade_date, symbol, direction),
+                opposite = "SELL" if direction == "BUY" else "BUY"
+                opposite_row = connection.execute(
+                    "SELECT status, closed_at_ist FROM signal_events WHERE trade_date = ? AND archived = 0 AND symbol = ? AND direction = ? ORDER BY id DESC LIMIT 1",
+                    (trade_date, symbol, opposite),
                 ).fetchone()
-                if existing is not None:
-                    # Keep the first event as the setup record; refresh its last
-                    # observed price/payload without creating another trade row.
-                    connection.execute(
-                        "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ?, payload_json = ? WHERE id = ?",
-                        (float(payload.get("ltp") or 0), captured_at.isoformat(), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
-                    )
-                    continue
+                if opposite_row is not None:
+                    if str(opposite_row["status"]) in {"OPEN", "TG1_HIT"}:
+                        self._record_skip(connection, trade_date=trade_date, captured_at=captured_at, symbol=symbol, direction=direction, reason="flip_gap", payload=payload)
+                        continue
+                    closed_at = opposite_row["closed_at_ist"]
+                    if closed_at:
+                        gap_minutes = (captured_at - datetime.fromisoformat(str(closed_at))).total_seconds() / 60
+                        if gap_minutes < get_settings().cooldown_after_sl_min and gap_minutes < 30:
+                            self._record_skip(connection, trade_date=trade_date, captured_at=captured_at, symbol=symbol, direction=direction, reason="flip_gap", payload=payload)
+                            continue
                 connection.execute(
                     """
                     INSERT INTO signal_events (

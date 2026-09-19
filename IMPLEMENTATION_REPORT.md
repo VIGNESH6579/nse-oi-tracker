@@ -2,7 +2,7 @@
 
 ## Conclusion
 
-Commit `2dcb346` was pushed to `VIGNESH6579/nse-oi-tracker` on `main`. The local regression suite passes with **151 tests**. The Render deployment could not be triggered because the supplied Render credential was rejected with HTTP 400 for both service lookup and deploy requests. The repository is therefore updated, but the live service remains on the previously deployed commit until a valid Render API key or deploy hook is supplied.
+Commits `2dcb346` and the follow-up O3 change were pushed to `VIGNESH6579/nse-oi-tracker` on `main`. The local regression suite passes with **154 tests**. The Render deployment could not be triggered because the supplied Render credential was rejected with HTTP 400 for both service lookup and deploy requests. The repository is therefore updated, but the live service remains on the previously deployed commit until a valid Render API key or deploy hook is supplied.
 
 ## Implemented Changes
 
@@ -14,13 +14,15 @@ Durable snapshots now prefer the private GitHub Contents API when `NSE_OI_BACKUP
 
 The environment template now documents the history, pacing, and safety defaults. New tests cover database-derived history coverage, GitHub conflict retry, and secret-safe logging behavior.
 
+Setup admission is now enforced in the repository layer. New setups must be between 09:30 inclusive and 14:30 exclusive IST, respect the concurrent-open and daily setup caps, stop admitting after the configured paper-stop R threshold, reject stale prices, and require a 30-minute opposite-direction flip gap. Cooldown, cap, window, stale-price, daily-stop, and flip-gap rejections are persisted in `setup_skips`. The market-close job now runs at the configured 15:15 IST paper TIME_EXIT boundary.
+
 ## O1–O10 Status
 
 | ID | Status | Finding |
 |---|---|---|
 | O1 | Partly fixed | 60-day paced backfill, F&O filtering, coverage calculation, and NSE-first seed generation are implemented and tested. Empty-disk live acceptance of 95% coverage and the exact NSE response field behavior still require a Render run. |
 | O2 | Fixed in repository | Health no longer reports 100% merely because one symbol exists. Snapshot age, backend, ATR coverage, history readiness, and scan age are separate fields. |
-| O3 | Not fixed | The settings are now represented in the runtime model, but repository-level entry-window, concurrent-open, daily-cap, daily-stop, flip-gap, and skip-reason enforcement still requires implementation. |
+| O3 | Fixed in repository | Entry-window edges, concurrent-open and daily caps, daily paper-stop admission, stale-price rejection, opposite-direction flip gap, cooldown skip reasons, and 15:15 IST TIME_EXIT scheduling are implemented and tested. |
 | O4 | Partly fixed | GitHub durable snapshots, conflict retry, payload cap, scheduled save, shutdown save, and startup restore are implemented. The live Render environment was not updated because its API credential was rejected. |
 | O5 | Not fixed | The duplicate Angel client and shared-login consolidation were not changed in this pass. |
 | O6 | Not fixed | Candle-based grading, breakeven transition, TG2 path, costs, and R-based reporting remain to be wired into the close job. |
@@ -33,12 +35,12 @@ The environment template now documents the history, pacing, and safety defaults.
 
 The following checks were run successfully:
 
-- `PYTHONPATH=. python3 -m pytest -q` — 151 passed, one existing warning.
+- `PYTHONPATH=. python3 -m pytest -q` — 154 passed, one existing warning.
 - `python3 -m compileall -q app collector config database` — passed.
 - `git diff --check` — passed.
 - Direct imports of the modified settings, backup, collector, and repository modules — passed.
 - The live health endpoint was checked before changes and returned HTTP 200. It showed the original misleading `atr_coverage_pct: 100.0` behavior.
-- The repository push completed successfully: `e470c97` → `2dcb346`.
+- The repository pushes completed successfully: `e470c97` → `2dcb346` → the follow-up O3 commit.
 
 The following items were not verified from this sandbox: Angel One rate limits and authentication configuration, exact NSE feed behavior for every historical date, whether all production scan triggers overlap, whether the owner has created the private backup repository and token, and whether Render has the required backup environment variables.
 

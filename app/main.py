@@ -599,7 +599,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         scheduled_market_close,
-        CronTrigger(day_of_week="mon-fri", hour=15, minute=31, timezone=IST),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=15, timezone=IST),
         id="market-close-expiry",
         replace_existing=True,
         max_instances=1,

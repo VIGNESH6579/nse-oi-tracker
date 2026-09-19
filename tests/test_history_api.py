@@ -22,7 +22,7 @@ def test_bhavcopy_backfill_required_tracks_expected_trading_date():
 
 def test_history_and_analytics_are_served_from_sqlite(monkeypatch, tmp_path):
     repository = SignalRepository(tmp_path / "tracker.sqlite3")
-    captured_at = datetime.now(IST)
+    captured_at = datetime.now(IST).replace(hour=10, minute=0, second=0, microsecond=0)
     repository.record_scan(
         [{
             "symbol": "API_TEST",
@@ -170,7 +170,7 @@ def test_participant_oi_endpoint_preserves_eod_boundary(monkeypatch, tmp_path):
 
 def test_backtest_endpoint_and_csv_export_are_auditable(monkeypatch, tmp_path):
     repository = SignalRepository(tmp_path / "tracker.sqlite3")
-    captured_at = datetime.now(IST)
+    captured_at = datetime.now(IST).replace(hour=10, minute=0, second=0, microsecond=0)
     repository.record_scan([{
         "symbol": "BACKTEST", "signal": "LONG_BUILDUP", "signal_direction": "BUY",
         "confidence": 80, "ltp": 100.0,
