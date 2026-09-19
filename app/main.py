@@ -185,18 +185,25 @@ def _refresh_signals() -> list[dict]:
     # This is deliberately labelled observation-based; it is not fabricated
     # 5-minute OHLCV and never turns a candidate into an order recommendation.
     session_date = now_ist().date()
-    signals = [
-        {
-            **signal,
-            "intraday_context": observe_intraday(
-                str(signal.get("symbol") or ""),
-                float(signal.get("ltp") or 0),
-                float(signal.get("volume") or 0),
-                session_date,
-            ),
-        }
-        for signal in signals
-    ]
+    enriched_intraday = []
+    for signal in signals:
+        symbol = str(signal.get("symbol") or "")
+        context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
+        if angel_market_data is not None:
+            try:
+                candles = angel_market_data.intraday_candles(symbol, interval="FIVE_MINUTE", exchange="NSE", days=1)
+                broker_vwap = candle_vwap(candles)
+                if broker_vwap is not None:
+                    context = {
+                        "vwap": broker_vwap, "available": True,
+                        "source": "angel_one_5m_ohlcv",
+                        "data_frequency": "FIVE_MINUTE",
+                        "candle_count": len(candles),
+                    }
+            except Exception:
+                logger.warning("Angel candle VWAP unavailable for %s; retaining observation VWAP", symbol)
+        enriched_intraday.append({**signal, "intraday_context": context})
+    signals = enriched_intraday
     if signals:
         try:
             symbols = [str(signal.get("symbol") or "") for signal in signals]
@@ -449,7 +456,7 @@ async def ingest_participant_oi(report_date: str | None = None) -> int:
 async def ingest_daily_index_bars() -> int:
     """Append the latest public NSE daily OHLC rows for the four F&O indices."""
     try:
-        result = await asyncio.to_thread(backfill_index_bars, repository, days=2, max_downloads=2)
+        result = await asyncio.to_thread(backfill_index_bars, repository, days=2, max_downloads=2, angel_client=angel_market_data)
         return int(result.get("stored", 0))
     except Exception:
         logger.exception("Daily NSE index-bar ingestion failed")
@@ -608,7 +615,7 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("Daily bhavcopy history is empty or stale and automatic backfill is disabled.")
     if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
-        asyncio.create_task(asyncio.to_thread(backfill_index_bars, repository, days=60, max_downloads=60))
+        asyncio.create_task(asyncio.to_thread(backfill_index_bars, repository, days=60, max_downloads=60, angel_client=angel_market_data))
     # A newly deployed year is unknown until NSE's public calendar loads.
     # Await only in that case: normal startup stays local and fast.
     if not has_holiday_calendar_for_year(now_ist().year):

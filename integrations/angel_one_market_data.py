@@ -141,6 +141,13 @@ class AngelOneMarketData:
 
     def instrument(self, symbol: str, *, exchange: str = "NSE") -> AngelInstrument | None:
         symbol = self._lookup_symbol(symbol, exchange=exchange)
+        if exchange.upper() == "NSE":
+            symbol = {
+                "NIFTY": "NIFTY 50",
+                "BANKNIFTY": "NIFTY BANK",
+                "FINNIFTY": "NIFTY FIN SERVICE",
+                "MIDCPNIFTY": "NIFTY MID SELECT",
+            }.get(symbol, symbol)
         instruments = self._get_instruments()
         return instruments.get((exchange.upper(), symbol))
 
@@ -242,7 +249,7 @@ class AngelOneMarketData:
 
     def intraday_candles(self, symbol: str, *, interval: str = "FIVE_MINUTE",
                          exchange: str = "NSE", days: int = 1) -> list[dict]:
-        """Fetch read-only intraday candles for a mapped instrument."""
+        """Fetch read-only candles for a mapped instrument."""
         self._login()
         instrument = self.instrument(symbol, exchange=exchange)
         if not instrument:
@@ -275,6 +282,10 @@ class AngelOneMarketData:
                 "source": "angel_one_read_only",
             })
         return candles
+
+    def daily_candles(self, symbol: str, *, days: int = 90, exchange: str = "NSE") -> list[dict]:
+        """Fetch bounded daily OHLCV candles for an equity or supported index."""
+        return self.intraday_candles(symbol, interval="ONE_DAY", exchange=exchange, days=max(1, days))
 
 
 __all__ = ["AngelInstrument", "AngelOneMarketData"]
