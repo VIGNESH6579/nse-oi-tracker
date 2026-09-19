@@ -100,6 +100,13 @@ def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pc
         return False
 
 
+from analytics.oi_window import OIWindow
+from utils.time import now_ist
+
+oi_window = OIWindow()
+_last_scan_stats: dict = {"rows": 0, "parsed": 0, "candidates": 0}
+
+
 def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
     price_up = price_change_pct >= PRICE_CHANGE_THRESHOLD
     price_dn = price_change_pct <= -PRICE_CHANGE_THRESHOLD
@@ -248,6 +255,16 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
     }
 
 
+def _track_window(row: dict, scan_time) -> None:
+    sym = _symbol(row)
+    if not sym:
+        return
+    ltp = _f(row.get("ltp") or row.get("lastPrice") or row.get("ltP") or row.get("LTP")
+             or row.get("price") or row.get("underlyingValue") or 0)
+    oi, _field = _first_numeric(row, ("oi", "openInterest", "OI", "openinterest", "latestOI", "totalOI"))
+    oi_window.update(sym, scan_time, ltp, oi or 0)
+
+
 def _parse_row(row: dict) -> dict | None:
     """
     Parse one row from live-analysis-oi-spurts-underlyings.
@@ -363,8 +380,15 @@ def scan_all_fno_realtime() -> list[dict]:
     results:  list[dict] = []
     seen:     set[str]   = set()
 
+    scan_time = now_ist()
+    parsed_count = 0
     for row in rows:
+        # Feed EVERY raw row (incl. currently neutral ones, which _parse_row drops) so
+        # 15/30/60-minute windows already exist the moment a symbol becomes a candidate.
+        _track_window(row, scan_time)
         result = _parse_row(row)
+        if result is not None:
+            parsed_count += 1
         if (
             result is None
             or result["confidence"] < PUBLISH_MIN_CONFIDENCE
@@ -383,10 +407,14 @@ def scan_all_fno_realtime() -> list[dict]:
             continue
         result["quality_gate"] = "CONFIRMED_TWO_SCAN_DIRECTION"
         result["stability_scans"] = count
+        window_ctx = oi_window.context(symbol)
+        window_ctx["streak"] = oi_window.note_agreement(symbol, window_ctx.get("window_signal") == result["signal"], scan_time)
+        result["oi_window"] = window_ctx
         results.append(result)
     # Sort strongest first and expose only a small quality feed.
     results.sort(key=lambda r: (-r["confidence"], -r["strength"], r["symbol"]))
     results = results[:QUALITY_MAX_SIGNALS]
+    _last_scan_stats.update(rows=len(rows), parsed=parsed_count, candidates=len(results))
 
     high   = sum(1 for r in results if r["confidence_tier"] == "HIGH")
     medium = sum(1 for r in results if r["confidence_tier"] == "MEDIUM")

@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+from utils.time import now_ist
 
 import app.nse_fetcher as nse_fetcher
 from utils.time import IST
@@ -77,7 +78,7 @@ def _stub_get(monkeypatch, spurts_payload: dict, all_indices_payload: dict | Non
 
 
 def test_stored_previous_close_returns_recent_bar(price_env):
-    _seed_bars(price_env, [(date.today().isoformat(), "RELIANCE", 2400.5)])
+    _seed_bars(price_env, [(now_ist().date().isoformat(), "RELIANCE", 2400.5)])
     assert nse_fetcher._stored_previous_close("reliance") == 2400.5
 
 
@@ -92,27 +93,27 @@ def test_stored_previous_close_uses_ist_date_before_utc_rollover(price_env, monk
 
 
 def test_stored_previous_close_accepts_a_few_days_old(price_env):
-    _seed_bars(price_env, [((date.today() - timedelta(days=3)).isoformat(), "TCS", 3800.0)])
+    _seed_bars(price_env, [((now_ist().date() - timedelta(days=3)).isoformat(), "TCS", 3800.0)])
     assert nse_fetcher._stored_previous_close("TCS") == 3800.0
 
 
 def test_stored_previous_close_rejects_stale_bar(price_env):
-    _seed_bars(price_env, [((date.today() - timedelta(days=11)).isoformat(), "TCS", 3800.0)])
+    _seed_bars(price_env, [((now_ist().date() - timedelta(days=11)).isoformat(), "TCS", 3800.0)])
     assert nse_fetcher._stored_previous_close("TCS") is None
 
 
 def test_stored_previous_close_rejects_future_bar(price_env):
-    _seed_bars(price_env, [((date.today() + timedelta(days=1)).isoformat(), "TCS", 3800.0)])
+    _seed_bars(price_env, [((now_ist().date() + timedelta(days=1)).isoformat(), "TCS", 3800.0)])
     assert nse_fetcher._stored_previous_close("TCS") is None
 
 
 def test_stored_previous_close_rejects_non_positive_close(price_env):
-    _seed_bars(price_env, [(date.today().isoformat(), "TCS", 0.0)])
+    _seed_bars(price_env, [(now_ist().date().isoformat(), "TCS", 0.0)])
     assert nse_fetcher._stored_previous_close("TCS") is None
 
 
 def test_stored_previous_close_missing_symbol(price_env):
-    _seed_bars(price_env, [(date.today().isoformat(), "INFY", 1500.0)])
+    _seed_bars(price_env, [(now_ist().date().isoformat(), "INFY", 1500.0)])
     assert nse_fetcher._stored_previous_close("MISSINGSYM") is None
 
 
@@ -132,7 +133,7 @@ def test_previous_close_database_resolves_from_project_root(tmp_path, monkeypatc
     data_dir.mkdir(exist_ok=True)
     database = data_dir / "pc_resolution_test.sqlite3"
     try:
-        _seed_bars(database, [(date.today().isoformat(), "WIPRO", 450.0)])
+        _seed_bars(database, [(now_ist().date().isoformat(), "WIPRO", 450.0)])
         monkeypatch.setenv("NSE_OI_DATA_DIR", "data")
         monkeypatch.setenv("NSE_OI_DATABASE", "pc_resolution_test.sqlite3")
         elsewhere = tmp_path / "unrelated-cwd"
@@ -156,7 +157,7 @@ def test_native_price_change_is_never_overwritten(price_env, monkeypatch):
 
 
 def test_stock_row_uses_day_relative_previous_close(price_env, monkeypatch):
-    _seed_bars(price_env, [(date.today().isoformat(), "RELIANCE", 100.0)])
+    _seed_bars(price_env, [(now_ist().date().isoformat(), "RELIANCE", 100.0)])
     _stub_get(monkeypatch, {"data": [{"symbol": "RELIANCE", "underlyingValue": 101.0}]})
     rows = nse_fetcher.fetch_all_fno_oi_change()
     assert rows[0]["price_source"] == "previous_close_day_relative"
@@ -189,7 +190,7 @@ def test_second_poll_without_basis_falls_back_to_rolling_delta(price_env, monkey
 
 
 def test_stale_stored_close_degrades_to_rolling_fallback(price_env, monkeypatch):
-    _seed_bars(price_env, [((date.today() - timedelta(days=11)).isoformat(), "SOLARINDS", 100.0)])
+    _seed_bars(price_env, [((now_ist().date() - timedelta(days=11)).isoformat(), "SOLARINDS", 100.0)])
     _stub_get(monkeypatch, {"data": [{"symbol": "SOLARINDS", "underlyingValue": 100.0}]})
     nse_fetcher.fetch_all_fno_oi_change()
 

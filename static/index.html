@@ -197,11 +197,11 @@
 
   <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['signals','chain','heatmap','intel','news','analytics','trades','guide']" :key="tab">
+    <template x-for="tab in ['signals','chain','heatmap','intel','analytics','trades','guide']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{signals:'?? Signals', chain:'?? Option Chain', heatmap:'?? OI Heatmap', intel:'?? Intelligence', news:'?? Disclosures', analytics:'?? Analytics', trades:'?? Signal History', guide:'?? Guide'}[tab]"></span>
+        <span x-text="{signals:'?? Signals', chain:'?? Option Chain', heatmap:'?? OI Heatmap', intel:'?? Intelligence', analytics:'?? Analytics', trades:'?? Signal History', guide:'?? Guide'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -336,7 +336,6 @@
                     <span x-text="row.signal_emoji"></span>
                     <span x-text="row.signal_label"></span>
                   </span>
-                  <button x-show="row.news_context?.event_risk === 'HIGH_EVENT_RISK'" @click="newsSymbol=row.symbol; activeTab='news'; fetchNews(false)" class="badge bg-red-950 text-red-300 border-red-800 ml-1" title="High-risk disclosure today">⚠ event</button>
                 </td>
 
                 <!-- Recommendation / candidate boundary -->
@@ -702,38 +701,7 @@
     </div>
   </div><!-- end intelligence tab -->
 
-  <!-- Public NSE disclosures: event-volatility context, never headline sentiment. -->
-  <div x-show="activeTab === 'news'" x-transition>
-    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-      <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-800">
-        <div>
-          <h2 class="text-sm font-semibold text-gray-200">NSE Corporate Disclosures</h2>
-          <p class="text-[10px] text-gray-500">Public NSE filings are classified for possible event volatility, not bullish/bearish sentiment.</p>
-        </div>
-        <div class="flex-1"></div>
-        <input x-model="newsSymbol" @keydown.enter="fetchNews(true)" placeholder="Filter symbol"
-               class="bg-gray-800 border border-gray-700 text-xs text-gray-200 placeholder-gray-600 rounded px-2 py-1.5 w-32 uppercase focus:outline-none focus:border-brand"/>
-        <button @click="fetchNews(true)" :disabled="newsLoading"
-                class="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 px-2.5 py-1 rounded border border-gray-700">Refresh NSE</button>
-        <button @click="newsHighOnly = !newsHighOnly" class="text-xs px-2.5 py-1 rounded border transition" :class="newsHighOnly ? 'bg-red-950 text-red-300 border-red-800' : 'bg-gray-800 text-gray-400 border-gray-700'">High risk only</button>
-      </div>
-      <div x-show="newsLoading" class="p-6 text-center text-xs text-gray-500">Loading public disclosures?</div>
-      <div x-show="!newsLoading && news.length === 0" class="p-10 text-center text-xs text-gray-600">No stored disclosure records yet. Use Refresh NSE to fetch the latest public feed.</div>
-      <div class="divide-y divide-gray-800" x-show="!newsLoading && news.length">
-        <template x-for="item in filteredNews" :key="item.announcement_id">
-          <article class="px-4 py-3 hover:bg-gray-800/30">
-            <div class="flex flex-wrap gap-2 items-center">
-              <button @click="openChain(item.symbol)" class="mono text-xs font-bold text-brand hover:text-sky-300" x-text="item.symbol"></button>
-              <span class="badge" :class="item.event_risk === 'HIGH_EVENT_RISK' ? 'bg-red-950 text-red-300 border-red-800' : item.event_risk === 'MEDIUM_EVENT_RISK' ? 'bg-amber-950 text-amber-300 border-amber-800' : 'bg-gray-800 text-gray-400 border-gray-700'" x-text="item.event_risk.replaceAll('_', ' ')"></span>
-              <span class="text-[10px] text-gray-600" x-text="item.published_at"></span>
-            </div>
-            <div class="mt-1 text-xs text-gray-300" x-text="item.title"></div>
-            <div class="mt-1 text-[10px] text-gray-500" x-text="item.category + (item.risk_terms?.length ? ' ? matched: ' + item.risk_terms.join(', ') : '')"></div>
-          </article>
-        </template>
-      </div>
-    </div>
-  </div><!-- end news tab -->
+
 
   <!-- Server-owned outcome analytics are deliberately labeled as candidates. -->
   <div x-show="activeTab === 'analytics'" x-transition>
@@ -1192,7 +1160,6 @@ function scanner() {
       await this.fetchParticipantOI();
       await this.loadServerHistory();
       await this.loadAnalytics();
-      this.newsRefreshTimer = setInterval(() => this.fetchNews(true), 180000);
       this.startTimer();
     },
 
@@ -1234,23 +1201,7 @@ function scanner() {
     },
 
     /* ?? fetch signals ?? */
-    async fetchNews(refresh=false) {
-      this.newsLoading = true;
-      try {
-        const symbol = this.newsSymbol.trim().toUpperCase();
-        const query = new URLSearchParams({limit: '100'});
-        if (symbol) query.set('symbol', symbol);
-        if (refresh) query.set('refresh', 'true');
-        const r = await fetch('/api/news?' + query.toString());
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const data = await r.json();
-        this.news = data.announcements || [];
-      } catch (e) {
-        this.error = 'NSE disclosure feed unavailable: ' + e.message;
-      } finally {
-        this.newsLoading = false;
-      }
-    },
+    async fetchNews() { /* NSE disclosure/news feed removed: no intraday signal value */ },
 
     async fetchIntelligence() {
       this.intelligenceLoading = true;

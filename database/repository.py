@@ -661,7 +661,7 @@ class SignalRepository:
                 total += 1.0
         return total
 
-    _SKIP_PAYLOAD_KEYS = ("ltp", "confidence", "confidence_score", "signal", "price_age_s", "stale_price")
+    _SKIP_PAYLOAD_KEYS = ("ltp", "confidence", "confidence_score", "signal", "price_age_s", "stale_price", "missing_confirmations", "quality_score")
 
     @staticmethod
     def _record_skip(connection: sqlite3.Connection, *, trade_date: str, captured_at: datetime, symbol: str, direction: str, reason: str, payload: dict[str, Any]) -> None:
@@ -765,6 +765,8 @@ class SignalRepository:
                     skip_reason = "window"
                 elif bool(payload.get("stale_price")) or float(payload.get("price_age_s") or 0) > settings.stale_price_s:
                     skip_reason = "stale_price"
+                elif payload.get("confirmation_gate") == "FAILED":
+                    skip_reason = "not_confirmed"
                 elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')", (trade_date,)).fetchone()[0] or 0) >= settings.max_open:
                     skip_reason = "cap"
                 elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0", (trade_date,)).fetchone()[0] or 0) >= settings.max_setups_day:

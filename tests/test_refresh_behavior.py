@@ -6,23 +6,21 @@ INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 MAIN = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
 
 
-def test_manual_refresh_bypasses_signal_market_and_news_caches():
+def test_manual_refresh_bypasses_signal_and_market_caches_and_news_feed_is_gone():
     assert "this.fetchSignals(true)" in INDEX
     assert "this.fetchMarketOverview(true)" in INDEX
-    assert "this.fetchNews(true)" in INDEX
-    assert "newsRefreshTimer = setInterval(() => this.fetchNews(true), 180000)" in INDEX
+    # NSE disclosure/news feed was removed: no endpoint call, tab, panel or polling timer.
+    assert "/api/news" not in INDEX
+    assert "activeTab === 'news'" not in INDEX
+    assert "newsRefreshTimer = setInterval" not in INDEX
+    assert '@app.get("/api/news")' not in MAIN
+    assert "fetch_corporate_announcements(" not in MAIN.replace("    fetch_corporate_announcements,", "")
 
 
 def test_empty_successful_signal_scan_does_not_force_another_upstream_fetch():
     assert "if cached is None and is_market_open():" in MAIN
     assert "cached is None or len(cached) == 0" not in MAIN
 
-
-def test_news_endpoint_supports_explicit_upstream_refresh():
-    assert "async def corporate_news" in MAIN
-    assert "if refresh:" in MAIN
-    assert "fetch_corporate_announcements" in MAIN
-    assert "upsert_corporate_announcements" in MAIN
 
 
 def test_signal_api_exposes_actual_data_source_status():
