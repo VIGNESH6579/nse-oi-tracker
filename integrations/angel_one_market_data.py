@@ -26,6 +26,20 @@ BASE_URL = "https://apiconnect.angelone.in"
 INSTRUMENT_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 
 
+class AngelLoginError(RuntimeError):
+    """Safe, structured login failure that never contains credentials."""
+
+    def __init__(self, http_status: int, errorcode: str = "", message: str = "") -> None:
+        self.http_status = int(http_status)
+        self.errorcode = str(errorcode or "")
+        self.message = str(message or "")[:240]
+        super().__init__(f"Angel login failed ({self.http_status}, {self.errorcode}): {self.message}")
+
+
+class AngelUnavailable(RuntimeError):
+    """Raised while the login circuit breaker is open."""
+
+
 @dataclass(frozen=True, slots=True)
 class AngelInstrument:
     symbol: str
@@ -43,13 +57,16 @@ class AngelOneMarketData:
         self.api_key = api_key
         self.client_code = client_code
         self.password = password
-        self.totp_secret = totp_secret
+        self.totp_secret = str(totp_secret).strip().replace(" ", "").upper()
         self.timeout = timeout
         self._jwt: str | None = None
         self._feed_token: str | None = None
         self._login_at = 0.0
         self._instruments: dict[tuple[str, str], AngelInstrument] = {}
         self._last_quote_at = 0.0
+        self._breaker_until = 0.0
+        self._breaker_seconds = 15 * 60
+        self._last_error_code = ""
         self._lock = RLock()
 
     @staticmethod
@@ -69,7 +86,7 @@ class AngelOneMarketData:
             "api_key": (os.getenv("ANGEL_ONE_API_KEY") or os.getenv("ANGEL_API_KEY") or "").strip(),
             "client_code": (os.getenv("ANGEL_ONE_CLIENT_CODE") or os.getenv("ANGEL_CLIENT_ID") or os.getenv("ANGEL_CLIENT_CODE") or "").strip(),
             "password": (os.getenv("ANGEL_ONE_PASSWORD") or os.getenv("ANGEL_PASSWORD") or os.getenv("ANGEL_PIN") or "").strip(),
-            "totp_secret": (os.getenv("ANGEL_ONE_TOTP_SECRET") or os.getenv("ANGEL_TOTP_SECRET") or "").strip(),
+            "totp_secret": (os.getenv("ANGEL_ONE_TOTP_SECRET") or os.getenv("ANGEL_TOTP_SECRET") or "").strip().replace(" ", "").upper(),
         }
         if not all(values.values()):
             return None
@@ -86,6 +103,9 @@ class AngelOneMarketData:
             "X-PrivateKey": self.api_key,
             "X-UserType": "USER",
             "X-SourceID": "WEB",
+            "X-ClientLocalIP": os.getenv("ANGEL_ONE_CLIENT_LOCAL_IP", "127.0.0.1"),
+            "X-ClientPublicIP": os.getenv("ANGEL_ONE_CLIENT_PUBLIC_IP", "127.0.0.1"),
+            "X-MACAddress": os.getenv("ANGEL_ONE_MAC", "00:00:00:00:00:00"),
         }
         if authenticated and self._jwt:
             headers["Authorization"] = f"Bearer {self._jwt}"
@@ -93,27 +113,53 @@ class AngelOneMarketData:
 
     def _login(self) -> None:
         with self._lock:
+            if time.time() < self._breaker_until:
+                raise AngelUnavailable("Angel login circuit breaker is open")
             if self._jwt and time.time() - self._login_at < 8 * 60 * 60:
                 return
-            response = requests.post(
-                f"{BASE_URL}/rest/auth/angelbroking/user/v1/loginByPassword",
-                headers=self._headers(authenticated=False),
-                json={
-                    "clientcode": self.client_code,
-                    "password": self.password,
-                    "totp": pyotp.TOTP(self.totp_secret).now(),
-                },
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            body = response.json()
-            if not body.get("status") or not body.get("data"):
-                raise RuntimeError(f"Angel One login failed: {body.get('message', 'unknown error')}")
-            self._jwt = str(body["data"].get("jwtToken") or "")
-            self._feed_token = str(body["data"].get("feedToken") or "")
-            if not self._jwt:
-                raise RuntimeError("Angel One login response did not include jwtToken")
-            self._login_at = time.time()
+            try:
+                response = requests.post(
+                    f"{BASE_URL}/rest/auth/angelbroking/user/v1/loginByPassword",
+                    headers=self._headers(authenticated=False),
+                    json={
+                        "clientcode": self.client_code,
+                        "password": self.password,
+                        "totp": pyotp.TOTP(self.totp_secret).now(),
+                    },
+                    timeout=self.timeout,
+                )
+                try:
+                    body = response.json()
+                except Exception:
+                    body = {}
+                if int(getattr(response, "status_code", 200)) != 200 or not body.get("status") or not body.get("data"):
+                    error = AngelLoginError(getattr(response, "status_code", 0), body.get("errorcode"), body.get("message"))
+                    self._last_error_code = error.errorcode
+                    self._breaker_until = time.time() + self._breaker_seconds
+                    self._breaker_seconds = min(self._breaker_seconds * 2, 60 * 60)
+                    logger.warning("Angel login rejected: http_status=%s errorcode=%s message=%s", error.http_status, error.errorcode, error.message)
+                    raise error
+                self._jwt = str(body["data"].get("jwtToken") or "")
+                self._feed_token = str(body["data"].get("feedToken") or "")
+                if not self._jwt:
+                    raise AngelLoginError(getattr(response, "status_code", 200), body.get("errorcode"), "missing jwtToken")
+                self._login_at = time.time()
+                self._breaker_until = 0.0
+                self._breaker_seconds = 15 * 60
+                self._last_error_code = ""
+            except AngelLoginError:
+                raise
+            except Exception as exc:
+                self._last_error_code = type(exc).__name__
+                self._breaker_until = time.time() + self._breaker_seconds
+                self._breaker_seconds = min(self._breaker_seconds * 2, 60 * 60)
+                logger.warning("Angel login failed: %s", type(exc).__name__)
+                raise AngelUnavailable("Angel login unavailable") from exc
+
+    def health(self) -> dict[str, object]:
+        retry_at = self._breaker_until if self._breaker_until > time.time() else None
+        return {"state": "breaker_open" if retry_at else ("authenticated" if self._jwt else "not_authenticated"),
+                "last_error_code": self._last_error_code, "retry_at": retry_at}
 
     def _get_instruments(self) -> dict[tuple[str, str], AngelInstrument]:
         with self._lock:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -179,6 +180,10 @@ class SignalRepository:
                     PRIMARY KEY(report_date, participant)
                 );
 
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_participant_oi_date
                     ON participant_oi_reports(report_date DESC);
                 """
@@ -195,6 +200,15 @@ class SignalRepository:
                 connection.execute(
                     "ALTER TABLE signal_events ADD COLUMN result_source TEXT"
                 )
+            if "last_seen_at_ist" not in columns:
+                connection.execute(
+                    "ALTER TABLE signal_events ADD COLUMN last_seen_at_ist TEXT"
+                )
+            version = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+            if version is None:
+                connection.execute("INSERT INTO schema_version(version) VALUES (1)")
+            elif int(version[0]) < 2:
+                connection.execute("UPDATE schema_version SET version = 2")
 
     def upsert_daily_equity_bars(self, bars: Iterable[dict[str, Any]]) -> int:
         """Store one full daily NSE bhavcopy, replacing only matching date/symbol bars."""
@@ -621,26 +635,32 @@ class SignalRepository:
                     # Do not turn a stopped-out setup into an immediate repeat
                     # trade while the same directional pressure persists.
                     continue
+                daily_stop_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM signal_events
+                    WHERE trade_date = ? AND archived = 0 AND symbol = ?
+                      AND direction = ? AND status = 'SL_HIT'
+                    """,
+                    (trade_date, symbol, direction),
+                ).fetchone()[0]
+                if int(daily_stop_count or 0) >= int(os.getenv("MAX_SL_PER_SYMBOL_DIR_DAY", "2")):
+                    continue
                 existing = connection.execute(
                     """
                     SELECT id FROM signal_events
                     WHERE trade_date = ? AND archived = 0
-                      AND symbol = ? AND signal = ? AND direction = ?
-                      AND entry = ? AND stop_loss = ? AND target_1 = ? AND target_2 = ?
+                      AND symbol = ? AND direction = ?
                       AND status IN ('OPEN', 'TG1_HIT')
                     ORDER BY id DESC LIMIT 1
-                    """,
-                    (
-                        trade_date, symbol, signal_name, direction,
-                        plan["entry"], plan["stop_loss"], plan["target_1"], plan["target_2"],
-                    ),
+                    """
+                    , (trade_date, symbol, direction),
                 ).fetchone()
                 if existing is not None:
                     # Keep the first event as the setup record; refresh its last
                     # observed price/payload without creating another trade row.
                     connection.execute(
-                        "UPDATE signal_events SET current_price = ?, payload_json = ? WHERE id = ?",
-                        (float(payload.get("ltp") or 0), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
+                        "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ?, payload_json = ? WHERE id = ?",
+                        (float(payload.get("ltp") or 0), captured_at.isoformat(), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
                     )
                     continue
                 connection.execute(
@@ -648,8 +668,8 @@ class SignalRepository:
                     INSERT INTO signal_events (
                         snapshot_id, trade_date, captured_at_ist, symbol, signal, direction,
                         confidence, entry, stop_loss, target_1, target_2, risk_reward,
-                        risk_source, current_price, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        risk_source, current_price, last_seen_at_ist, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snapshot_id,
@@ -666,6 +686,7 @@ class SignalRepository:
                         plan["risk_reward"],
                         plan["source"],
                         float(payload.get("ltp") or 0),
+                        captured_at.isoformat(),
                         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str),
                     ),
                 )

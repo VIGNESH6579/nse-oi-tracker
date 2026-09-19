@@ -13,6 +13,7 @@ class RiskPlan:
     target_2: float
     risk_reward: float
     source: str
+    r_price: float = 0.0
 
     def to_dict(self) -> dict[str, float | str]:
         return asdict(self)
@@ -50,19 +51,22 @@ def build_risk_plan(
     except (TypeError, ValueError):
         atr = 0.0
     if atr > 0:
+        # Daily ATR is a conservative proxy for missing five-minute ATR.
+        atr_intraday = atr * 0.5
+        stop_pct = min(1.2, max(0.35, (1.2 * atr_intraday / ltp) * 100.0))
+        risk = ltp * stop_pct / 100.0
         if direction == "BUY":
-            stop_loss, target_1, target_2 = ltp - atr, ltp + (atr * 1.5), ltp + (atr * 3)
+            stop_loss, target_1, target_2 = ltp - risk, ltp + risk, ltp + (risk * 2)
         else:
-            stop_loss, target_1, target_2 = ltp + atr, ltp - (atr * 1.5), ltp - (atr * 3)
-        risk = abs(ltp - stop_loss)
-        reward = abs(target_2 - ltp)
+            stop_loss, target_1, target_2 = ltp + risk, ltp - risk, ltp - (risk * 2)
         return RiskPlan(
             entry=round(ltp, 2),
             stop_loss=round(stop_loss, 2),
             target_1=round(target_1, 2),
             target_2=round(target_2, 2),
-            risk_reward=round(reward / risk, 2) if risk else 0.0,
-            source="atr14_daily_nse",
+            risk_reward=2.0,
+            source="atr14_daily",
+            r_price=round(risk, 4),
         )
     stop_pct, target_one_pct, target_two_pct = _PERCENTAGE_BY_SIGNAL.get(
         signal, (0.30, 0.50, 1.00)
@@ -84,4 +88,5 @@ def build_risk_plan(
         target_2=round(target_2, 2),
         risk_reward=round(reward / risk, 2) if risk else 0.0,
         source="percentage_fallback_pending_atr",
+        r_price=round(risk, 4),
     )

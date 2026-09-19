@@ -44,3 +44,18 @@ Outcome analytics report stored candidate-event lifecycle outcomes, not
 executable options performance. They exclude contract selection, fills,
 slippage, brokerage, position sizing, and market impact. P&L points are an
 audit calculation over the stored underlying-price fallback levels only.
+
+## Paper-only go-live gates
+
+Signals remain paper-only and are decision support, not advice. Do not trust
+strategy results until at least **20 trading days and 100 setups** of paper
+data are available. The minimum bar for considering promotion is positive
+expectancy after costs, profit factor of at least **1.3**, maximum drawdown no
+greater than **8R**, and a monotonic score-bucket calibration table. Tuning is
+walk-forward only: fit on the first half of the sample and evaluate on the
+second half, never on the full sample.
+
+Intraday grading is expressed in signed **R multiples**. A 15:15 IST time exit
+uses that candle's close; if a single candle crosses both stop and target, the
+stop is conservatively counted first. No close-vs-entry WIN/LOSS label is a
+strategy result.

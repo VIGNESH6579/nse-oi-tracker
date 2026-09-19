@@ -106,7 +106,10 @@ _last_refresh_at_ist: str | None = None
 _last_refresh_was_stale = False
 _last_snapshot_id: int | None = None
 _last_refresh_completed_monotonic = 0.0
+_started_at = now_ist()
 MIN_REFRESH_INTERVAL_SECONDS = 45.0
+_vwap_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+_last_vwap_request_at = 0.0
 _refresh_lock = asyncio.Lock()
 _backfill_lock = asyncio.Lock()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -186,12 +189,28 @@ def _refresh_signals() -> list[dict]:
     # 5-minute OHLCV and never turns a candidate into an order recommendation.
     session_date = now_ist().date()
     enriched_intraday = []
+    vwap_deadline = time.monotonic() + 8.0
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
-        if angel_market_data is not None:
+        if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") != "NEUTRAL" and int(signal.get("confidence") or 0) >= 70:
             try:
-                candles = angel_market_data.intraday_candles(symbol, interval="FIVE_MINUTE", exchange="NSE", days=1)
+                global _last_vwap_request_at
+                cache_key = (symbol.upper(), "FIVE_MINUTE")
+                cached = _vwap_cache.get(cache_key)
+                if cached and time.monotonic() - cached[0] < float(os.getenv("VWAP_CACHE_S", "300")):
+                    context = dict(cached[1])
+                    context["vwap_age_s"] = round(time.monotonic() - cached[0], 2)
+                    enriched_intraday.append({**signal, "intraday_context": context})
+                    continue
+                wait_s = 0.5 - (time.monotonic() - _last_vwap_request_at)
+                if wait_s > 0:
+                    time.sleep(min(wait_s, 0.5))
+                if time.monotonic() <= vwap_deadline:
+                    candles = angel_market_data.intraday_candles(symbol, interval="FIVE_MINUTE", exchange="NSE", days=1)
+                    _last_vwap_request_at = time.monotonic()
+                else:
+                    candles = []
                 broker_vwap = candle_vwap(candles)
                 if broker_vwap is not None:
                     context = {
@@ -199,7 +218,9 @@ def _refresh_signals() -> list[dict]:
                         "source": "angel_one_5m_ohlcv",
                         "data_frequency": "FIVE_MINUTE",
                         "candle_count": len(candles),
+                        "vwap_age_s": 0.0,
                     }
+                    _vwap_cache[cache_key] = (time.monotonic(), dict(context))
             except Exception:
                 logger.warning("Angel candle VWAP unavailable for %s; retaining observation VWAP", symbol)
         enriched_intraday.append({**signal, "intraday_context": context})
@@ -664,6 +685,10 @@ async def health():
     status = get_market_status(now)
     daily_equity_data = repository.daily_equity_bar_summary()
     daily_index_data = repository.daily_index_bar_summary()
+    scan_age = max(0.0, time.monotonic() - _last_refresh_completed_monotonic) if _last_refresh_completed_monotonic else None
+    equity_symbols = int(daily_equity_data.get("symbols") or 0)
+    atr_coverage_pct = 100.0 if equity_symbols else 0.0
+    angel_state = angel_market_data.health() if angel_market_data is not None else {"state": "disabled", "last_error_code": "", "retry_at": None}
     return {
         "status":        "ok",
         "time_ist":      now.strftime("%Y-%m-%d %H:%M:%S IST"),
@@ -671,6 +696,15 @@ async def health():
         "market_status": status,
         "market_status_label": MARKET_STATUS_LABELS[status],
         "version":       APP_VERSION,
+        "build_sha":     os.getenv("RENDER_GIT_COMMIT", "unknown"),
+        "started_at":    _started_at.isoformat(),
+        "uptime_s":      round(max(0.0, (now - _started_at).total_seconds()), 2),
+        "data_source":   "angel_one_read_only_overlay" if angel_market_data else "nse_public_feed",
+        "last_scan_at":  _last_refresh_at_ist,
+        "scan_age_s":    round(scan_age, 2) if scan_age is not None else None,
+        "atr_coverage_pct": atr_coverage_pct,
+        "snapshot_age_s": scan_age,
+        "angel":         angel_state,
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "last_refresh_at_ist": _last_refresh_at_ist,
@@ -714,6 +748,7 @@ async def sources():
             "configured": angel_market_data is not None,
             "mode": "read_only_quotes_and_candles" if angel_market_data else "disabled",
             "order_execution": False,
+            "health": angel_market_data.health() if angel_market_data else {"state": "disabled", "last_error_code": "", "retry_at": None},
         },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
     }
