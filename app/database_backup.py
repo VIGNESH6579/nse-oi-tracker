@@ -19,7 +19,15 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 15
 _MAX_PAYLOAD = 10 * 1024 * 1024
 _KEEP = 7
+_MAX_BAR_DATES = 80
 _last_successful_snapshot_at: datetime | None = None
+_last_snapshot_bytes: int | None = None
+_last_snapshot_error: str | None = None
+
+
+def last_snapshot_info() -> dict:
+    """Non-secret snapshot diagnostics for /api/health."""
+    return {"snapshot_bytes": _last_snapshot_bytes, "snapshot_last_error": _last_snapshot_error}
 
 
 def _config() -> tuple[str, str]:
@@ -51,15 +59,61 @@ def last_snapshot_age_s(now: datetime | None = None) -> float | None:
     return round(max(0.0, (current - _last_successful_snapshot_at).total_seconds()), 2)
 
 
+def _gzip_file(path: Path) -> bytes:
+    output = io.BytesIO()
+    with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=6) as target, open(path, "rb") as source:
+        shutil.copyfileobj(source, target)
+    return output.getvalue()
+
+
+def _prune_copy(database_path: Path) -> Path:
+    """Return a pruned temporary COPY (the live DB is never modified)."""
+    handle = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
+    handle.close()
+    target = Path(handle.name)
+    source = sqlite3.connect(database_path)
+    copy = sqlite3.connect(target)
+    try:
+        source.backup(copy)
+        statements = [
+            "DELETE FROM scan_snapshots WHERE trade_date < (SELECT MAX(trade_date) FROM scan_snapshots)",
+            "DELETE FROM option_chain_snapshots WHERE substr(captured_at_ist,1,10) < (SELECT MAX(substr(captured_at_ist,1,10)) FROM option_chain_snapshots)",
+            "DELETE FROM setup_skips WHERE trade_date < (SELECT MAX(trade_date) FROM setup_skips)",
+            "DELETE FROM corporate_announcements WHERE ingested_at_utc < date('now','-7 day')",
+            "DELETE FROM alert_deliveries WHERE trade_date < date('now','-7 day')",
+            f"DELETE FROM daily_equity_bars WHERE trade_date NOT IN (SELECT DISTINCT trade_date FROM daily_equity_bars ORDER BY trade_date DESC LIMIT {_MAX_BAR_DATES})",
+        ]
+        for statement in statements:
+            try:
+                copy.execute(statement)
+            except sqlite3.Error:
+                logger.debug("Snapshot prune skipped: %s", statement[:60], exc_info=True)
+        copy.commit()
+        copy.execute("VACUUM")
+    finally:
+        source.close()
+        copy.close()
+    return target
+
+
 def _compress_database(database_path: Path) -> bytes:
+    global _last_snapshot_bytes
     with sqlite3.connect(database_path) as connection:
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    output = io.BytesIO()
-    with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=6) as target, open(database_path, "rb") as source:
-        shutil.copyfileobj(source, target)
-    payload = output.getvalue()
+    db_bytes = Path(database_path).stat().st_size
+    payload = _gzip_file(Path(database_path))
     if len(payload) > _MAX_PAYLOAD:
-        raise ValueError("compressed SQLite snapshot exceeds 10 MB limit")
+        first = len(payload)
+        pruned = _prune_copy(Path(database_path))
+        try:
+            payload = _gzip_file(pruned)
+        finally:
+            pruned.unlink(missing_ok=True)
+        logger.warning("Snapshot exceeded cap; used pruned copy db_bytes=%d gz_before=%d gz_after=%d cap=%d", db_bytes, first, len(payload), _MAX_PAYLOAD)
+        if len(payload) > _MAX_PAYLOAD:
+            raise ValueError(f"compressed SQLite snapshot {len(payload)} bytes exceeds cap {_MAX_PAYLOAD} even after pruning")
+    _last_snapshot_bytes = len(payload)
+    logger.info("Snapshot compressed db_bytes=%d gz_bytes=%d", db_bytes, len(payload))
     return payload
 
 
@@ -91,7 +145,7 @@ def _github_put(repo: str, path: str, branch: str, token: str, payload: bytes, m
 
 
 def upload_github_snapshot(database_path: Path, now: datetime | None = None) -> bool:
-    global _last_successful_snapshot_at
+    global _last_successful_snapshot_at, _last_snapshot_error
     repo, token, branch = _github_config()
     if not repo or not token or not Path(database_path).exists():
         return False
@@ -100,9 +154,11 @@ def upload_github_snapshot(database_path: Path, now: datetime | None = None) -> 
         current = now or datetime.now(timezone.utc)
         _github_put(repo, "working.sqlite3.gz", branch, token, payload, "chore: update durable SQLite snapshot")
         _last_successful_snapshot_at = current
+        _last_snapshot_error = None
         logger.info("Durable GitHub snapshot saved backend=github bytes=%d", len(payload))
         return True
-    except Exception:
+    except Exception as exc:
+        _last_snapshot_error = f"{type(exc).__name__}: {str(exc)[:160]}"
         logger.warning("Durable GitHub snapshot failed; ingestion continues", exc_info=True)
         return False
 
@@ -112,7 +168,7 @@ def _manifest_url(base: str) -> str:
 
 
 def upload_url_snapshot(database_path: Path) -> bool:
-    global _last_successful_snapshot_at
+    global _last_successful_snapshot_at, _last_snapshot_error
     base, token = _config()
     if not base or not Path(database_path).exists():
         return False
@@ -128,9 +184,11 @@ def upload_url_snapshot(database_path: Path) -> bool:
             names = []
         _request(_manifest_url(base), method="PUT", body=json.dumps([name] + names[: _KEEP - 1]).encode(), token=token)
         _last_successful_snapshot_at = datetime.now(timezone.utc)
+        _last_snapshot_error = None
         logger.info("Durable snapshot saved backend=url bytes=%d", len(payload))
         return True
-    except Exception:
+    except Exception as exc:
+        _last_snapshot_error = f"{type(exc).__name__}: {str(exc)[:160]}"
         logger.warning("URL snapshot failed; ingestion continues", exc_info=True)
         return False
 

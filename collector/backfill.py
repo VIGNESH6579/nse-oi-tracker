@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import gzip
 import logging
-import sqlite3
 import time
 from datetime import date, timedelta
-from pathlib import Path
 
 from collector.bhavcopy import collect_equity_bhavcopy
 from database.repository import SignalRepository
@@ -42,20 +39,13 @@ def recent_nse_trading_dates(end_date: date, count: int) -> list[date]:
 
 
 def bundled_fno_symbols() -> set[str]:
-    """Return the compact F&O universe from the committed seed, if present."""
-    seed = Path(__file__).resolve().parents[1] / "data" / "seed_bhavcopy.sqlite3.gz"
-    if not seed.exists():
-        return set()
-    try:
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".sqlite3") as tmp:
-            with gzip.open(seed, "rb") as source, open(tmp.name, "wb") as target:
-                target.write(source.read())
-            with sqlite3.connect(tmp.name) as connection:
-                return {str(row[0]).upper() for row in connection.execute("SELECT DISTINCT symbol FROM daily_equity_bars")}
-    except Exception:
-        logger.warning("Could not inspect bundled F&O universe", exc_info=True)
-        return set()
+    """Return the real F&O stock universe (name kept for backward compatibility).
+
+    It used to read symbols from the committed seed, which holds every NSE
+    equity, so the filter removed nothing. See collector/universe.py.
+    """
+    from collector.universe import fno_symbols
+    return fno_symbols()
 
 
 def backfill_recent_bhavcopies(
