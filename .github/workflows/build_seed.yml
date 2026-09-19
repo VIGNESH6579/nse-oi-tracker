@@ -1,0 +1,88 @@
+name: Build historical seed
+
+
+
+on:
+
+  workflow_dispatch:
+  
+  schedule:
+  
+    - cron: '30 13 * * 0'
+    
+
+
+jobs:
+
+  seed:
+  
+    runs-on: ubuntu-latest
+    
+    steps:
+    
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+      
+        with:
+        
+          python-version: '3.11'
+          
+      - run: pip install -r requirements.txt
+      
+      - name: Build bounded seed
+      
+        env:
+        
+          ANGEL_ONE_API_KEY: ${{ secrets.ANGEL_ONE_API_KEY }}
+          
+          ANGEL_ONE_CLIENT_CODE: ${{ secrets.ANGEL_ONE_CLIENT_CODE }}
+          
+          ANGEL_ONE_PASSWORD: ${{ secrets.ANGEL_ONE_PASSWORD }}
+          
+          ANGEL_ONE_TOTP_SECRET: ${{ secrets.ANGEL_ONE_TOTP_SECRET }}
+          
+        run: python -m collector.build_seed --days 80
+        
+      - name: Open seed update pull request
+      
+        uses: peter-evans/create-pull-request@v7
+        
+        with:
+        
+          commit-message: 'data: refresh bounded daily seed'
+          
+          branch: automation/refresh-seed
+          
+          title: 'data: refresh bounded daily seed'
+          
+          body: 'Automated bounded free-tier seed refresh. Review before merging and deploying outside market hours.'
+          
+          add-paths: data/seed_bhavcopy.sqlite3.gz
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
