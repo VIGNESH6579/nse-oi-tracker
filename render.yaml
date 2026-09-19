@@ -7,7 +7,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /api/health
-    autoDeployTrigger: commit
+    # Deploy manually or outside market hours; a restart wipes free-tier SQLite.
+    autoDeployTrigger: off
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
@@ -31,6 +32,15 @@ services:
       - key: NSE_OI_BACKUP_TOKEN
         sync: false
       - key: NSE_OI_PROXY_URL
+        sync: false
+      # Add values later in Render; never commit credentials.
+      - key: ANGEL_ONE_API_KEY
+        sync: false
+      - key: ANGEL_ONE_CLIENT_CODE
+        sync: false
+      - key: ANGEL_ONE_PASSWORD
+        sync: false
+      - key: ANGEL_ONE_TOTP_SECRET
         sync: false
 
 # Render Free web services have an ephemeral filesystem. The app remains

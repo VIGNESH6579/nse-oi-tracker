@@ -105,6 +105,8 @@ _last_good_signals_at = 0.0
 _last_refresh_at_ist: str | None = None
 _last_refresh_was_stale = False
 _last_snapshot_id: int | None = None
+_last_refresh_completed_monotonic = 0.0
+MIN_REFRESH_INTERVAL_SECONDS = 45.0
 _refresh_lock = asyncio.Lock()
 _backfill_lock = asyncio.Lock()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -314,8 +316,17 @@ def _refresh_signals_and_release_memory() -> list[dict]:
 
 async def refresh_signals() -> list[dict]:
     """Serialize all refresh callers to avoid upstream request stampedes."""
+    global _last_refresh_completed_monotonic
     async with _refresh_lock:
-        return await asyncio.to_thread(_refresh_signals_and_release_memory)
+        now = time.monotonic()
+        if _last_refresh_completed_monotonic and now - _last_refresh_completed_monotonic < MIN_REFRESH_INTERVAL_SECONDS:
+            cached = cache.get("all_signals")
+            if cached is not None:
+                logger.info("Skipping duplicate signal refresh inside %.0fs guard", MIN_REFRESH_INTERVAL_SECONDS)
+                return cached
+        result = await asyncio.to_thread(_refresh_signals_and_release_memory)
+        _last_refresh_completed_monotonic = time.monotonic()
+        return result
 
 
 async def scheduled_refresh() -> None:
