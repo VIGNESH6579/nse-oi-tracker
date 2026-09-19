@@ -61,9 +61,9 @@ from analytics.intraday import observe as observe_intraday
 from analytics.intraday import candle_vwap
 from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
-from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates
+from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
-from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot
+from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -516,6 +516,7 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
             end_date=_backfill_end_date(),
             required_days=required_days,
             max_downloads=max_downloads,
+            symbols=bundled_fno_symbols(),
         )
     result.update({
         "started_at_ist": started_at,
@@ -533,10 +534,18 @@ async def automatic_startup_backfill() -> None:
         return
     logger.info("Daily bhavcopy is missing recent dates; automatic bounded backfill is starting. Monitor /api/health.")
     try:
-        result = await run_backfill(required_days=5, max_downloads=5)
+        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=settings.backfill_target_days)
         logger.info("Automatic bhavcopy backfill finished: %s", result)
     except Exception:
         logger.exception("Automatic bhavcopy backfill failed")
+
+
+async def scheduled_durable_snapshot() -> None:
+    """Persist today's working database during market hours."""
+    current = now_ist()
+    minutes = current.hour * 60 + current.minute
+    if current.weekday() < 5 and 540 <= minutes <= 945:
+        await asyncio.to_thread(upload_database_snapshot, settings.database_path)
 
 
 def render_startup_backfill_enabled() -> bool:
@@ -619,6 +628,14 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        scheduled_durable_snapshot,
+        IntervalTrigger(minutes=settings.snapshot_every_min, timezone=IST),
+        id="durable-database-snapshot",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     app.state.scheduler = scheduler
     gc.freeze()
@@ -647,6 +664,10 @@ async def lifespan(app: FastAPI):
     if cache.get("all_signals") is None:
         await scheduled_refresh()
     yield
+    try:
+        await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
+    except Exception:
+        logger.warning("Shutdown snapshot skipped", exc_info=True)
     scheduler.shutdown(wait=False)
 
 
@@ -686,8 +707,7 @@ async def health():
     daily_equity_data = repository.daily_equity_bar_summary()
     daily_index_data = repository.daily_index_bar_summary()
     scan_age = max(0.0, time.monotonic() - _last_refresh_completed_monotonic) if _last_refresh_completed_monotonic else None
-    equity_symbols = int(daily_equity_data.get("symbols") or 0)
-    atr_coverage_pct = 100.0 if equity_symbols else 0.0
+    coverage = repository.daily_history_coverage()
     angel_state = angel_market_data.health() if angel_market_data is not None else {"state": "disabled", "last_error_code": "", "retry_at": None}
     return {
         "status":        "ok",
@@ -702,8 +722,10 @@ async def health():
         "data_source":   "angel_one_read_only_overlay" if angel_market_data else "nse_public_feed",
         "last_scan_at":  _last_refresh_at_ist,
         "scan_age_s":    round(scan_age, 2) if scan_age is not None else None,
-        "atr_coverage_pct": atr_coverage_pct,
-        "snapshot_age_s": scan_age,
+        "atr_coverage_pct": coverage["atr_coverage_pct"],
+        "history_ready_pct": coverage["history_ready_pct"],
+        "snapshot_age_s": last_snapshot_age_s(),
+        "snapshot_backend": "github" if os.getenv("NSE_OI_BACKUP_GITHUB_REPO") and os.getenv("NSE_OI_BACKUP_GITHUB_TOKEN") else "url" if os.getenv("NSE_OI_BACKUP_URL") else "none",
         "angel":         angel_state,
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,

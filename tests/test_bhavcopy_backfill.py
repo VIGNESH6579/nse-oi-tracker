@@ -52,5 +52,5 @@ def test_backfill_respects_existing_dates_and_download_limit(monkeypatch):
         max_downloads=1, delay_seconds=0,
     )
 
-    assert result == {"requested": 3, "downloaded": 1, "stored": 1, "skipped": 1}
+    assert result == {"requested": 3, "downloaded": 1, "stored": 1, "skipped": 1, "failed": 0}
     assert requested == [date(2026, 1, 23)]

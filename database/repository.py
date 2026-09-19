@@ -325,6 +325,26 @@ class SignalRepository:
             ).fetchone()
         return dict(row)
 
+    def daily_history_coverage(self, *, atr_bars: int = 15, ready_bars: int = 60) -> dict[str, float | int]:
+        """Return the percentage of stored symbols with enough daily bars."""
+        with self._connect() as connection:
+            total = int(connection.execute("SELECT COUNT(DISTINCT symbol) FROM daily_equity_bars").fetchone()[0] or 0)
+            atr_ready = int(connection.execute(
+                "SELECT COUNT(*) FROM (SELECT symbol FROM daily_equity_bars GROUP BY symbol HAVING COUNT(*) >= ?)",
+                (atr_bars,),
+            ).fetchone()[0] or 0)
+            history_ready = int(connection.execute(
+                "SELECT COUNT(*) FROM (SELECT symbol FROM daily_equity_bars GROUP BY symbol HAVING COUNT(*) >= ?)",
+                (ready_bars,),
+            ).fetchone()[0] or 0)
+        return {
+            "symbols": total,
+            "atr_ready_symbols": atr_ready,
+            "history_ready_symbols": history_ready,
+            "atr_coverage_pct": round(100.0 * atr_ready / total, 2) if total else 0.0,
+            "history_ready_pct": round(100.0 * history_ready / total, 2) if total else 0.0,
+        }
+
     def latest_daily_equity_trade_date(self) -> str | None:
         """Return the newest stored daily equity-bar date, if any."""
         with self._connect() as connection:

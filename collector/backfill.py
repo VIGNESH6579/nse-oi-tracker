@@ -1,11 +1,14 @@
-"""Bounded backfill for public NSE daily bhavcopy archives."""
+"""Bounded, resumable backfill for public NSE daily bhavcopy archives."""
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import logging
+import sqlite3
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
+from pathlib import Path
 
 from collector.bhavcopy import collect_equity_bhavcopy
 from database.repository import SignalRepository
@@ -38,32 +41,62 @@ def recent_nse_trading_dates(end_date: date, count: int) -> list[date]:
     return dates
 
 
+def bundled_fno_symbols() -> set[str]:
+    """Return the compact F&O universe from the committed seed, if present."""
+    seed = Path(__file__).resolve().parents[1] / "data" / "seed_bhavcopy.sqlite3.gz"
+    if not seed.exists():
+        return set()
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3") as tmp:
+            with gzip.open(seed, "rb") as source, open(tmp.name, "wb") as target:
+                target.write(source.read())
+            with sqlite3.connect(tmp.name) as connection:
+                return {str(row[0]).upper() for row in connection.execute("SELECT DISTINCT symbol FROM daily_equity_bars")}
+    except Exception:
+        logger.warning("Could not inspect bundled F&O universe", exc_info=True)
+        return set()
+
+
 def backfill_recent_bhavcopies(
     repository: SignalRepository,
     *,
     end_date: date,
     required_days: int = 60,
     max_downloads: int = 60,
-    delay_seconds: float = 0.25,
+    delay_seconds: float | None = None,
+    symbols: set[str] | None = None,
 ) -> dict[str, int]:
-    """Fetch missing public daily files with a strict download/rate limit."""
+    """Fetch missing dates newest-first, paced at no more than ten files/minute."""
     if required_days <= 0 or max_downloads <= 0:
-        return {"requested": 0, "downloaded": 0, "stored": 0, "skipped": 0}
+        return {"requested": 0, "downloaded": 0, "stored": 0, "skipped": 0, "failed": 0}
     candidates = recent_nse_trading_dates(end_date, required_days)
     existing = repository.daily_equity_trade_dates()
     missing = [candidate for candidate in candidates if candidate.isoformat() not in existing]
-    downloaded = stored = 0
-    for candidate in missing[:max_downloads]:
-        bars = collect_equity_bhavcopy(candidate)
-        downloaded += 1
-        stored += repository.upsert_daily_equity_bars(bars)
-        if delay_seconds > 0:
+    if delay_seconds is None:
+        delay_seconds = 60.0 / get_settings().backfill_max_per_min
+    downloaded = stored = failed = 0
+    for index, candidate in enumerate(missing[:max_downloads], start=1):
+        try:
+            bars = collect_equity_bhavcopy(candidate)
+            if symbols:
+                bars = [bar for bar in bars if str(bar.get("symbol") or "").upper() in symbols]
+            downloaded += 1
+            stored += repository.upsert_daily_equity_bars(bars)
+        except Exception:
+            failed += 1
+            logger.warning("Bhavcopy download failed date=%s; retrying with backoff", candidate, exc_info=True)
+            time.sleep(min(30.0, max(1.0, delay_seconds) * (2 ** min(failed, 4))))
+        if index % 10 == 0 or index == min(len(missing), max_downloads):
+            logger.info("Bhavcopy backfill progress batch=%d requested=%d stored=%d failed=%d", index, len(candidates), stored, failed)
+        if delay_seconds > 0 and index < min(len(missing), max_downloads):
             time.sleep(delay_seconds)
     return {
         "requested": len(candidates),
         "downloaded": downloaded,
         "stored": stored,
         "skipped": len(candidates) - len(missing),
+        "failed": failed,
     }
 
 
@@ -83,6 +116,7 @@ def main() -> None:
         end_date=arguments.end_date,
         required_days=arguments.days,
         max_downloads=arguments.max_downloads,
+        symbols=bundled_fno_symbols(),
     )
     print(result)
 
