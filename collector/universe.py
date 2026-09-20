@@ -147,3 +147,8 @@ def fno_symbols() -> set[str]:
 def cached_universe_size() -> int:
     """Size of the already-loaded universe; never touches the network."""
     return len(_cache[1]) if _cache else 0
+
+
+def cached_universe() -> set[str]:
+    """Already-loaded universe (no network); empty until startup maintenance has run."""
+    return set(_cache[1]) if _cache else set()

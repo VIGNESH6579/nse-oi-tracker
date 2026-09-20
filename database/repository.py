@@ -358,6 +358,25 @@ class SignalRepository:
                 raw.close()
         return {"before": before, "deleted": deleted, "after": after, "vacuumed": vacuumed}
 
+    def symbols_missing_bars(self, symbols: Iterable[str], min_bars: int = 15) -> list[str]:
+        """F&O symbols that have fewer than ``min_bars`` daily bars (name mismatches, new listings)."""
+        wanted = sorted({str(sym).upper() for sym in symbols if sym})
+        if not wanted:
+            return []
+        with self._connect() as connection:
+            connection.execute("CREATE TEMP TABLE IF NOT EXISTS gap_symbols(symbol TEXT PRIMARY KEY)")
+            connection.execute("DELETE FROM gap_symbols")
+            connection.executemany("INSERT OR IGNORE INTO gap_symbols(symbol) VALUES (?)", [(sym,) for sym in wanted])
+            rows = connection.execute(
+                "SELECT g.symbol FROM gap_symbols g LEFT JOIN (SELECT symbol, COUNT(*) AS n FROM daily_equity_bars GROUP BY symbol) b "
+                "ON b.symbol = g.symbol WHERE COALESCE(b.n, 0) < ? ORDER BY g.symbol", (min_bars,),
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def index_bar_count(self, symbol: str) -> int:
+        with self._connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) FROM daily_index_bars WHERE symbol = ?", (symbol.upper(),)).fetchone()[0] or 0)
+
     def daily_equity_bar_summary(self) -> dict[str, Any]:
         """Compact technical-data freshness diagnostics for /api/health."""
         with self._connect() as connection:
