@@ -50,36 +50,14 @@ def test_history_and_analytics_are_served_from_sqlite(monkeypatch, tmp_path):
     assert debug.status_code == 404
 
 
-def test_technical_endpoint_reports_daily_data_boundary(monkeypatch, tmp_path):
-    repository = SignalRepository(tmp_path / "tracker.sqlite3")
-    repository.upsert_daily_equity_bars([
-        {
-            "trade_date": f"2026-01-{day:02d}", "symbol": "TECHTEST",
-            "open": 100 + day, "high": 102 + day, "low": 99 + day,
-            "close": 101 + day, "volume": 1_000,
-        }
-        for day in range(1, 29)
-    ])
-    monkeypatch.setattr(main, "repository", repository)
-
-    with TestClient(main.app) as client:
-        response = client.get("/api/technical/techtest")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["source"] == "NSE daily equity bhavcopy"
-    assert payload["data_frequency"] == "daily"
-    assert payload["validation_ready"] is False
-    assert "not an intraday VWAP" in payload["vwap_note"]
 
 
-def test_market_overview_endpoint_uses_public_nse_adapters(monkeypatch):
+def test_market_overview_endpoint_returns_indices_only(monkeypatch):
     main.cache.delete("market-overview")
     monkeypatch.setattr(main, "fetch_market_indices", lambda: {
         "timestamp": "test", "advances": 2, "declines": 1, "unchanged": 0,
         "data": [{"index": "NIFTY 50", "last": 100, "variation": 1, "percentChange": 1}],
     })
-    monkeypatch.setattr(main, "fetch_fii_dii_activity", lambda: [])
 
     with TestClient(main.app) as client:
         response = client.get("/api/market-overview?refresh=true")
@@ -104,47 +82,10 @@ def test_signal_api_exposes_sector_metadata_and_filters_cached_rows(monkeypatch)
     assert "Unclassified" in response.json()["available_sectors"]
 
 
-def test_market_regime_and_candidate_cas_are_exposed_without_trade_call(monkeypatch):
-    main.cache.set("market-overview", {"indices": {"INDIA_VIX": {"last": 13.0}}}, ttl=60)
-    main.cache.set("all_signals", [{
-        "symbol": "CASTEST", "classification": "OI_PRICE_CANDIDATE",
-        "trade_recommendation": "NO_TRADE", "technical_context": {}, "news_context": {},
-    }], ttl=60)
-    monkeypatch.setattr(main, "is_market_open", lambda: False)
-
-    with TestClient(main.app) as client:
-        regime = client.get("/api/market-regime")
-        cas = client.get("/api/cas/castest")
-
-    assert regime.status_code == 200
-    assert regime.json()["india_vix"] == 13.0
-    assert cas.status_code == 200
-    assert cas.json()["trade_recommendation"] == "NO_TRADE"
 
 
-def test_heatmap_endpoint_uses_cached_chain_without_a_live_fetch(monkeypatch):
-    main.cache.set("chain:HEATTEST", {"expiry": "2026-09-24", "strikes": [
-        {"strike": 100, "ce_oi": 20, "pe_oi": 10, "ce_doi": 2, "pe_doi": 1},
-    ]}, ttl=60)
-    monkeypatch.setattr(main, "get_option_chain_analysis", lambda symbol: (_ for _ in ()).throw(AssertionError("unexpected live fetch")))
-    with TestClient(main.app) as client:
-        response = client.get("/api/option-chain/heattest/heatmap")
-    assert response.status_code == 200
-    assert response.json()["strikes"][0]["strike"] == 100.0
 
 
-def test_market_intelligence_reuses_cached_public_context(monkeypatch, tmp_path):
-    repository = SignalRepository(tmp_path / "tracker.sqlite3")
-    # Keep these fixtures alive for the whole suite; the suite includes slow
-    # live-data regression checks and a 60-second TTL makes this test flaky.
-    main.cache.set("market-overview", {"indices": {"INDIA_VIX": {"last": 12}}}, ttl=3600)
-    main.cache.set("all_signals", [{"signal": "LONG_BUILDUP"}], ttl=3600)
-    monkeypatch.setattr(main, "repository", repository)
-    monkeypatch.setattr(main, "is_market_open", lambda: False)
-    with TestClient(main.app) as client:
-        response = client.get("/api/market-intelligence")
-    assert response.status_code == 200
-    assert response.json()["candidate_counts"]["LONG_BUILDUP"] == 1
 
 
 def test_sources_endpoint_does_not_hide_unconfigured_feeds():
@@ -154,18 +95,6 @@ def test_sources_endpoint_does_not_hide_unconfigured_feeds():
     assert any(row["status"] == "NOT_CONFIGURED" for row in response.json()["sources"])
 
 
-def test_participant_oi_endpoint_preserves_eod_boundary(monkeypatch, tmp_path):
-    repository = SignalRepository(tmp_path / "tracker.sqlite3")
-    repository.upsert_participant_oi([{
-        "report_date": "2026-09-10", "participant": "FII", "net_index_futures": 10,
-        "net_stock_futures": -4, "measures": {}, "source": "test",
-    }])
-    monkeypatch.setattr(main, "repository", repository)
-    with TestClient(main.app) as client:
-        response = client.get("/api/participant-oi")
-    assert response.status_code == 200
-    assert response.json()["is_intraday"] is False
-    assert response.json()["report_date"] == "2026-09-10"
 
 
 def test_backtest_endpoint_and_csv_export_are_auditable(monkeypatch, tmp_path):

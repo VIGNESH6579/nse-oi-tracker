@@ -2,7 +2,6 @@ from datetime import time
 
 from app.oi_analyzer import (
     SIGNAL_CAS_SHORT_COVERING,
-    _parse_option_chain,
     detect_cas_jump,
 )
 
@@ -13,44 +12,12 @@ def test_detect_cas_jump_requires_window_and_oi_covering():
     assert detect_cas_jump("ATHER", 2.1, time(15, 35), -2.9) is False
 
 
-def test_option_chain_returns_pcr_label_spot_and_intrinsic_max_pain():
-    data = {
-        "records": {
-            "underlyingValue": 100,
-            "expiryDates": ["01-Jan-2027"],
-            "data": [
-                {"strikePrice": 90, "CE": {"openInterest": 100, "lastPrice": 5}, "PE": {"openInterest": 500, "lastPrice": 4}},
-                {"strikePrice": 100, "CE": {"openInterest": 100, "lastPrice": 5}, "PE": {"openInterest": 500, "lastPrice": 4}},
-                {"strikePrice": 110, "CE": {"openInterest": 100, "lastPrice": 5}, "PE": {"openInterest": 500, "lastPrice": 4}},
-            ],
-        },
-        "filtered": {},
-    }
-    result = _parse_option_chain(data, "ATHER")
-    assert result["atm_strike"] == 100
-    assert result["pcr"] == 5.0
-    assert result["pcr_label"] == "Bullish"
-    assert result["max_pain"] == 110
-    assert result["spot_source"] == "records.underlyingValue"
-    assert result["oi_levels"]["pe_oi_support"] == 90
-    assert result["oi_levels"]["ce_oi_resistance"] == 90
 
 
 def test_cas_signal_constant_is_available():
     assert SIGNAL_CAS_SHORT_COVERING == "CAS_SHORT_COVERING"
 
 
-def test_option_chain_error_distinguishes_closed_market(monkeypatch):
-    from app import oi_analyzer
-
-    monkeypatch.setattr(oi_analyzer, "fetch_option_chain_index", lambda symbol: None)
-    monkeypatch.setattr(oi_analyzer, "get_market_status", lambda: "CLOSED_BEFORE_OPEN")
-
-    result = oi_analyzer.get_option_chain_analysis("NIFTY")
-
-    assert result["error_code"] == "MARKET_CLOSED"
-    assert "market is closed" in result["error"]
-    assert "IP" not in result["error"]
 
 
 def test_oi_change_fallback_is_used_when_percent_missing():

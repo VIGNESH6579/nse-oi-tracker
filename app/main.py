@@ -23,7 +23,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.oi_analyzer as oi_engine
@@ -40,26 +40,17 @@ from app.cache import cache
 from app.oi_analyzer import (
     scan_all_fno_realtime,
     last_scan_data_status,
-    get_option_chain_analysis,
     SIGNAL_META,
-    CATEGORY_TO_SIGNAL,
-    classify_signal,
-    _build_signal_row,
-    _parse_row,
-    _f,
     sample_field_usage,
 )
 from app.nse_fetcher import (
     fetch_all_fno_oi_change,
-    fetch_fii_dii_activity,
-    fetch_corporate_announcements,
     fetch_market_indices,
     test_nse_connectivity,
 )
 from analytics.technical import technical_context
 from analytics.intraday import observe as observe_intraday
 from analytics.intraday import candle_vwap
-from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
@@ -68,19 +59,13 @@ from collector.universe import universe_source, cached_universe_size
 from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
 from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles
 from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS
-from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
-from analytics.option_chain import summarize_pcr_trend
 from analytics.backtest import summarize_candidate_backtest
 from alerts.dispatcher import dispatch_candidate_alert
-from analytics.news import latest_event_risk, normalize_nse_announcements
 from analytics.sectors import attach_sector, known_sectors
 from analytics.cas import confidence_analysis
-from analytics.regime import classify_market_regime
-from analytics.oi_heatmap import option_oi_heatmap
 from analytics.traps import trap_risk
-from analytics.intelligence import build_market_intelligence
 from analytics.sources import public_source_inventory
 from integrations.angel_one_market_data import AngelOneMarketData
 from config.settings import get_settings
@@ -471,26 +456,6 @@ async def ingest_daily_bhavcopy(trade_date: str | None = None) -> int:
         return 0
 
 
-async def ingest_participant_oi(report_date: str | None = None) -> int:
-    """Store the public EOD participant OI report, trying recent calendar days.
-
-    A missed holiday report is normal.  The date remains attached to the rows,
-    so the dashboard cannot label the prior close's positions as intraday.
-    """
-    target = datetime.fromisoformat(report_date).date() if report_date else now_ist().date()
-    dates = [target - timedelta(days=offset) for offset in range(0, 5)]
-    for candidate_date in dates:
-        try:
-            rows = await asyncio.to_thread(collect_participant_oi, candidate_date)
-            if rows:
-                stored = await asyncio.to_thread(repository.upsert_participant_oi, rows)
-                logger.info("Stored %s participant OI rows for %s", stored, candidate_date.isoformat())
-                return stored
-        except Exception:
-            logger.exception("Could not ingest participant OI report for %s", candidate_date.isoformat())
-    return 0
-
-
 async def ingest_daily_index_bars() -> int:
     """Append the latest public NSE daily OHLC rows for the four F&O indices."""
     try:
@@ -751,14 +716,6 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
     scheduler.add_job(
-        ingest_participant_oi,
-        CronTrigger(day_of_week="mon-fri", hour=17, minute=15, timezone=IST),
-        id="nse-participant-oi-ingestion",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
         scheduled_durable_snapshot,
         IntervalTrigger(minutes=settings.snapshot_every_min, timezone=IST),
         id="durable-database-snapshot",
@@ -869,7 +826,8 @@ async def health():
         "build_sha":     os.getenv("RENDER_GIT_COMMIT", "unknown"),
         "started_at":    _started_at.isoformat(),
         "uptime_s":      round(max(0.0, (now - _started_at).total_seconds()), 2),
-        "data_source":   "angel_one_read_only_overlay" if angel_market_data else "nse_public_feed",
+        "data_source":   oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet",
+        "price_source":  "angel_one_quotes" if angel_market_data else "nse_oi_feed",
         "last_scan_at":  _last_refresh_at_ist,
         "scan_age_s":    round(scan_age, 2) if scan_age is not None else None,
         "atr_coverage_pct": coverage["atr_coverage_pct"],
@@ -938,38 +896,6 @@ async def sources():
         },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
     }
-
-
-@app.get("/api/intraday/{symbol}")
-async def intraday_candles(symbol: str, interval: str = Query("FIVE_MINUTE")):
-    """Return read-only Angel One intraday candles when configured."""
-    if angel_market_data is None:
-        return {"symbol": symbol.upper(), "configured": False, "candles": [],
-                "message": "Angel One read-only market data is not configured"}
-    allowed = {"ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE", "TEN_MINUTE",
-               "FIFTEEN_MINUTE", "THIRTY_MINUTE", "ONE_HOUR", "ONE_DAY"}
-    if interval not in allowed:
-        raise HTTPException(status_code=400, detail="Unsupported candle interval")
-    try:
-        candles = await asyncio.to_thread(
-            angel_market_data.intraday_candles, symbol.upper(), interval=interval,
-        )
-        closes = [float(c["close"]) for c in candles if float(c.get("close") or 0) > 0]
-        fast = calculate_ema(closes, 5)
-        slow = calculate_ema(closes, 13)
-        return {"symbol": symbol.upper(), "configured": True,
-                "source": "angel_one_read_only", "candles": candles,
-                "vwap": candle_vwap(candles),
-                "ema_fast": fast, "ema_slow": slow,
-                "trend": ("UPTREND" if fast is not None and slow is not None and fast > slow
-                           else "DOWNTREND" if fast is not None and slow is not None and fast < slow
-                           else "INSUFFICIENT_DATA"),
-                "order_execution": False}
-    except Exception as exc:
-        logger.exception("Angel One intraday candle request failed for %s", symbol)
-        return {"symbol": symbol.upper(), "configured": True, "candles": [],
-                "source": "angel_one_read_only", "error": str(exc),
-                "order_execution": False}
 
 
 @app.get("/api/oi-signals")
@@ -1049,6 +975,7 @@ async def oi_signals(
             if data_status == "UNAVAILABLE" and not results else None
         ),
         "primary_market_data_source": active_source,
+        "oi_source": oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet",
         "angel_one_configured": angel_market_data is not None,
         "nse_public_feed_is_fallback": active_source == "nse_public_feed" and angel_market_data is not None,
         "refresh_supported": True,
@@ -1145,319 +1072,17 @@ async def backtest_export(
 
 @app.get("/api/market-overview")
 async def market_overview(refresh: bool = Query(False)):
-    """Cached public NSE indices, VIX, breadth, and FII/DII cash activity."""
+    """Cached NSE indices, VIX and breadth (context only)."""
     cache_key = "market-overview"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached is not None:
         return {"cached": True, **cached}
-    indices, activity = await asyncio.gather(
-        asyncio.to_thread(fetch_market_indices),
-        asyncio.to_thread(fetch_fii_dii_activity),
-    )
-    result = normalize_market_overview(indices, activity)
+    indices = await asyncio.to_thread(fetch_market_indices)
+    result = normalize_market_overview(indices, [])
     cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
     return {"cached": False, **result}
-
-
-@app.get("/api/market-regime")
-async def market_regime(refresh: bool = Query(False)):
-    """Public-VIX regime context, deliberately separate from a trade call."""
-    cache_key = "market-overview"
-    if refresh:
-        cache.delete(cache_key)
-    overview = cache.get(cache_key)
-    if overview is None:
-        indices, activity = await asyncio.gather(
-            asyncio.to_thread(fetch_market_indices),
-            asyncio.to_thread(fetch_fii_dii_activity),
-        )
-        overview = normalize_market_overview(indices, activity)
-        cache.set(cache_key, overview, ttl=settings.cache_ttl_seconds)
-    return {
-        "source": "public NSE index context",
-        **classify_market_regime(None, overview),
-    }
-
-
-@app.get("/api/market-intelligence")
-async def market_intelligence():
-    """Compact daily briefing from the app's existing public-source cache."""
-    overview = cache.get("market-overview")
-    if overview is None:
-        indices, activity = await asyncio.gather(
-            asyncio.to_thread(fetch_market_indices),
-            asyncio.to_thread(fetch_fii_dii_activity),
-        )
-        overview = normalize_market_overview(indices, activity)
-        cache.set("market-overview", overview, ttl=settings.cache_ttl_seconds)
-    announcements = await asyncio.to_thread(repository.recent_corporate_announcements, limit=200)
-    return {
-        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
-        **build_market_intelligence(
-            overview,
-            classify_market_regime(None, overview),
-            announcements,
-            cache.get("all_signals") or [],
-        ),
-    }
-
-
-@app.get("/api/cas/{symbol}")
-async def candidate_confidence_analysis(symbol: str):
-    """Return stored CAS context for a currently cached OI/price candidate."""
-    symbol = symbol.upper().strip()
-    candidate = next(
-        (row for row in (cache.get("all_signals") or []) if row.get("symbol") == symbol),
-        None,
-    )
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="No current candidate for symbol; refresh the scanner first")
-    return {
-        "symbol": symbol,
-        "classification": candidate.get("classification"),
-        "trade_recommendation": candidate.get("trade_recommendation", "NO_TRADE"),
-        "cas": candidate.get("cas_context") or confidence_analysis(
-            candidate.get("technical_context"), candidate.get("news_context"), cache.get("market-overview"),
-        ),
-    }
-
-
-@app.get("/api/participant-oi")
-async def participant_oi(refresh: bool = Query(False)):
-    """Latest stored public NSE EOD participant-wise OI report."""
-    if refresh:
-        await ingest_participant_oi()
-    result = await asyncio.to_thread(repository.latest_participant_oi)
-    return {
-        "source": "NSE F&O participant-wise OI end-of-day report",
-        "data_frequency": "end_of_day",
-        "is_intraday": False,
-        "methodology_caveat": "Participant OI is published as an end-of-day report and is context only, not a live participant-position or trade signal.",
-        **result,
-    }
-
-
-@app.get("/api/technical/{symbol}")
-async def technical_analysis(symbol: str):
-    """Daily NSE-bar technical context, not an intraday trade instruction."""
-    symbol = symbol.upper().strip()
-    if not symbol or len(symbol) > 32 or not symbol.replace("&", "").replace("-", "").isalnum():
-        raise HTTPException(status_code=400, detail="Invalid NSE symbol")
-    bars = await asyncio.to_thread(repository.daily_equity_bars_for_symbol, symbol)
-    context = technical_context(bars)
-    return {
-        "symbol": symbol,
-        "source": "NSE daily equity bhavcopy",
-        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
-        **context,
-    }
-
-
-@app.get("/api/category/{category}")
-async def category_scan(category: str, refresh: bool = Query(False)):
-    """Signals filtered by category: long_buildup | short_buildup | short_covering | long_unwinding"""
-    valid = list(CATEGORY_TO_SIGNAL.keys())
-    if category not in valid:
-        raise HTTPException(status_code=400, detail=f"category must be one of: {valid}")
-
-    cache_key = f"cat:{category}"
-    if refresh:
-        cache.delete(cache_key)
-
-    cached = cache.get(cache_key)
-    if cached is None:
-        target = CATEGORY_TO_SIGNAL[category]
-        all_signals = cache.get("all_signals") or await refresh_signals()
-        cached = [r for r in all_signals if r["signal"] == target]
-        cache.set(cache_key, cached, ttl=settings.cache_ttl_seconds)
-
-    return {
-        "category":  category,
-        "signal":    CATEGORY_TO_SIGNAL.get(category),
-        "count":     len(cached),
-        "data":      cached,
-        "timestamp": now_ist().strftime("%H:%M:%S"),
-    }
-
-
-@app.get("/api/option-chain/{symbol}")
-async def option_chain(symbol: str, refresh: bool = Query(False)):
-    """
-    Option chain for any F&O symbol or index.
-    Returns: ATM strike, PCR, max pain, CE/PE OI per strike.
-
-    Supports: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, and all F&O stocks.
-    Returns graceful error (not 503) if NSE is temporarily unavailable.
-    """
-    symbol    = symbol.upper().strip()
-    cache_key = f"chain:{symbol}"
-
-    if refresh:
-        cache.delete(cache_key)
-
-    cached = cache.get(cache_key)
-    if cached:
-        return {"source": "cache", **cached}
-
-    result = await asyncio.to_thread(get_option_chain_analysis, symbol)
-
-    # Never return 503 — return a structured response with error info
-    # so the frontend can display a friendly message
-    if "error" in result:
-        fallback = cache.get(f"last_good_chain:{symbol}")
-        if fallback:
-            return {"source": "cache_fallback", **fallback}
-        logger.warning(f"Option chain error for {symbol}: {result['error']}")
-        return JSONResponse(
-            status_code=200,
-            content={
-                "source":      "live",
-                "symbol":      symbol,
-                "error":       result["error"],
-                "strikes":     [],
-                "atm_strike":  0,
-                "expiry":      None,
-                "pcr":         0,
-                "total_ce_oi": 0,
-                "total_pe_oi": 0,
-                "max_pain":    0,
-            }
-        )
-
-    history: list[dict] = []
-    try:
-        await asyncio.to_thread(repository.record_option_chain_snapshot, result, now_ist())
-        history = await asyncio.to_thread(repository.option_chain_history, symbol)
-    except Exception:
-        logger.exception("Could not persist option-chain history for %s", symbol)
-    result["pcr_history"] = history
-    result["pcr_trend"] = summarize_pcr_trend(history)
-    # Cache longer when market is closed so after-hours requests do not spam NSE
-    chain_ttl = 1800 if not is_market_open() else settings.cache_ttl_seconds
-    cache.set(cache_key, result, ttl=chain_ttl)
-    cache.set(f"last_good_chain:{symbol}", result, ttl=86400)
-    return {"source": "live", **result}
-
-
-@app.get("/api/option-chain/{symbol}/history")
-async def option_chain_history(symbol: str, limit: int = Query(200, ge=1, le=1000)):
-    """Stored PCR/max-pain timeline from prior public NSE chain observations."""
-    symbol = symbol.upper().strip()
-    history = await asyncio.to_thread(repository.option_chain_history, symbol, limit=limit)
-    return {
-        "symbol": symbol,
-        "source": "server-owned option-chain snapshots",
-        "history": history,
-        "trend": summarize_pcr_trend(history),
-    }
-
-
-@app.get("/api/option-chain/{symbol}/heatmap")
-async def option_chain_heatmap(symbol: str, refresh: bool = Query(False)):
-    """OI/?OI intensity ladder based on the current public chain window."""
-    symbol = symbol.upper().strip()
-    cache_key = f"chain:{symbol}"
-    if refresh:
-        cache.delete(cache_key)
-    chain = cache.get(cache_key)
-    if chain is None:
-        chain = await asyncio.to_thread(get_option_chain_analysis, symbol)
-        if "error" not in chain:
-            cache.set(cache_key, chain, ttl=settings.cache_ttl_seconds)
-    if "error" in chain:
-        return JSONResponse(status_code=200, content={
-            "symbol": symbol, "error": chain["error"], "strikes": [],
-            "methodology_caveat": "No heatmap is available until a public NSE option chain is returned.",
-        })
-    return {"symbol": symbol, "expiry": chain.get("expiry"), **option_oi_heatmap(chain.get("strikes") or [])}
-
-
-@app.get("/api/signal/{symbol}")
-async def single_signal(symbol: str):
-    """
-    On-demand signal for any specific F&O symbol.
-    Uses the live OI-spurts scan and its cached fallback; the removed NSE quote-derivative endpoint is never called.
-    """
-    symbol    = symbol.upper().strip()
-    cache_key = f"sig:{symbol}"
-
-    cached = cache.get(cache_key)
-    if cached:
-        return {"source": "cache", **cached}
-
-    raw = None  # Removed NSE quote-derivative endpoint; use scan fallback.
-    if not raw:
-        # Fallback: check if symbol is in the current scan cache
-        all_signals = cache.get("all_signals") or []
-        match = next((s for s in all_signals if s["symbol"] == symbol), None)
-        if match:
-            return {"source": "scan_cache", **match}
-        # The legacy public derivative-quote endpoint can return 404 while the
-        # all-F&O OI-spurts feed is healthy. Reuse that same live feed instead
-        # of reporting a false total-data failure for the symbol.
-        try:
-            live_rows = await asyncio.to_thread(fetch_all_fno_oi_change)
-            raw_match = next(
-                (row for row in live_rows
-                 if str(row.get("symbol") or row.get("underlying") or "").upper().strip() == symbol),
-                None,
-            )
-            parsed = _parse_row(raw_match) if raw_match else None
-            if parsed:
-                return {"source": "nse_oi_spurts_fallback", **parsed}
-        except Exception:
-            logger.exception("OI-spurts fallback failed for %s", symbol)
-        return JSONResponse(
-            status_code=200,
-            content={
-                "symbol": symbol,
-                "error":  f"NSE data unavailable for {symbol}. Try during market hours (09:15-15:30 IST).",
-                "signal": "NEUTRAL",
-                "confidence_tier": "LOW",
-            }
-        )
-
-    try:
-        stocks = raw.get("stocks", [])
-        # Find the nearest futures contract
-        fut = next(
-            (s for s in stocks
-             if "Futures" in s.get("metadata", {}).get("instrumentType", "")
-             or "FUT" in s.get("metadata", {}).get("identifier", "")),
-            stocks[0] if stocks else None
-        )
-        if not fut:
-            return JSONResponse(status_code=200, content={
-                "symbol": symbol, "error": "No futures contract found",
-                "signal": "NEUTRAL",
-            })
-
-        meta        = fut.get("metadata", {})
-        ltp         = _f(meta.get("lastPrice", 0))
-        price_chg   = _f(meta.get("change", 0))
-        price_chg_p = _f(meta.get("pChange", 0))
-        oi          = _f(meta.get("openInterest", 0))
-        oi_chg      = _f(meta.get("changeinOpenInterest", 0))
-        prev_oi     = oi - oi_chg
-        oi_chg_p    = (oi_chg / prev_oi * 100) if prev_oi > 0 else 0
-
-        signal = classify_signal(price_chg_p, oi_chg_p)
-        result = _build_signal_row(
-            symbol, ltp, price_chg, price_chg_p,
-            int(oi), int(oi_chg), oi_chg_p, signal
-        )
-        cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
-        return {"source": "live", **result}
-
-    except Exception as exc:
-        logger.error(f"Signal parse error for {symbol}: {exc}")
-        return JSONResponse(status_code=200, content={
-            "symbol": symbol,
-            "error":  f"Parse error: {exc}",
-            "signal": "NEUTRAL",
-        })
 
 
 @app.get("/api/debug")

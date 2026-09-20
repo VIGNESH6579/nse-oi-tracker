@@ -19,16 +19,12 @@ from app.config import (
     MIN_OI_ABSOLUTE, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM,
     PUBLISH_MIN_CONFIDENCE, PUBLISH_MIN_OI_ABSOLUTE,
     QUALITY_REQUIRED_SCANS, QUALITY_MAX_SIGNALS,
-    STRIKES_EACH_SIDE, INDICES,
 )
 from app.nse_fetcher import (
     fetch_all_fno_oi_change,
-    fetch_option_chain_index,
-    fetch_option_chain_equity,
 )
 from app.angel_one import angel_one
 from config.settings import get_settings
-from app.market_calendar import get_market_status, MARKET_STATUS_OPEN
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +410,8 @@ def scan_all_fno_realtime() -> list[dict]:
     # Sort strongest first and expose only a small quality feed.
     results.sort(key=lambda r: (-r["confidence"], -r["strength"], r["symbol"]))
     results = results[:QUALITY_MAX_SIGNALS]
-    _last_scan_stats.update(rows=len(rows), parsed=parsed_count, candidates=len(results))
+    _last_scan_stats.update(rows=len(rows), parsed=parsed_count, candidates=len(results),
+                            oi_source="angel_futures" if any(r.get("_data_source") for r in rows[:5]) else "nse_oi_spurts")
 
     high   = sum(1 for r in results if r["confidence_tier"] == "HIGH")
     medium = sum(1 for r in results if r["confidence_tier"] == "MEDIUM")
@@ -445,111 +442,5 @@ def _parse_buildup_row(row: dict, signal: str) -> dict | None:
 
 # ── OPTION CHAIN ──────────────────────────────────────────────────────────────
 
-def get_option_chain_analysis(symbol: str) -> dict:
-    is_index = symbol in INDICES
-    raw = fetch_option_chain_index(symbol) if is_index else fetch_option_chain_equity(symbol)
-    if not raw:
-        if get_market_status() != MARKET_STATUS_OPEN:
-            return {
-                "symbol": symbol,
-                "error": "NSE option-chain data is unavailable while the market is closed. Try again during market hours (09:15–15:30 IST).",
-                "error_code": "MARKET_CLOSED",
-            }
-        return {
-            "symbol": symbol,
-            "error": "NSE returned no option-chain data during market hours. The NSE feed may be temporarily unavailable or restricting this cloud IP.",
-            "error_code": "NSE_FEED_UNAVAILABLE",
-        }
-    return _parse_option_chain(raw, symbol)
 
 
-def _parse_option_chain(data: dict, symbol: str) -> dict:
-    try:
-        records    = data.get("records", {}) or {}
-        filtered   = data.get("filtered", {}) or {}
-        exp_dates  = records.get("expiryDates", [])
-        atm_strike = _f(records.get("underlyingValue", 0))
-        # NSE v3 returns the selected expiry under records.data and may omit
-        # filtered.data; retain compatibility with the legacy response shape.
-        all_data   = filtered.get("data") or records.get("data", [])
-
-        total_ce = total_pe = 0
-        strikes: list[dict] = []
-        pain_map: dict[float, float] = {}
-
-        for row in all_data:
-            strike = _f(row.get("strikePrice", 0))
-            ce     = row.get("CE") or {}
-            pe     = row.get("PE") or {}
-            ce_oi  = _f(ce.get("openInterest",          0))
-            pe_oi  = _f(pe.get("openInterest",          0))
-            ce_doi = _f(ce.get("changeinOpenInterest",  0))
-            pe_doi = _f(pe.get("changeinOpenInterest",  0))
-            ce_ltp  = _f(ce.get("lastPrice",             0))
-            pe_ltp  = _f(pe.get("lastPrice",             0))
-            total_ce += ce_oi
-            total_pe += pe_oi
-            # Store OI by strike first; pain is calculated against each
-            # candidate settlement price after all strikes are collected.
-            pain_map.setdefault(strike, {"ce_oi": 0.0, "pe_oi": 0.0})
-            pain_map[strike]["ce_oi"] += ce_oi
-            pain_map[strike]["pe_oi"] += pe_oi
-            strikes.append({
-                "strike": strike,
-                "ce_oi": int(ce_oi), "ce_doi": int(ce_doi), "ce_ltp": ce_ltp,
-                "pe_oi": int(pe_oi), "pe_doi": int(pe_doi), "pe_ltp": pe_ltp,
-            })
-
-        pcr = round(total_pe / total_ce, 2) if total_ce > 0 else 0
-        if pcr < 0.7:
-            pcr_label = "Bearish"
-        elif pcr > 1.3:
-            pcr_label = "Bullish"
-        else:
-            pcr_label = "Neutral"
-        # Max pain is the candidate strike with minimum aggregate intrinsic loss.
-        max_pain = 0
-        if pain_map:
-            losses = {
-                candidate: sum(
-                    data["ce_oi"] * max(0, candidate - strike)
-                    + data["pe_oi"] * max(0, strike - candidate)
-                    for strike, data in pain_map.items()
-                )
-                for candidate in pain_map
-            }
-            max_pain = min(losses, key=losses.get)
-
-        # Filter ATM ± STRIKES_EACH_SIDE
-        atm_list = sorted({s["strike"] for s in strikes})
-        atm_idx  = (min(range(len(atm_list)), key=lambda i: abs(atm_list[i] - atm_strike))
-                    if atm_list else 0)
-        lo = max(0, atm_idx - STRIKES_EACH_SIDE)
-        hi = min(len(atm_list) - 1, atm_idx + STRIKES_EACH_SIDE)
-        relevant = {atm_list[i] for i in range(lo, hi + 1)}
-        strikes_f = [s for s in strikes if s["strike"] in relevant]
-
-        return {
-            "symbol": symbol, "atm_strike": atm_strike,
-            "expiry": exp_dates[0] if exp_dates else None,
-            "pcr": pcr,
-            "pcr_label": pcr_label,
-            "spot_source": "records.underlyingValue",
-            "total_ce_oi": int(total_ce),
-            "total_pe_oi": int(total_pe),
-            "max_pain": max_pain,
-            "oi_levels": {
-                "pe_oi_support": max(
-                    pain_map,
-                    key=lambda strike: (pain_map[strike]["pe_oi"], -strike),
-                ) if pain_map else 0,
-                "ce_oi_resistance": max(
-                    pain_map,
-                    key=lambda strike: (pain_map[strike]["ce_oi"], -strike),
-                ) if pain_map else 0,
-            },
-            "strikes": strikes_f,
-        }
-    except Exception as exc:
-        logger.error(f"Option chain parse error for {symbol}: {exc}")
-        return {"symbol": symbol, "error": str(exc)}

@@ -18,14 +18,6 @@ def test_trade_history_has_all_history_fallback():
     assert "localStorage.setItem(`${STORAGE_KEY}:${today}`, JSON.stringify(this.trades));" in source
 
 
-def test_frontend_direction_requires_aligned_max_pain_pcr_and_oi_evidence():
-    source = INDEX.read_text(encoding="utf-8")
-    assert "chainDirection()" in source
-    assert "painPct > 0.25" in source
-    assert "pcr > 1.3" in source
-    assert "oiPct > 0.5" in source
-    assert "bull >= 2 && bear === 0" in source
-    assert "Informational bias, not a standalone trade signal" in source
 
 
 def test_trade_save_records_date_and_migrates_only_same_day_legacy_data():
