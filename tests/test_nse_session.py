@@ -49,22 +49,6 @@ def test_get_seeded_visits_page_before_api(monkeypatch):
     assert [call[0] for call in calls] == ["seed", "api"]
 
 
-def test_public_fetchers_use_seeded_option_chain_and_derivative_paths(monkeypatch):
-    seen = []
-
-    def get(url, referer, **kwargs):
-        seen.append(("get", url, referer))
-        return {"expiryDates": ["01-Jan-2030"]}
-
-    def get_seeded(**kwargs):
-        seen.append(("seeded", kwargs))
-        return {"data": []}
-
-    monkeypatch.setattr(nse_fetcher._nse, "get", get)
-    monkeypatch.setattr(nse_fetcher._nse, "get_seeded", get_seeded)
-
-    assert nse_fetcher.fetch_option_chain_index("NIFTY") == {"data": []}
-    assert seen[0][0] == "get"
 
 
 def test_proxy_is_applied_to_archive_requests(monkeypatch):

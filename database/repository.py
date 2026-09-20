@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -395,56 +394,7 @@ class SignalRepository:
             ).fetchone()
         return str(row["trade_date"]) if row and row["trade_date"] else None
 
-    def record_option_chain_snapshot(self, analysis: dict[str, Any], captured_at: datetime) -> bool:
-        """Store one immutable public option-chain observation per symbol/minute."""
-        captured_at = as_ist(captured_at)
-        symbol = str(analysis.get("symbol") or "").upper().strip()
-        expiry = str(analysis.get("expiry") or "UNKNOWN")
-        if not symbol or float(analysis.get("pcr") or 0) < 0:
-            return False
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO option_chain_snapshots (
-                    symbol, expiry, captured_at_ist, captured_minute_ist, spot, pcr,
-                    max_pain, total_ce_oi, total_pe_oi, oi_levels_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    symbol,
-                    expiry,
-                    captured_at.isoformat(),
-                    captured_at.strftime("%Y-%m-%dT%H:%M"),
-                    float(analysis.get("atm_strike") or 0),
-                    float(analysis.get("pcr") or 0),
-                    float(analysis.get("max_pain") or 0),
-                    int(analysis.get("total_ce_oi") or 0),
-                    int(analysis.get("total_pe_oi") or 0),
-                    json.dumps(analysis.get("oi_levels") or {}, sort_keys=True),
-                ),
-            )
-        return cursor.rowcount > 0
 
-    def option_chain_history(self, symbol: str, *, limit: int = 200) -> list[dict[str, Any]]:
-        """Return chronological PCR/max-pain observations for a symbol."""
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT captured_at_ist, expiry, spot, pcr, max_pain, total_ce_oi, total_pe_oi, oi_levels_json
-                FROM option_chain_snapshots
-                WHERE symbol = ?
-                ORDER BY captured_at_ist DESC
-                LIMIT ?
-                """,
-                (symbol.upper().strip(), limit),
-            ).fetchall()
-        return [
-            {
-                **dict(row),
-                "oi_levels": json.loads(str(row["oi_levels_json"])),
-            }
-            for row in reversed(rows)
-        ]
 
     def backtest_events(self, start_date: str, end_date: str) -> list[dict[str, Any]]:
         """Return stored candidate events, including archive, for transparent analysis."""
@@ -497,93 +447,9 @@ class SignalRepository:
                 ("DELIVERED" if delivered else "FAILED", detail[:500], observed_at.isoformat(), alert_key),
             )
 
-    def upsert_corporate_announcements(self, announcements: Iterable[dict[str, Any]]) -> int:
-        """Persist public NSE disclosure metadata; never download attachment content."""
-        rows = [
-            (
-                str(item["announcement_id"]), str(item["symbol"]).upper(), str(item["published_at"]),
-                str(item["category"]), str(item["title"]), item.get("attachment_url"),
-                str(item["event_risk"]), json.dumps(item.get("risk_terms") or []),
-            )
-            for item in announcements
-        ]
-        if not rows:
-            return 0
-        with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO corporate_announcements (
-                    announcement_id, symbol, published_at, category, title, attachment_url,
-                    event_risk, risk_terms_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(announcement_id) DO UPDATE SET
-                    symbol=excluded.symbol, published_at=excluded.published_at,
-                    category=excluded.category, title=excluded.title,
-                    attachment_url=excluded.attachment_url, event_risk=excluded.event_risk,
-                    risk_terms_json=excluded.risk_terms_json, ingested_at_utc=CURRENT_TIMESTAMP
-                """,
-                rows,
-            )
-        return len(rows)
 
-    def recent_corporate_announcements(self, *, symbol: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-        """Return stored public disclosure metadata, newest first."""
-        query = "SELECT * FROM corporate_announcements"
-        params: tuple[Any, ...] = ()
-        if symbol:
-            query += " WHERE symbol = ?"
-            params = (symbol.upper().strip(),)
-        query += " ORDER BY published_at DESC LIMIT ?"
-        with self._connect() as connection:
-            rows = connection.execute(query, (*params, limit)).fetchall()
-        return [{**dict(row), "risk_terms": json.loads(str(row["risk_terms_json"]))} for row in rows]
 
-    def upsert_participant_oi(self, rows: Iterable[dict[str, Any]]) -> int:
-        """Persist one public end-of-day participant OI report by report date."""
-        records = [
-            (
-                str(row["report_date"]), str(row["participant"]).upper(),
-                int(row.get("net_index_futures") or 0), int(row.get("net_stock_futures") or 0),
-                json.dumps(row.get("measures") or {}, sort_keys=True),
-                str(row.get("source") or "NSE F&O participant-wise OI EOD report"),
-            )
-            for row in rows
-        ]
-        if not records:
-            return 0
-        with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO participant_oi_reports (
-                    report_date, participant, net_index_futures, net_stock_futures, measures_json, source
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(report_date, participant) DO UPDATE SET
-                    net_index_futures=excluded.net_index_futures,
-                    net_stock_futures=excluded.net_stock_futures,
-                    measures_json=excluded.measures_json, source=excluded.source,
-                    ingested_at_utc=CURRENT_TIMESTAMP
-                """,
-                records,
-            )
-        return len(records)
 
-    def latest_participant_oi(self) -> dict[str, Any]:
-        """Return the latest complete public EOD report, preserving its date."""
-        with self._connect() as connection:
-            date_row = connection.execute("SELECT MAX(report_date) AS report_date FROM participant_oi_reports").fetchone()
-            report_date = date_row["report_date"] if date_row else None
-            if not report_date:
-                return {"report_date": None, "participants": []}
-            rows = connection.execute(
-                """
-                SELECT report_date, participant, net_index_futures, net_stock_futures, measures_json, source
-                FROM participant_oi_reports WHERE report_date = ? ORDER BY participant
-                """, (report_date,)
-            ).fetchall()
-        return {
-            "report_date": str(report_date),
-            "participants": [{**dict(row), "measures": json.loads(str(row["measures_json"]))} for row in rows],
-        }
 
     @staticmethod
     def _fingerprint(signals: Iterable[dict[str, Any]]) -> str:

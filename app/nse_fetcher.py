@@ -553,17 +553,6 @@ def fetch_nse_archive_text(url: str, referer: str | None = None) -> str | None:
     return _nse.get_archive_text(url, referer=referer or f"{NSE_BASE}/all-reports-derivatives")
 
 
-def fetch_participant_oi_report(trade_date: date) -> str | None:
-    """Fetch the NSE F&O participant-wise OI end-of-day CSV for one date.
-
-    NSE publishes this report after market close.  It must not be presented as
-    an intraday participant-position feed; callers retain its report date.
-    """
-    filename = f"fao_participant_oi_{trade_date.strftime('%d%m%Y')}.csv"
-    return _nse.get_text(
-        f"https://nsearchives.nseindia.com/content/nsccl/{filename}",
-        referer=f"{NSE_BASE}/all-reports-derivatives",
-    )
 
 
 def fetch_index_history(index_type: str, from_date: date, to_date: date) -> list[dict]:
@@ -602,72 +591,14 @@ def fetch_market_indices() -> dict | None:
     )
 
 
-def fetch_fii_dii_activity() -> list[dict]:
-    """Fetch the public NSE FII/FPI and DII cash-market activity rows."""
-    data = _nse.get(
-        f"{NSE_BASE}/api/fiidiiTradeReact",
-        referer=f"{NSE_BASE}/market-data/fii-dii-trading-activity",
-    )
-    return data if isinstance(data, list) else []
 
 
-def fetch_corporate_announcements() -> list[dict]:
-    """Fetch the latest public NSE equity corporate-announcement feed."""
-    data = _nse.get(
-        f"{NSE_BASE}/api/corporate-announcements?index=equities",
-        referer=f"{NSE_BASE}/companies-listing/corporate-filings-announcements",
-    )
-    return data if isinstance(data, list) else []
 
 
-def _fetch_option_chain(symbol: str, market_type: str) -> dict | None:
-    """Fetch an option chain using NSE's current v3 API and nearest expiry."""
-    symbol = symbol.upper().strip()
-    encoded_symbol = quote(symbol, safe="")
-    contract_info = _nse.get(
-        f"{NSE_BASE}/api/option-chain-contract-info?symbol={encoded_symbol}",
-        referer="https://www.nseindia.com/option-chain",
-    )
-    if not contract_info or not (contract_info.get("expiryDates")):
-        seed_url = (
-            f"{NSE_BASE}/get-quotes/derivatives?symbol={encoded_symbol}"
-            if market_type == "Equity" else f"{NSE_BASE}/option-chain"
-        )
-        contract_info = _nse.get_seeded(
-            seed_url=seed_url,
-            seed_referer="https://www.google.com/",
-            api_url=f"{NSE_BASE}/api/option-chain-contract-info?symbol={encoded_symbol}",
-            api_referer="https://www.nseindia.com/option-chain",
-        )
-    expiry_dates = (contract_info or {}).get("expiryDates", [])
-    if not expiry_dates:
-        logger.warning("No expiry dates returned for option chain %s", symbol)
-        return None
-    expiry = quote(str(expiry_dates[0]), safe="")
-    api_url = (
-        f"{NSE_BASE}/api/option-chain-v3?type={market_type}"
-        f"&symbol={encoded_symbol}&expiry={expiry}"
-    )
-    seed_url = (
-        f"{NSE_BASE}/get-quotes/derivatives?symbol={encoded_symbol}"
-        if market_type == "Equity" else f"{NSE_BASE}/option-chain"
-    )
-    return _nse.get_seeded(
-        seed_url=seed_url,
-        seed_referer="https://www.nseindia.com/option-chain",
-        api_url=api_url,
-        api_referer="https://www.nseindia.com/option-chain",
-    )
 
 
-def fetch_option_chain_index(symbol: str) -> dict | None:
-    """Option chain for NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY."""
-    return _fetch_option_chain(symbol, "Indices")
 
 
-def fetch_option_chain_equity(symbol: str) -> dict | None:
-    """Option chain for individual F&O stocks (RELIANCE, TCS etc.)."""
-    return _fetch_option_chain(symbol, "Equity")
 
 
 def test_nse_connectivity() -> dict:
@@ -683,8 +614,7 @@ def test_nse_connectivity() -> dict:
     results = {}
     tests = [
         ("oi_spurts",    lambda: fetch_all_fno_oi_change()),
-        ("chain_nifty",  lambda: fetch_option_chain_index("NIFTY")),
-        ("chain_equity", lambda: fetch_option_chain_equity("RELIANCE")),
+        ("all_indices",  lambda: fetch_market_indices()),
     ]
     for name, fn in tests:
         try:
