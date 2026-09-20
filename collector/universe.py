@@ -35,9 +35,14 @@ _cache: tuple[float, frozenset[str]] | None = None
 _source = "none"
 
 
+def _is_test_symbol(symbol: str) -> bool:
+    """NSE publishes dummy instruments (e.g. 011NSETEST) that Angel lists as stock futures."""
+    return "NSETEST" in symbol or symbol.startswith("TEST")
+
+
 def _valid(symbols: Iterable[str]) -> frozenset[str]:
     cleaned = frozenset(s.strip().upper() for s in symbols if s and s.strip())
-    cleaned = cleaned - INDEX_UNDERLYINGS
+    cleaned = frozenset(s for s in cleaned if not _is_test_symbol(s)) - INDEX_UNDERLYINGS
     return cleaned if MIN_UNIVERSE <= len(cleaned) <= MAX_UNIVERSE else frozenset()
 
 

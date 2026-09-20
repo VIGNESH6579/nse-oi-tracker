@@ -116,3 +116,11 @@ def test_memory_watchdog_and_health_filter():
     assert f.filter(rec) is False
     rec2 = logging.LogRecord("uvicorn.access", 20, "", 0, '%s - "GET /api/signals HTTP/1.1" 200', ("1.2.3.4",), None)
     assert f.filter(rec2) is True
+
+
+def test_nse_test_symbols_are_not_part_of_the_universe():
+    rows = _master(150) + [{"exch_seg": "NFO", "instrumenttype": "FUTSTK", "name": f"{i:02d}1NSETEST"} for i in range(1, 19)]
+    got = universe.parse_angel_master(rows)
+    assert len(got) == 150 and not any("NSETEST" in s for s in got)
+    text = "UNDERLYING ,SYMBOL ,Oct-26\n" + "\n".join(f"Stock {i},SYM{i} ,100" for i in range(150)) + "\nTest,011NSETEST,50"
+    assert "011NSETEST" not in universe.parse_fo_mktlots(text)
