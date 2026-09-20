@@ -55,7 +55,9 @@ from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
 from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s, last_snapshot_info
-from collector.universe import universe_source, cached_universe_size
+from collector.universe import universe_source, cached_universe_size, cached_universe
+import app.self_test as self_test
+from app.market_calendar import is_trading_holiday
 from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
 from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles
 from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS
@@ -643,6 +645,40 @@ async def scheduled_ban_refresh() -> None:
         logger.exception("F&O ban list refresh failed")
 
 
+_gap_cache: tuple[float, list[str]] = (0.0, [])
+
+
+def _universe_gap() -> list[str]:
+    """F&O symbols lacking enough daily bars (cached 5 min so /api/health stays fast)."""
+    global _gap_cache
+    if time.monotonic() - _gap_cache[0] < 300:
+        return _gap_cache[1]
+    universe = cached_universe()
+    missing = repository.symbols_missing_bars(universe, 15) if universe else []
+    _gap_cache = (time.monotonic(), missing)
+    return missing
+
+
+def _self_test_probes(stage: str):
+    return self_test.build_probes(
+        stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
+        scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth,
+    )
+
+
+async def scheduled_self_test(stage: str) -> None:
+    """09:05 (pre-open) and 09:35 (post-open) IST: prove every data source works, loudly."""
+    if is_trading_holiday(now_ist().date()) is True:
+        return
+    if angel_market_data is None:
+        logger.warning("SELF_TEST stage=%s skipped: Angel One not configured", stage)
+        return
+    try:
+        await asyncio.to_thread(self_test.run_stage, stage, _self_test_probes(stage), now_ist())
+    except Exception:
+        logger.exception("Self-test crashed (stage=%s)", stage)
+
+
 def render_startup_backfill_enabled() -> bool:
     """Only run automatic backfill on Render; local/dev uses the HTTP trigger."""
     return bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
@@ -723,6 +759,11 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    for _stage, _hour, _minute in (("pre_open", 9, 5), ("post_open", 9, 35)):
+        scheduler.add_job(
+            scheduled_self_test, CronTrigger(day_of_week="mon-fri", hour=_hour, minute=_minute, timezone=IST),
+            args=[_stage], id=f"self-test-{_stage}", replace_existing=True, max_instances=1, coalesce=True,
+        )
     scheduler.add_job(
         scheduled_ban_refresh,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone=IST),
@@ -847,7 +888,10 @@ async def health():
             "market_bias": _bias_cache[1],
             **ban_info(),
             "gate_last_scan": _gate_stats,
+            "self_test": self_test.latest(),
+            "universe_missing_bars": _universe_gap()[:40],
         },
+        "readiness": self_test.readiness(),
         "fno_universe_source": universe_source(),
         "fno_universe_size": cached_universe_size(),
         **last_snapshot_info(),
@@ -881,6 +925,18 @@ async def admin_backfill(
     except Exception:
         logger.exception("Index ingestion during admin backfill failed")
     return res
+
+
+@app.post("/api/admin/self-test")
+async def admin_self_test(stage: str = Query("pre_open"), x_debug_token: str = Header(default="")):
+    """Run a self-test stage now (same auth as the other admin endpoint)."""
+    if not DEBUG_TOKEN or x_debug_token != DEBUG_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Debug-Token header")
+    if stage not in ("pre_open", "post_open"):
+        raise HTTPException(status_code=400, detail="stage must be pre_open or post_open")
+    if angel_market_data is None:
+        raise HTTPException(status_code=409, detail="Angel One is not configured")
+    return await asyncio.to_thread(self_test.run_stage, stage, _self_test_probes(stage), now_ist())
 
 
 @app.get("/api/sources")
