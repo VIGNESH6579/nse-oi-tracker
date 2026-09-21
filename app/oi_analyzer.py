@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 import logging
+import os
 from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 from app.config import (
@@ -253,17 +254,62 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
     }
 
 
-def _track_window(row: dict, scan_time) -> None:
+WINDOW_CAND_PRICE_PCT = float(os.getenv("WINDOW_CAND_PRICE_PCT", "0.35"))   # min 15-min price move
+WINDOW_CAND_OI_PCT = float(os.getenv("WINDOW_CAND_OI_PCT", "0.8"))          # min 15-min OI build
+WINDOW_CAND_MAX = int(os.getenv("WINDOW_CAND_MAX", "8"))
+
+
+def _window_candidates(tracked: dict, seen: set, scan_time) -> list[dict]:
+    """Fresh intraday setups found from the rolling 15/30-min window.
+
+    The day-change filter only ever re-lists the morning's big movers (same 4 stocks for
+    hours). A stock can start a genuine build-up at 11:30 with a small day change, so
+    candidates are also taken from the recent window: 15-min price and OI both moving
+    (thresholds above) and the 30-min window agreeing. The confirmation gate still decides.
+    """
+    found: list[dict] = []
+    for sym, (ltp, oi, src) in tracked.items():
+        upper = sym.upper()
+        if upper in seen or upper in _NON_STOCK or "NSETEST" in upper or ltp <= 0 or oi < PUBLISH_MIN_OI_ABSOLUTE:
+            continue
+        ctx = oi_window.context(sym)
+        signal = ctx.get("window_signal")
+        h15, h30 = ctx.get("h15"), ctx.get("h30")
+        if signal not in (SIGNAL_LONG_BUILDUP, SIGNAL_SHORT_BUILDUP) or not h15:
+            continue
+        if abs(h15["price_pct"]) < WINDOW_CAND_PRICE_PCT or h15["oi_pct"] < WINDOW_CAND_OI_PCT:
+            continue
+        if h30 and (h30["oi_pct"] <= 0 or (h30["price_pct"] <= 0) == (signal == SIGNAL_LONG_BUILDUP)):
+            continue                                        # the 30-minute window must agree
+        price_pct, oi_pct = h15["price_pct"], h15["oi_pct"]
+        row = _build_signal_row(sym, ltp, ltp * price_pct / 100, price_pct, oi, oi * oi_pct / 100, oi_pct, signal,
+                                source="NSE live-analysis-oi-spurts-underlyings" if src == "nse" else "Angel One NFO futures")
+        confidence = int(max(50, min(92, 50 + 20 * min(oi_pct / 2.0, 1) + 22 * min(abs(price_pct) / 1.0, 1))))
+        ctx["streak"] = oi_window.note_agreement(sym, True, scan_time)
+        row.update(
+            confidence=confidence, score=confidence, confidence_tier=confidence_tier(confidence),
+            candidate_origin="window_15m", change_basis="15m_window", quality_gate="WINDOW_BUILDUP",
+            confirmed_factors=[f"15-min price {price_pct:+.2f}%", f"15-min OI {oi_pct:+.2f}%", f"liquidity {int(oi):,} OI"],
+            missing_factors=[], oi_window=ctx,
+        )
+        found.append(row)
+    found.sort(key=lambda r: -float(r["strength"]))
+    return found[:WINDOW_CAND_MAX]
+
+
+def _track_window(row: dict, scan_time):
     sym = _symbol(row)
     if not sym:
-        return
+        return None
     ltp = _f(row.get("ltp") or row.get("lastPrice") or row.get("ltP") or row.get("LTP")
              or row.get("price") or row.get("underlyingValue") or 0)
     oi, _field = _first_numeric(row, ("oi", "openInterest", "OI", "openinterest", "latestOI", "totalOI"))
     if sym.upper() not in _NON_STOCK and "NSETEST" not in sym.upper():
         _feed_symbols.add(sym.upper())
     # NSE and Angel measure OI differently: never mix them inside one window.
-    oi_window.update(sym, scan_time, ltp, oi or 0, source="angel" if row.get("_data_source") else "nse")
+    source = "angel" if row.get("_data_source") else "nse"
+    oi_window.update(sym, scan_time, ltp, oi or 0, source=source)
+    return sym, ltp, float(oi or 0), source
 
 
 def _parse_row(row: dict) -> dict | None:
@@ -383,10 +429,13 @@ def scan_all_fno_realtime() -> list[dict]:
 
     scan_time = now_ist()
     parsed_count = 0
+    tracked: dict[str, tuple] = {}
     for row in rows:
         # Feed EVERY raw row (incl. currently neutral ones, which _parse_row drops) so
         # 15/30/60-minute windows already exist the moment a symbol becomes a candidate.
-        _track_window(row, scan_time)
+        seen_row = _track_window(row, scan_time)
+        if seen_row:
+            tracked[seen_row[0]] = seen_row[1:]
         result = _parse_row(row)
         if result is not None:
             parsed_count += 1
@@ -413,6 +462,10 @@ def scan_all_fno_realtime() -> list[dict]:
         result["oi_window"] = window_ctx
         results.append(result)
     # Sort strongest first and expose only a small quality feed.
+    try:
+        results.extend(_window_candidates(tracked, {r["symbol"] for r in results}, scan_time))
+    except Exception:
+        logger.exception("Window candidate generation failed; day-change candidates unaffected")
     results.sort(key=lambda r: (-r["confidence"], -r["strength"], r["symbol"]))
     results = results[:QUALITY_MAX_SIGNALS]
     _last_scan_stats.update(rows=len(rows), parsed=parsed_count, candidates=len(results),

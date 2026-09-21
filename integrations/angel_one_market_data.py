@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -68,6 +69,9 @@ class AngelOneMarketData:
         self._instruments: dict[tuple[str, str], AngelInstrument] = {}
         self._last_quote_at = 0.0
         self._breaker_until = 0.0
+        self._hist_lock = threading.Lock()
+        self._last_hist_at = 0.0
+        self._hist_block_until = 0.0
         self._breaker_seconds = 15 * 60
         self._last_error_code = ""
         self._lock = RLock()
@@ -339,6 +343,17 @@ class AngelOneMarketData:
             }
         return result
 
+    def _hist_wait(self) -> None:
+        """Serialise historical-candle calls (>= ANGEL_HIST_MIN_INTERVAL s apart) and honour a 403 cooldown."""
+        with self._hist_lock:
+            now = time.monotonic()
+            if now < self._hist_block_until:
+                raise AngelUnavailable(f"historical API cooling down for {self._hist_block_until - now:.0f}s after HTTP 403")
+            wait = self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "1.1")) - now
+            if wait > 0:
+                time.sleep(wait)
+            self._last_hist_at = time.monotonic()
+
     def intraday_candles(self, symbol: str, *, interval: str = "FIVE_MINUTE",
                          exchange: str = "NSE", days: int = 1) -> list[dict]:
         """Fetch read-only candles for a mapped instrument."""
@@ -346,6 +361,7 @@ class AngelOneMarketData:
         instrument = self.instrument(symbol, exchange=exchange)
         if not instrument:
             return []
+        self._hist_wait()
         # Angel expects IST wall-clock times. The old naive datetime.now() used the
         # server's UTC clock, so intraday requests covered the wrong window (often
         # yesterday's session) and any "session VWAP" was built from stale candles.
@@ -368,6 +384,10 @@ class AngelOneMarketData:
             },
             timeout=self.timeout,
         )
+        if getattr(response, "status_code", 200) in (403, 429):
+            # Angel answers 403 when the historical-data rate limit is exceeded: cool down
+            # instead of hammering (logs showed ~55% of candle calls failing this way).
+            self._hist_block_until = time.monotonic() + float(os.getenv("ANGEL_HIST_COOLDOWN_S", "45"))
         response.raise_for_status()
         body = response.json()
         if not body.get("status"):

@@ -72,6 +72,17 @@ class OIWindow:
             while points and points[0][0] < cutoff:
                 points.popleft()
 
+    def last_price(self, symbol: str, now: datetime | None = None, max_age_s: float = 300.0) -> float | None:
+        """Latest observed price for a symbol if it is fresh (used to monitor open trades)."""
+        with self._lock:
+            points = self._points.get(symbol) or self._points.get(symbol.upper())
+            if not points:
+                return None
+            ts, price, _oi = points[-1]
+            if now is not None and (now - ts).total_seconds() > max_age_s:
+                return None
+            return price
+
     def depth(self) -> dict[str, float]:
         """Median history length (minutes) and symbol count, for /api/health."""
         with self._lock:
