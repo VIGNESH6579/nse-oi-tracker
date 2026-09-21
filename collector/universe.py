@@ -32,6 +32,7 @@ CACHE_TTL_S = 7 * 24 * 3600
 
 _lock = threading.Lock()
 _cache: tuple[float, frozenset[str]] | None = None
+_extra: set[str] = set()      # symbols the live OI feed reports but Angel's master names differently (renames/demergers)
 _source = "none"
 
 
@@ -145,15 +146,21 @@ def universe_source() -> str:
     return _source
 
 
+def add_extra_symbols(symbols: Iterable[str]) -> int:
+    added = {s.strip().upper() for s in symbols if s and s.strip() and not _is_test_symbol(s.strip().upper())} - INDEX_UNDERLYINGS - _extra
+    _extra.update(added)
+    return len(added)
+
+
 def fno_symbols() -> set[str]:
-    return set(load_fno_universe())
+    return set(load_fno_universe()) | _extra
 
 
 def cached_universe_size() -> int:
     """Size of the already-loaded universe; never touches the network."""
-    return len(_cache[1]) if _cache else 0
+    return (len(_cache[1]) if _cache else 0) + len(_extra - set(_cache[1] if _cache else ()))
 
 
 def cached_universe() -> set[str]:
     """Already-loaded universe (no network); empty until startup maintenance has run."""
-    return set(_cache[1]) if _cache else set()
+    return (set(_cache[1]) if _cache else set()) | _extra

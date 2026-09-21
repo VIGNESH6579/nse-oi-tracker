@@ -100,6 +100,8 @@ from analytics.oi_window import OIWindow
 from utils.time import now_ist
 
 oi_window = OIWindow()
+_feed_symbols: set[str] = set()      # every underlying the OI feed reported (F&O truth for today)
+_NON_STOCK = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
 _last_scan_stats: dict = {"rows": 0, "parsed": 0, "candidates": 0}
 
 
@@ -258,7 +260,10 @@ def _track_window(row: dict, scan_time) -> None:
     ltp = _f(row.get("ltp") or row.get("lastPrice") or row.get("ltP") or row.get("LTP")
              or row.get("price") or row.get("underlyingValue") or 0)
     oi, _field = _first_numeric(row, ("oi", "openInterest", "OI", "openinterest", "latestOI", "totalOI"))
-    oi_window.update(sym, scan_time, ltp, oi or 0)
+    if sym.upper() not in _NON_STOCK and "NSETEST" not in sym.upper():
+        _feed_symbols.add(sym.upper())
+    # NSE and Angel measure OI differently: never mix them inside one window.
+    oi_window.update(sym, scan_time, ltp, oi or 0, source="angel" if row.get("_data_source") else "nse")
 
 
 def _parse_row(row: dict) -> dict | None:

@@ -45,7 +45,7 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
         return len(good) == len(SAMPLE), f"{len(good)}/{len(SAMPLE)} rows with oi>0 and ltp>0; next_month_oi_added={rolled}"
 
     def daily_candles():
-        candles = angel.daily_candles("NIFTY", days=5)
+        candles = angel.daily_candles("NIFTY", days=10)
         return len(candles) >= 3, f"{len(candles)} NIFTY daily candles"
 
     def bars_coverage():

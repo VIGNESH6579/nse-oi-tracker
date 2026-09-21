@@ -14,6 +14,7 @@ from typing import Any
 from analytics.intraday_confirm import relative_volume, SESSION_START_MIN
 
 ENTRY_SIGNALS = {"LONG_BUILDUP": "BUY", "SHORT_BUILDUP": "SELL"}
+INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"})
 
 
 def _f(name: str, default: float) -> float:
@@ -46,7 +47,8 @@ class GateConfig:
 def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: dict[str, Any] | None,
                   atr14: float | None, avg_volume: float | None, prev_close: float | None,
                   ema20: float | None, ema50: float | None, banned: bool, market_bias: str,
-                  now: datetime, cfg: GateConfig | None = None) -> dict[str, Any]:
+                  now: datetime, cfg: GateConfig | None = None, has_bars: bool = True,
+                  is_index: bool = False) -> dict[str, Any]:
     cfg = cfg or GateConfig.from_env()
     name = str(signal.get("signal") or "NEUTRAL")
     direction = ENTRY_SIGNALS.get(name)
@@ -60,6 +62,7 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
         return ok
 
     need(direction is not None, "not_a_buildup_entry")
+    need(has_bars, "no_daily_bars")
     need(not banned, "fo_ban_period")
     need(signal.get("stale_price") is not True, "stale_price")
     history = float(oi_ctx.get("history_minutes") or 0)
@@ -79,15 +82,18 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
                 need(intraday.get("or_low") is not None and ltp < float(intraday["or_low"]), "inside_or_or_above")
         minutes_open = float(intraday.get("last_minute") or 0) - SESSION_START_MIN + 5
         rel = relative_volume(float(intraday.get("session_volume") or 0), avg_volume, minutes_open)
-        if need(rel is not None, "rel_volume_unavailable"):
+        if is_index:
+            pass        # index candles carry no volume: volume checks do not apply
+        elif has_bars and need(rel is not None, "rel_volume_unavailable"):
             need(rel >= cfg.min_rel_volume, "volume_too_low")
-        if need(bool(atr14) and atr14 > 0, "atr_unavailable"):
+        if has_bars and need(bool(atr14) and atr14 > 0, "atr_unavailable"):
             day_open = float(intraday.get("day_open") or 0)
             need(abs(ltp - day_open) <= cfg.max_extension_atr * atr14, "extended_from_open")
             need(abs(ltp - float(vwap)) <= cfg.max_vwap_dist_atr * atr14, "extended_from_vwap")
             if prev_close and day_open and abs(day_open - prev_close) > cfg.gap_atr * atr14:
                 # Gap day (results/news reaction) without a news feed: demand stronger volume.
-                need(rel is not None and rel >= cfg.gap_min_rel_volume, "gap_day_needs_volume")
+                if not is_index:
+                    need(rel is not None and rel >= cfg.gap_min_rel_volume, "gap_day_needs_volume")
                 comp["gap_day"] = 1
     # --- transparent quality score (0-100), used for ranking and later calibration
     h15 = oi_ctx.get("h15") or oi_ctx.get("h30") or {}

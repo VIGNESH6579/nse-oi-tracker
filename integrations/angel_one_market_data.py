@@ -293,6 +293,8 @@ class AngelOneMarketData:
             if not match:
                 continue
             underlying = match.group(1)
+            if "NSETEST" in underlying:
+                continue
             if wanted and underlying not in wanted:
                 continue
             try:
