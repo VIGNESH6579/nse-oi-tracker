@@ -26,7 +26,10 @@ def test_daily_candles_delegates_to_one_day_endpoint(monkeypatch):
     assert client.daily_candles("NIFTY", days=80) == [{"interval": "ONE_DAY", "days": 80}]
 
 
-def test_index_backfill_uses_angel_daily_candles():
+def test_index_backfill_uses_angel_daily_candles(monkeypatch):
+    from datetime import datetime
+    from utils.time import IST
+    monkeypatch.setattr("collector.index_backfill.now_ist", lambda: datetime(2026, 9, 19, 12, 0, tzinfo=IST))   # date-independent
     repository = FakeRepository()
     result = backfill_index_bars(repository, days=1, angel_client=FakeAngel())
     assert result["source"] == "angel_one_daily_index"

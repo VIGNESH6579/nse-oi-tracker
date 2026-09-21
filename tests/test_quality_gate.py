@@ -182,6 +182,9 @@ def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
     at = datetime(2026, 9, 21, 10, 0, tzinfo=IST)
     repo.record_scan([out["OKAY"], out["BAN"]], at)
     with repo._connect() as c:
-        events = [r[0] for r in c.execute("SELECT symbol FROM signal_events")]
+        events = [r[0] for r in c.execute("SELECT symbol FROM signal_events ORDER BY id")]
         skips = [(r[0], r[1]) for r in c.execute("SELECT symbol, skip_reason FROM setup_skips")]
-    assert events == ["OKAY"] and skips == [("BAN", "not_confirmed")]
+    assert events == ["OKAY", "BAN"] and skips == []           # gate-failed candidates are tracked as WATCH, not dropped
+    with repo._connect() as c:
+        tiers = dict(c.execute("SELECT symbol, tier FROM signal_events").fetchall())
+    assert tiers == {"OKAY": "TRADE", "BAN": "WATCH"}

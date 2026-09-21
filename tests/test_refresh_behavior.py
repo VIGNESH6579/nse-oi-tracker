@@ -57,7 +57,7 @@ def test_dashboard_and_api_only_keep_required_sections():
         assert route not in MAIN
     for kept in ("/api/oi-signals", "/api/history/today", "/api/analytics/today", "/api/market-overview", "/api/health"):
         assert kept in MAIN
-    assert "['signals','analytics','trades']" in INDEX
+    assert "['focus','signals','analytics','trades']" in INDEX
 
 
 def test_data_source_labels_are_truthful():
