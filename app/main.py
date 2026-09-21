@@ -195,11 +195,14 @@ def _refresh_signals() -> list[dict]:
     # 5-minute OHLCV and never turns a candidate into an order recommendation.
     session_date = now_ist().date()
     enriched_intraday = []
+    candle_calls = 0
     vwap_deadline = time.monotonic() + 8.0
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
-        if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS and int(signal.get("confidence") or 0) >= 70:
+        # Every buildup candidate needs candles for the gate (VWAP, opening range, volume pace),
+        # not only confidence>=70 ones; the per-scan budget below bounds the Angel call rate.
+        if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
             try:
                 global _last_vwap_request_at
                 cache_key = (symbol.upper(), "FIVE_MINUTE")
@@ -209,6 +212,10 @@ def _refresh_signals() -> list[dict]:
                     context["vwap_age_s"] = round(time.monotonic() - cached[0], 2)
                     enriched_intraday.append({**signal, "intraday_context": context})
                     continue
+                if candle_calls >= int(os.getenv("MAX_CANDLE_SYMBOLS", "8")):
+                    enriched_intraday.append({**signal, "intraday_context": context})
+                    continue
+                candle_calls += 1
                 wait_s = 0.5 - (time.monotonic() - _last_vwap_request_at)
                 if wait_s > 0:
                     time.sleep(min(wait_s, 0.5))
@@ -235,7 +242,12 @@ def _refresh_signals() -> list[dict]:
                     _vwap_cache[cache_key] = (time.monotonic(), dict(context))
             except Exception as exc:
                 _data_quality["candle_fail"] += 1
-                logger.warning("Angel candle VWAP unavailable for %s; retaining observation VWAP (%s)", symbol, str(exc)[:120])
+                stale = _vwap_cache.get((symbol.upper(), "FIVE_MINUTE"))
+                if stale and time.monotonic() - stale[0] < float(os.getenv("VWAP_STALE_MAX_S", "900")):
+                    context = {**stale[1], "vwap_age_s": round(time.monotonic() - stale[0], 2), "stale_candles": True}
+                log = logger.info if type(exc).__name__ == "AngelUnavailable" else logger.warning
+                log("Angel candles unavailable for %s (%s); using %s", symbol, str(exc)[:100],
+                    "last good candles" if context.get("stale_candles") else "observation VWAP")
         enriched_intraday.append({**signal, "intraday_context": context})
     signals = enriched_intraday
     if signals:
@@ -432,7 +444,7 @@ async def scheduled_market_close() -> None:
                 )
             except Exception:
                 logger.warning("Final-price refresh before close failed; grading with tracked prices")
-        expired = await asyncio.to_thread(repository.expire_open_events, observed_at)
+        expired = await asyncio.to_thread(lambda: repository.expire_open_events(observed_at, result_source="live_exit"))
         logger.info(
             "Market-close processing expired %s event(s) (refreshed %s price(s))",
             expired, refreshed,
@@ -741,6 +753,39 @@ async def scheduled_self_test(stage: str) -> None:
         logger.exception("Self-test crashed (stage=%s)", stage)
 
 
+async def scheduled_trade_monitor() -> None:
+    """Every 30 s in market hours: check EVERY open paper trade against live prices.
+
+    Independent of the signal list and of dashboard visits, so target/stop/breakeven are
+    caught even after a symbol drops off the published signals.
+    """
+    now = now_ist()
+    minutes = now.hour * 60 + now.minute
+    if now.weekday() >= 5 or not (9 * 60 + 15 <= minutes <= 15 * 60 + 15):
+        return
+    try:
+        symbols = await asyncio.to_thread(repository.unresolved_event_symbols, now.date().isoformat())
+        if not symbols:
+            return
+        prices: dict[str, float] = {}
+        if angel_market_data is not None:
+            try:
+                quotes = await asyncio.to_thread(angel_market_data.full_quotes, list(symbols))
+                prices = {s: float(q.get("ltp") or 0) for s, q in quotes.items() if float(q.get("ltp") or 0) > 0}
+            except Exception as exc:
+                logger.info("Trade monitor: Angel quotes unavailable (%s); using scan prices", str(exc)[:80])
+        for symbol in symbols:
+            if symbol not in prices:
+                last = oi_engine.oi_window.last_price(symbol, now)
+                if last:
+                    prices[symbol] = last
+        closed = await asyncio.to_thread(repository.update_open_events, [], now, prices)
+        if closed:
+            logger.info("Trade monitor closed %d paper trade(s)", closed)
+    except Exception:
+        logger.exception("Trade monitor failed")
+
+
 def render_startup_backfill_enabled() -> bool:
     """Only run automatic backfill on Render; local/dev uses the HTTP trigger."""
     return bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
@@ -826,6 +871,10 @@ async def lifespan(app: FastAPI):
             scheduled_self_test, CronTrigger(day_of_week="mon-fri", hour=_hour, minute=_minute, timezone=IST),
             args=[_stage], id=f"self-test-{_stage}", replace_existing=True, max_instances=1, coalesce=True,
         )
+    scheduler.add_job(
+        scheduled_trade_monitor, IntervalTrigger(seconds=30, timezone=IST), id="trade-monitor",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     scheduler.add_job(
         scheduled_ban_refresh,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone=IST),

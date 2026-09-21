@@ -82,6 +82,8 @@ def summarize_candidate_backtest(events: Iterable[Mapping[str, Any]]) -> dict[st
         "closed_events": closed,
         "wins": sum(1 for event in rows if int(event.get("max_target_hit") or 0) >= 1),
         "losses": counts["SL_HIT"],
+        "be_exits": counts["BE_EXIT"],
+        "total_r": round(sum(float(event.get("result_r") or 0) for event in rows), 2),
         "accuracy": _accuracy(rows),
         "pnl_points": round(pnl_points, 2),
         "max_drawdown_points": round(max_drawdown, 2),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -20,6 +21,34 @@ class SnapshotWrite:
     snapshot_id: int
     created: bool
     signal_count: int
+
+
+TG1_BOOK_FRACTION = float(os.getenv("TG1_BOOK_FRACTION", "0.5"))   # share of the position booked at TG1
+
+
+def _r_multiple(direction: str, entry: float, price: float, risk: float) -> float:
+    """Signed profit in R (multiples of the initial risk) for a price."""
+    if risk <= 0:
+        return 0.0
+    move = price - entry if direction == "BUY" else entry - price
+    return move / risk
+
+
+def _closed_r(status: str, direction: str, entry: float, stop: float, t1: float, t2: float,
+              exit_price: float, armed: bool) -> float:
+    """Result in R. Half is booked at TG1 (1R); after TG1 the stop moves to entry (breakeven)."""
+    risk = abs(entry - stop) or entry * 0.003
+    book = TG1_BOOK_FRACTION
+    r1 = abs(t1 - entry) / risk
+    r2 = abs(t2 - entry) / risk
+    if status == "TG2_HIT":
+        return round(book * r1 + (1 - book) * r2, 3)
+    r_exit = _r_multiple(direction, entry, exit_price, risk)
+    if status == "BE_EXIT":
+        return round(book * r1 + (1 - book) * min(0.0, r_exit), 3)
+    if armed:                                       # time exit after TG1
+        return round(book * r1 + (1 - book) * max(0.0, r_exit), 3)
+    return round(r_exit, 3)                         # SL_HIT / EXPIRED before TG1
 
 
 class SignalRepository:
@@ -213,6 +242,8 @@ class SignalRepository:
                 connection.execute(
                     "ALTER TABLE signal_events ADD COLUMN result_source TEXT"
                 )
+            if "result_r" not in columns:
+                connection.execute("ALTER TABLE signal_events ADD COLUMN result_r REAL")
             if "last_seen_at_ist" not in columns:
                 connection.execute(
                     "ALTER TABLE signal_events ADD COLUMN last_seen_at_ist TEXT"
@@ -732,13 +763,23 @@ class SignalRepository:
                 )
             return SnapshotWrite(snapshot_id=snapshot_id, created=True, signal_count=len(signals))
 
-    def update_open_events(self, signals: Iterable[dict[str, Any]], observed_at: datetime) -> int:
-        """Mark target/stop outcomes for visible, same-day open events."""
+    def update_open_events(self, signals: Iterable[dict[str, Any]], observed_at: datetime,
+                           extra_prices: dict[str, float] | None = None) -> int:
+        """Monitor same-day open events against live prices.
+
+        Prices come from the published signals AND ``extra_prices`` (so a trade keeps being
+        monitored after its symbol leaves the signal list). After TG1 the stop moves to
+        entry (breakeven): TG1 followed by a reversal closes as BE_EXIT (+0.5R), not SL_HIT.
+        Stops fill at the worse of level and observed price; targets fill at the level.
+        """
         prices = {
             str(signal.get("symbol") or "").upper(): float(signal.get("ltp") or 0)
             for signal in signals
             if signal.get("symbol") and float(signal.get("ltp") or 0) > 0
         }
+        for symbol, price in (extra_prices or {}).items():
+            if symbol and float(price or 0) > 0:
+                prices.setdefault(str(symbol).upper(), float(price))
         if not prices:
             return 0
         observed_at = as_ist(observed_at)
@@ -747,7 +788,7 @@ class SignalRepository:
         with self._connect() as connection:
             events = connection.execute(
                 """
-                SELECT id, symbol, direction, stop_loss, target_1, target_2, max_target_hit
+                SELECT id, symbol, direction, entry, stop_loss, target_1, target_2, max_target_hit
                 FROM signal_events
                 WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')
                 """,
@@ -758,27 +799,37 @@ class SignalRepository:
                 if price is None:
                     continue
                 direction = str(event["direction"])
+                entry, stop = float(event["entry"]), float(event["stop_loss"])
+                t1, t2 = float(event["target_1"]), float(event["target_2"])
+                armed = int(event["max_target_hit"] or 0) >= 1
                 if direction == "BUY":
-                    target_hit = 2 if price >= event["target_2"] else 1 if price >= event["target_1"] else 0
-                    stop_hit = price <= event["stop_loss"]
+                    hit2, hit1 = price >= t2, price >= t1
+                    stop_hit = price <= (entry if armed else stop)
                 else:
-                    target_hit = 2 if price <= event["target_2"] else 1 if price <= event["target_1"] else 0
-                    stop_hit = price >= event["stop_loss"]
-                max_target_hit = max(int(event["max_target_hit"]), target_hit)
-                status = "TG2_HIT" if target_hit == 2 else "SL_HIT" if stop_hit else "TG1_HIT" if max_target_hit else "OPEN"
-                if status in {"OPEN", "TG1_HIT"}:
+                    hit2, hit1 = price <= t2, price <= t1
+                    stop_hit = price >= (entry if armed else stop)
+                max_hit = max(int(event["max_target_hit"] or 0), 2 if hit2 else 1 if hit1 else 0)
+                if hit2:
+                    status, exit_price = "TG2_HIT", t2
+                elif stop_hit:
+                    level = entry if armed else stop
+                    exit_price = min(level, price) if direction == "BUY" else max(level, price)
+                    status = "BE_EXIT" if armed else "SL_HIT"
+                else:
                     connection.execute(
                         "UPDATE signal_events SET current_price = ?, max_target_hit = ?, status = ? WHERE id = ?",
-                        (price, max_target_hit, status, event["id"]),
+                        (price, max_hit, "TG1_HIT" if max_hit else "OPEN", event["id"]),
                     )
                     continue
+                result_r = _closed_r(status, direction, entry, stop, t1, t2, exit_price, armed or hit2)
                 connection.execute(
                     """
                     UPDATE signal_events
-                    SET current_price = ?, exit_price = ?, max_target_hit = ?, status = ?, result = ?, closed_at_ist = ?
+                    SET current_price = ?, exit_price = ?, max_target_hit = ?, status = ?, result = ?,
+                        result_r = ?, result_source = 'live_monitor', closed_at_ist = ?
                     WHERE id = ?
                     """,
-                    (price, price, max_target_hit, status, status, observed_at.isoformat(), event["id"]),
+                    (price, exit_price, max_hit, status, status, result_r, observed_at.isoformat(), event["id"]),
                 )
                 updated += 1
         return updated
@@ -819,7 +870,7 @@ class SignalRepository:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, direction, entry, max_target_hit, current_price, exit_price
+                SELECT id, direction, entry, stop_loss, target_1, target_2, max_target_hit, current_price, exit_price
                 FROM signal_events
                 WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')
                 """,
@@ -828,17 +879,22 @@ class SignalRepository:
             updated = 0
             for row in rows:
                 exit_price = row["exit_price"] if row["exit_price"] is not None else row["current_price"]
-                if int(row["max_target_hit"] or 0) >= 1:
+                armed = int(row["max_target_hit"] or 0) >= 1
+                if armed:
                     result = "WIN"
                 else:
                     result = self._day_end_result(str(row["direction"]), row["entry"], exit_price)
+                result_r = None
+                if exit_price:
+                    result_r = _closed_r("EXPIRED", str(row["direction"]), float(row["entry"]), float(row["stop_loss"]),
+                                         float(row["target_1"]), float(row["target_2"]), float(exit_price), armed)
                 connection.execute(
                     """
                     UPDATE signal_events
-                    SET status = 'EXPIRED', result = ?, result_source = ?, exit_price = ?, closed_at_ist = ?
+                    SET status = 'EXPIRED', result = ?, result_source = ?, exit_price = ?, result_r = ?, closed_at_ist = ?
                     WHERE id = ?
                     """,
-                    (result, result_source, exit_price, closed_at, row["id"]),
+                    (result, result_source, exit_price, result_r, closed_at, row["id"]),
                 )
                 updated += 1
             return updated
@@ -984,6 +1040,7 @@ class SignalRepository:
                     "status": row["status"],
                     "result": row["result"],
                     "result_source": row["result_source"],
+                    "result_r": row["result_r"],
                 }
             )
             events.append(payload)
@@ -994,12 +1051,12 @@ class SignalRepository:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT status, result, max_target_hit, risk_reward, entry, exit_price, direction
+                SELECT status, result, max_target_hit, risk_reward, entry, exit_price, direction, result_r
                 FROM signal_events WHERE trade_date = ? AND archived = 0
                 """,
                 (trade_date,),
             ).fetchall()
-        counts = {"OPEN": 0, "TG1_HIT": 0, "TG2_HIT": 0, "SL_HIT": 0, "EXPIRED": 0}
+        counts = {"OPEN": 0, "TG1_HIT": 0, "TG2_HIT": 0, "SL_HIT": 0, "BE_EXIT": 0, "EXPIRED": 0}
         pnl_points = 0.0
         for row in rows:
             status = str(row["status"])
@@ -1027,6 +1084,8 @@ class SignalRepository:
             "tp1_hits": tp1_hits,
             "tp2_hits": tp2_hits,
             "sl_hits": counts["SL_HIT"],
+            "be_exits": counts["BE_EXIT"],
+            "total_r": round(sum(float(row["result_r"]) for row in rows if row["result_r"] is not None), 2),
             "open": open_events,
             "expired": counts["EXPIRED"],
             "graded": graded,

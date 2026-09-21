@@ -540,7 +540,7 @@
           <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
                :class="{
                  'trade-open': t.status === 'OPEN',
-                 'trade-tg1':  t.status === 'TG1_HIT',
+                 'trade-tg1':  t.status === 'TG1_HIT' || t.status === 'BE_EXIT',
                  'trade-tg2':  t.status === 'TG2_HIT',
                  'trade-sl':   t.status === 'SL_HIT',
                  'trade-expired': t.status === 'EXPIRED',
@@ -568,11 +568,12 @@
                       :class="{
                         'bg-blue-950 text-blue-300 border-blue-800':     t.status==='OPEN',
                         'bg-green-950 text-green-300 border-green-800':  t.status==='TG1_HIT',
+                        'bg-amber-950 text-amber-300 border-amber-800': t.status==='BE_EXIT',
                         'bg-emerald-950 text-emerald-300 border-emerald-800': t.status==='TG2_HIT',
                         'bg-red-950 text-red-300 border-red-800':        t.status==='SL_HIT',
                         'bg-gray-800 text-gray-500 border-gray-700':     t.status==='EXPIRED',
                       }">
-                  <span x-text="{OPEN:'? OPEN', TG1_HIT:'? TG1 Hit', TG2_HIT:'?? TG2 Hit', SL_HIT:'? SL Hit', EXPIRED:'? Expired'}[t.status]"></span>
+                  <span x-text="{OPEN:'? OPEN', TG1_HIT:'? TG1 Hit', TG2_HIT:'?? TG2 Hit', SL_HIT:'? SL Hit', BE_EXIT:'TG1 hit, stopped at entry', EXPIRED:'? Expired'}[t.status] + (t.result_r != null ? ' \u00b7 ' + (t.result_r >= 0 ? '+' : '') + Number(t.result_r).toFixed(2) + 'R' : '')"></span>
                 </span>
                 <button x-show="historySource !== 'server'" @click="removeTrade(t.id)"
                         class="text-gray-600 hover:text-red-400 transition text-xs ml-1">?</button>
