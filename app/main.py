@@ -61,7 +61,7 @@ from collector.backfill import backfill_symbol_gaps
 import app.self_test as self_test
 from app.market_calendar import is_trading_holiday
 from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
-from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles
+from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles, quote_context
 from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS, INDEX_SYMBOLS
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -202,6 +202,13 @@ def _refresh_signals() -> list[dict]:
         context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
         # Every buildup candidate needs candles for the gate (VWAP, opening range, volume pace),
         # not only confidence>=70 ones; the per-scan budget below bounds the Angel call rate.
+        _now = now_ist()
+        qctx = quote_context(signal.get("angel_quote") or {}, oi_engine.oi_window.opening_range(symbol), _now.hour * 60 + _now.minute)
+        if qctx and qctx["or_complete"] and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
+            # Everything the gate needs is already here: no historical-candle call (Angel answers many with 403).
+            _data_quality["quote_ctx"] = _data_quality.get("quote_ctx", 0) + 1
+            enriched_intraday.append({**signal, "intraday_context": qctx})
+            continue
         if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
             try:
                 global _last_vwap_request_at
@@ -245,6 +252,8 @@ def _refresh_signals() -> list[dict]:
                 stale = _vwap_cache.get((symbol.upper(), "FIVE_MINUTE"))
                 if stale and time.monotonic() - stale[0] < float(os.getenv("VWAP_STALE_MAX_S", "900")):
                     context = {**stale[1], "vwap_age_s": round(time.monotonic() - stale[0], 2), "stale_candles": True}
+                if qctx and not context.get("stale_candles"):
+                    context = qctx                       # exchange VWAP + volume beat an observation VWAP
                 log = logger.info if type(exc).__name__ == "AngelUnavailable" else logger.warning
                 log("Angel candles unavailable for %s (%s); using %s", symbol, str(exc)[:100],
                     "last good candles" if context.get("stale_candles") else "observation VWAP")
@@ -645,7 +654,7 @@ def memory_watchdog() -> float | None:
     return rss
 
 
-_data_quality: dict[str, int] = {"candle_ok": 0, "candle_empty": 0, "candle_fail": 0}
+_data_quality: dict[str, int] = {"candle_ok": 0, "candle_empty": 0, "candle_fail": 0, "quote_ctx": 0}
 _gate_stats: dict = {"passed": 0, "failed": 0, "top_missing": {}, "at": None}
 _bias_cache: tuple[float, str] = (0.0, "UNKNOWN")
 
@@ -725,7 +734,7 @@ _gap_cache: tuple[float, list[str]] = (0.0, [])
 def _universe_gap() -> list[str]:
     """F&O symbols lacking enough daily bars (cached 5 min so /api/health stays fast)."""
     global _gap_cache
-    if time.monotonic() - _gap_cache[0] < 300:
+    if time.monotonic() - _gap_cache[0] < 60:
         return _gap_cache[1]
     universe = cached_universe()
     missing = repository.symbols_missing_bars(universe, 15) if universe else []

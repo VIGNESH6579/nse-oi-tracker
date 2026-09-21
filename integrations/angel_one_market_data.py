@@ -268,6 +268,7 @@ class AngelOneMarketData:
                         "volume": int(float(row.get("tradeVolume") or row.get("volume") or 0)),
                         "oi": int(float(row.get("opnInterest") or row.get("openInterest") or 0)),
                         "change_pct": float(row.get("percentChange") or 0),
+                        "avg_price": float(row.get("avgPrice") or 0),      # exchange VWAP for the session
                         "source": "angel_one_read_only",
                     }
         return output
@@ -388,6 +389,8 @@ class AngelOneMarketData:
             # Angel answers 403 when the historical-data rate limit is exceeded: cool down
             # instead of hammering (logs showed ~55% of candle calls failing this way).
             self._hist_block_until = time.monotonic() + float(os.getenv("ANGEL_HIST_COOLDOWN_S", "45"))
+            snippet = " ".join(str(getattr(response, "text", "") or "").split())[:120]
+            raise RuntimeError(f"HTTP {response.status_code} from Angel candle API: {snippet or 'empty body'}")
         response.raise_for_status()
         body = response.json()
         if not body.get("status"):

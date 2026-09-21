@@ -44,25 +44,34 @@ class OIWindow:
         self._first: dict[str, tuple[datetime, float, float]] = {}
         self._streak: dict[str, tuple[int, datetime]] = {}
         self._source: dict[str, str] = {}
+        self._or: dict[str, list[float]] = {}     # symbol -> [high, low, first_minute, last_minute, samples]
         self._day = None
         self._lock = threading.Lock()
 
     def reset(self) -> None:
         with self._lock:
-            self._points.clear(); self._first.clear(); self._streak.clear(); self._source.clear(); self._day = None
+            self._points.clear(); self._first.clear(); self._streak.clear(); self._source.clear(); self._or.clear(); self._day = None
 
     def update(self, symbol: str, ts: datetime, ltp: float, oi: float, source: str = "") -> None:
         if not symbol or ltp <= 0 or oi <= 0:
             return
         with self._lock:
             if self._day != ts.date():
-                self._points.clear(); self._first.clear(); self._streak.clear(); self._source.clear()
+                self._points.clear(); self._first.clear(); self._streak.clear(); self._source.clear(); self._or.clear()
                 self._day = ts.date()
             if source and self._source.get(symbol, source) != source:
                 # data source changed (NSE <-> Angel): OI definitions differ, so restart this symbol
                 self._points.pop(symbol, None); self._first.pop(symbol, None); self._streak.pop(symbol, None)
             if source:
                 self._source[symbol] = source
+            minute = ts.hour * 60 + ts.minute
+            if 555 <= minute < 570:                       # 09:15-09:30 IST opening range from scan prices
+                rng = self._or.get(symbol)
+                if rng is None:
+                    self._or[symbol] = [float(ltp), float(ltp), minute, minute, 1]
+                else:
+                    rng[0], rng[1] = max(rng[0], float(ltp)), min(rng[1], float(ltp))
+                    rng[3], rng[4] = minute, rng[4] + 1
             points = self._points.setdefault(symbol, deque())
             if points and ts <= points[-1][0]:
                 return                                   # duplicate / out-of-order scan
@@ -82,6 +91,14 @@ class OIWindow:
             if now is not None and (now - ts).total_seconds() > max_age_s:
                 return None
             return price
+
+    def opening_range(self, symbol: str) -> dict | None:
+        """High/low of scan prices between 09:15 and 09:30 and how many minutes they span."""
+        with self._lock:
+            rng = self._or.get(symbol) or self._or.get(symbol.upper())
+            if not rng:
+                return None
+            return {"high": rng[0], "low": rng[1], "span_min": rng[3] - rng[2], "samples": int(rng[4])}
 
     def depth(self) -> dict[str, float]:
         """Median history length (minutes) and symbol count, for /api/health."""
