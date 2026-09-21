@@ -86,6 +86,18 @@ def relative_volume(session_volume: float, avg_daily_volume: float | None, minut
     return round(session_volume / (avg_daily_volume * fraction), 3)
 
 
+def bias_from_quote(quote: dict) -> str:
+    """Index regime from one live quote: last price vs today's open and yesterday's close."""
+    ltp, day_open, prev = float(quote.get("ltp") or 0), float(quote.get("open") or 0), float(quote.get("close") or 0)
+    if min(ltp, day_open, prev) <= 0:
+        return "UNKNOWN"
+    if ltp > day_open * 1.001 and ltp > prev:
+        return "BULL"
+    if ltp < day_open * 0.999 and ltp < prev:
+        return "BEAR"
+    return "NEUTRAL"
+
+
 def bias_from_candles(candles: list[dict]) -> str:
     """Index regime from 5-minute candles: BULL / BEAR / NEUTRAL / UNKNOWN."""
     rows = [c for c in candles if candle_minute(c) is not None]

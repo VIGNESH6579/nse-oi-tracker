@@ -61,7 +61,7 @@ from collector.backfill import backfill_symbol_gaps
 import app.self_test as self_test
 from app.market_calendar import is_trading_holiday
 from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
-from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles, quote_context
+from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles, bias_from_quote, quote_context
 from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS, INDEX_SYMBOLS
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -476,6 +476,11 @@ async def ingest_daily_bhavcopy(trade_date: str | None = None) -> int:
     target_date = datetime.fromisoformat(trade_date).date() if trade_date else now_ist().date()
     try:
         bars = await asyncio.to_thread(collect_equity_bhavcopy, target_date)
+        universe = await asyncio.to_thread(bundled_fno_symbols)
+        if not universe:
+            logger.warning("Daily ingestion skipped for %s: F&O universe unavailable (fail-closed)", target_date.isoformat())
+            return 0
+        bars = [bar for bar in bars if str(bar.get("symbol") or "").upper() in universe]
         stored = await asyncio.to_thread(repository.upsert_daily_equity_bars, bars)
         logger.info("Stored %s daily NSE equity bars for %s", stored, target_date.isoformat())
         return stored
@@ -667,6 +672,12 @@ def _market_bias_cached() -> str:
     bias = "UNKNOWN"
     if angel_market_data is not None:
         try:
+            quotes = angel_market_data.full_quotes(["NIFTY"])
+            bias = bias_from_quote(next(iter(quotes.values()))) if quotes else "UNKNOWN"
+        except Exception:
+            bias = "UNKNOWN"
+    if angel_market_data is not None and bias == "UNKNOWN":
+        try:
             bias = bias_from_candles(angel_market_data.intraday_candles("NIFTY", interval="FIVE_MINUTE", exchange="NSE", days=1))
         except Exception as exc:
             logger.warning("Nifty regime unavailable; treating as UNKNOWN (%s)", str(exc)[:120])
@@ -712,7 +723,14 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
             failed_symbols[symbol] = gate["missing_confirmations"][:4]
         for reason in gate["missing_confirmations"]:
             missing_counts[reason] = missing_counts.get(reason, 0) + 1
-        out.append({**signal, **gate})
+        merged = {**signal, **gate}
+        try:
+            # The exact entry/SL/targets that will be tracked, so the table and the tracked trade agree.
+            _payload, plan = repository._event_payload(merged, now)
+            merged["plan"] = {key: plan[key] for key in ("entry", "stop_loss", "target_1", "target_2", "risk_reward", "source")}
+        except Exception:
+            logger.debug("Could not attach trade plan to %s", symbol, exc_info=True)
+        out.append(merged)
     passed = sum(1 for item in out if item.get("actionable"))
     _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), failed_symbols=dict(list(failed_symbols.items())[:10]), at=now.isoformat(timespec="seconds"))
     return out
@@ -975,7 +993,7 @@ async def health():
     daily_equity_data = repository.daily_equity_bar_summary()
     daily_index_data = repository.daily_index_bar_summary()
     scan_age = max(0.0, time.monotonic() - _last_refresh_completed_monotonic) if _last_refresh_completed_monotonic else None
-    coverage = repository.daily_history_coverage()
+    coverage = repository.daily_history_coverage(symbols=cached_universe() or None)
     angel_state = angel_market_data.health() if angel_market_data is not None else {"state": "disabled", "last_error_code": "", "retry_at": None}
     return {
         "status":        "ok",
@@ -1171,6 +1189,7 @@ async def today_history(
     trade_date = ist_trade_date()
     events, total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
     performance = await asyncio.to_thread(repository.performance_for_date, trade_date)
+    watch_performance = await asyncio.to_thread(repository.performance_for_date, trade_date, "WATCH")
     return {
         "trade_date": trade_date,
         "visible_history_scope": "today_ist",
@@ -1178,6 +1197,7 @@ async def today_history(
         "total_events": total,
         "events": events,
         "performance": performance,
+        "watch_performance": watch_performance,
         "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
 
@@ -1190,6 +1210,7 @@ async def today_analytics():
     return {
         "trade_date": trade_date,
         "metrics": await asyncio.to_thread(repository.performance_for_date, trade_date),
+        "watch_metrics": await asyncio.to_thread(repository.performance_for_date, trade_date, "WATCH"),
         "breakdowns": summarize_candidate_backtest(events),
         "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
     }

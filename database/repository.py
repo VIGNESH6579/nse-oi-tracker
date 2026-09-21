@@ -242,6 +242,8 @@ class SignalRepository:
                 connection.execute(
                     "ALTER TABLE signal_events ADD COLUMN result_source TEXT"
                 )
+            if "tier" not in columns:
+                connection.execute("ALTER TABLE signal_events ADD COLUMN tier TEXT NOT NULL DEFAULT 'TRADE'")
             if "result_r" not in columns:
                 connection.execute("ALTER TABLE signal_events ADD COLUMN result_r REAL")
             if "last_seen_at_ist" not in columns:
@@ -416,8 +418,23 @@ class SignalRepository:
             ).fetchone()
         return dict(row)
 
-    def daily_history_coverage(self, *, atr_bars: int = 15, ready_bars: int = 60) -> dict[str, float | int]:
-        """Return the percentage of stored symbols with enough daily bars."""
+    def daily_history_coverage(self, *, atr_bars: int = 15, ready_bars: int = 60,
+                               symbols: Iterable[str] | None = None) -> dict[str, float | int]:
+        """Percentage of symbols (the F&O universe when given) with enough daily bars."""
+        wanted = sorted({str(sym).upper() for sym in symbols or () if sym})
+        if wanted:
+            with self._connect() as connection:
+                marks = ",".join("?" for _ in wanted)
+                counts = [int(row[0]) for row in connection.execute(
+                    f"SELECT COUNT(*) FROM daily_equity_bars WHERE symbol IN ({marks}) GROUP BY symbol", wanted).fetchall()]
+            atr_ready = sum(1 for n in counts if n >= atr_bars)
+            history_ready = sum(1 for n in counts if n >= ready_bars)
+            total = len(wanted)
+            return {
+                "symbols": total, "atr_ready_symbols": atr_ready, "history_ready_symbols": history_ready,
+                "atr_coverage_pct": round(100.0 * atr_ready / total, 2),
+                "history_ready_pct": round(100.0 * history_ready / total, 2),
+            }
         with self._connect() as connection:
             total = int(connection.execute("SELECT COUNT(DISTINCT symbol) FROM daily_equity_bars").fetchone()[0] or 0)
             atr_ready = int(connection.execute(
@@ -446,19 +463,19 @@ class SignalRepository:
 
 
 
-    def backtest_events(self, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    def backtest_events(self, start_date: str, end_date: str, tier: str | None = "TRADE") -> list[dict[str, Any]]:
         """Return stored candidate events, including archive, for transparent analysis."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT captured_at_ist, trade_date, symbol, signal, direction, confidence,
                        entry, stop_loss, target_1, target_2, risk_reward, risk_source,
-                       current_price, exit_price, max_target_hit, status, result, payload_json
+                       current_price, exit_price, max_target_hit, status, result, result_r, tier, payload_json
                 FROM signal_events
-                WHERE trade_date BETWEEN ? AND ?
+                WHERE trade_date BETWEEN ? AND ? AND (? IS NULL OR tier = ?)
                 ORDER BY captured_at_ist ASC, id ASC
                 """,
-                (start_date, end_date),
+                (start_date, end_date, tier, tier),
             ).fetchall()
         events: list[dict[str, Any]] = []
         for row in rows:
@@ -563,13 +580,14 @@ class SignalRepository:
     @staticmethod
     def _realized_r(connection: sqlite3.Connection, trade_date: str) -> float:
         rows = connection.execute(
-            "SELECT status, max_target_hit FROM signal_events WHERE trade_date = ? AND archived = 0",
+            "SELECT status, max_target_hit, result_r FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE'",
             (trade_date,),
         ).fetchall()
         total = 0.0
         for row in rows:
-            status = str(row["status"])
-            if status == "SL_HIT":
+            if row["result_r"] is not None:
+                total += float(row["result_r"])
+            elif str(row["status"]) == "SL_HIT":
                 total -= 1.0
             elif int(row["max_target_hit"] or 0) >= 2:
                 total += 2.0
@@ -605,6 +623,46 @@ class SignalRepository:
                 (trade_date,),
             ).fetchall()
         return [{**dict(row), "payload": json.loads(str(row["payload_json"]))} for row in rows]
+
+    def _record_watch(self, connection: sqlite3.Connection, snapshot_id: int, trade_date: str, captured_at: datetime,
+                      payload: dict[str, Any], plan: dict[str, Any], symbol: str, signal_name: str, direction: str) -> None:
+        """Track a gate-failed candidate as a WATCH row: one per symbol+direction per day."""
+        if direction not in {"BUY", "SELL"}:
+            return
+        settings = get_settings()
+        minute = captured_at.hour * 60 + captured_at.minute
+        start_h, start_m = self._clock(settings.entry_start)
+        if minute < start_h * 60 + start_m or minute >= int(os.getenv("WATCH_END_MIN", str(15 * 60))):
+            return
+        if bool(payload.get("stale_price")) or float(payload.get("price_age_s") or 0) > settings.stale_price_s:
+            return
+        existing = connection.execute(
+            "SELECT id, status FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'WATCH' AND symbol = ? AND direction = ? "
+            "ORDER BY id DESC LIMIT 1", (trade_date, symbol, direction),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["status"]) in {"OPEN", "TG1_HIT"}:
+                connection.execute(
+                    "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ?, payload_json = ? WHERE id = ?",
+                    (float(payload.get("ltp") or 0), captured_at.isoformat(),
+                     json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
+                )
+            return
+        if int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'WATCH'",
+                                  (trade_date,)).fetchone()[0]) >= int(os.getenv("WATCH_MAX_DAY", "60")):
+            return
+        connection.execute(
+            """
+            INSERT INTO signal_events (
+                snapshot_id, trade_date, captured_at_ist, symbol, signal, direction, confidence, entry, stop_loss,
+                target_1, target_2, risk_reward, risk_source, current_price, last_seen_at_ist, payload_json, tier
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'WATCH')
+            """,
+            (snapshot_id, trade_date, captured_at.isoformat(), symbol, signal_name, direction, int(payload.get("confidence") or 0),
+             plan["entry"], plan["stop_loss"], plan["target_1"], plan["target_2"], plan["risk_reward"], plan["source"],
+             float(payload.get("ltp") or 0), captured_at.isoformat(),
+             json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)),
+        )
 
     def record_scan(
         self,
@@ -660,7 +718,7 @@ class SignalRepository:
                 existing = connection.execute(
                     """
                     SELECT id FROM signal_events
-                    WHERE trade_date = ? AND archived = 0
+                    WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE'
                       AND symbol = ? AND direction = ?
                       AND status IN ('OPEN', 'TG1_HIT')
                     ORDER BY id DESC LIMIT 1
@@ -673,6 +731,12 @@ class SignalRepository:
                         (float(payload.get("ltp") or 0), captured_at.isoformat(), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
                     )
                     continue
+                if payload.get("confirmation_gate") == "FAILED":
+                    # Not tradeable by the quality gate, but still tracked automatically (entry at first
+                    # sighting, TG/SL graded by the server) so every signal gets a result and you can see
+                    # whether the gate is blocking winners.
+                    self._record_watch(connection, snapshot_id, trade_date, captured_at, payload, plan, symbol, signal_name, direction)
+                    continue
                 settings = get_settings()
                 skip_reason = None
                 if direction not in {"BUY", "SELL"}:
@@ -681,11 +745,9 @@ class SignalRepository:
                     skip_reason = "window"
                 elif bool(payload.get("stale_price")) or float(payload.get("price_age_s") or 0) > settings.stale_price_s:
                     skip_reason = "stale_price"
-                elif payload.get("confirmation_gate") == "FAILED":
-                    skip_reason = "not_confirmed"
-                elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')", (trade_date,)).fetchone()[0] or 0) >= settings.max_open:
+                elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE' AND status IN ('OPEN', 'TG1_HIT')", (trade_date,)).fetchone()[0] or 0) >= settings.max_open:
                     skip_reason = "cap"
-                elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0", (trade_date,)).fetchone()[0] or 0) >= settings.max_setups_day:
+                elif int(connection.execute("SELECT COUNT(*) FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE'", (trade_date,)).fetchone()[0] or 0) >= settings.max_setups_day:
                     skip_reason = "cap"
                 elif self._realized_r(connection, trade_date) <= settings.daily_stop_r:
                     skip_reason = "daily_stop"
@@ -696,7 +758,7 @@ class SignalRepository:
                 recent_stop = connection.execute(
                     """
                     SELECT 1 FROM signal_events
-                    WHERE trade_date = ? AND archived = 0
+                    WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE'
                       AND symbol = ? AND direction = ? AND status = 'SL_HIT'
                       AND closed_at_ist >= ?
                     LIMIT 1
@@ -711,7 +773,7 @@ class SignalRepository:
                 daily_stop_count = connection.execute(
                     """
                     SELECT COUNT(*) FROM signal_events
-                    WHERE trade_date = ? AND archived = 0 AND symbol = ?
+                    WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE' AND symbol = ?
                       AND direction = ? AND status = 'SL_HIT'
                     """,
                     (trade_date, symbol, direction),
@@ -721,7 +783,7 @@ class SignalRepository:
                     continue
                 opposite = "SELL" if direction == "BUY" else "BUY"
                 opposite_row = connection.execute(
-                    "SELECT status, closed_at_ist FROM signal_events WHERE trade_date = ? AND archived = 0 AND symbol = ? AND direction = ? ORDER BY id DESC LIMIT 1",
+                    "SELECT status, closed_at_ist FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE' AND symbol = ? AND direction = ? ORDER BY id DESC LIMIT 1",
                     (trade_date, symbol, opposite),
                 ).fetchone()
                 if opposite_row is not None:
@@ -1041,20 +1103,21 @@ class SignalRepository:
                     "result": row["result"],
                     "result_source": row["result_source"],
                     "result_r": row["result_r"],
+                    "tier": row["tier"],
                 }
             )
             events.append(payload)
         return events, total
 
-    def performance_for_date(self, trade_date: str) -> dict[str, int | float]:
+    def performance_for_date(self, trade_date: str, tier: str = "TRADE") -> dict[str, int | float]:
         """Return compact, server-owned same-day outcome metrics."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT status, result, max_target_hit, risk_reward, entry, exit_price, direction, result_r
-                FROM signal_events WHERE trade_date = ? AND archived = 0
+                FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = ?
                 """,
-                (trade_date,),
+                (trade_date, tier),
             ).fetchall()
         counts = {"OPEN": 0, "TG1_HIT": 0, "TG2_HIT": 0, "SL_HIT": 0, "BE_EXIT": 0, "EXPIRED": 0}
         pnl_points = 0.0

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>NSE F&O OI Scanner ??</title>
+  <title>NSE F&O OI Scanner 📊</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -64,13 +64,13 @@
 
     <div class="flex items-center gap-3">
       <div class="relative">
-        <span class="text-2xl">??</span>
+        <span class="text-2xl">📊</span>
         <span x-show="marketOpen" class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5
               bg-green-400 rounded-full pulse-dot border-2 border-gray-900"></span>
       </div>
       <div>
         <h1 class="text-base font-bold text-white leading-tight tracking-tight">NSE F&O OI Scanner</h1>
-        <p class="text-[10px] text-gray-500">Live NSE OI observations ? ATR context ? paper tracking only</p>
+        <p class="text-[10px] text-gray-500">Live NSE OI observations · ATR context · automatic paper tracking</p>
       </div>
     </div>
 
@@ -82,7 +82,7 @@
              : 'bg-gray-800 border-gray-700 text-gray-400'">
         <span class="w-1.5 h-1.5 rounded-full"
               :class="marketOpen ? 'bg-green-400 pulse-dot' : 'bg-gray-500'"></span>
-        <span x-text="marketOpen ? '? Market Live' : '? Market Closed'"></span>
+        <span x-text="marketOpen ? '● Market Live' : '○ Market Closed'"></span>
       </div>
 
       <!-- IST clock -->
@@ -107,21 +107,22 @@
       <!-- HIGH confidence badge -->
       <div x-show="highConf > 0"
            class="bg-green-950 border border-green-800 px-2.5 py-1 rounded-full text-xs font-semibold text-green-300">
-        ??? <span x-text="highConf"></span> HIGH
+        ⭐⭐⭐ <span x-text="highConf"></span> HIGH
       </div>
 
       <!-- MEDIUM confidence badge -->
       <div x-show="mediumConf > 0"
            class="bg-blue-950 border border-blue-800 px-2.5 py-1 rounded-full text-xs font-semibold text-blue-300">
-        ?? <span x-text="mediumConf"></span> MED
+        ⭐⭐ <span x-text="mediumConf"></span> MED
       </div>
 
       <!-- Trades badge -->
       <div x-show="trades.length > 0"
            class="bg-purple-950 border border-purple-800 px-2.5 py-1 rounded-full text-xs cursor-pointer"
            @click="activeTab = 'trades'">
-        <span class="text-purple-300 font-bold" x-text="trades.length"></span>
-        <span class="text-purple-600"> trades today</span>
+        <span class="text-purple-300 font-bold" x-text="tradeEvents.length"></span>
+        <span class="text-purple-600"> trades</span>
+        <span class="text-gray-500" x-text="' · ' + watchEvents.length + ' watched'"></span>
       </div>
 
       <!-- Countdown / refresh -->
@@ -133,7 +134,7 @@
                 class="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300
                        px-2.5 py-1 rounded border border-gray-700 transition">
           <span x-show="!loading">? Refresh</span>
-          <span x-show="loading" class="blink">Scanning?</span>
+          <span x-show="loading" class="blink">Scanning…</span>
         </button>
       </div>
     </div>
@@ -145,7 +146,7 @@
   <!-- Error banner -->
   <div x-show="error" x-transition
        class="bg-red-950/80 border border-red-800 text-red-300 text-xs rounded-lg px-4 py-3 flex gap-2">
-    ?? <span x-text="error"></span>
+    ⚠️ <span x-text="error"></span>
   </div>
 
   <!-- Public NSE market context, distinct from any scanner recommendation -->
@@ -153,27 +154,27 @@
     <div class="flex flex-wrap items-center gap-2 mb-3">
       <h2 class="text-xs font-bold text-gray-200">Market Context: NSE indices &amp; VIX</h2>
       <span class="text-[10px] text-gray-600 mono" x-text="marketOverview?.nse_timestamp || 'NSE timestamp unavailable'"></span>
-      <span class="text-[10px] text-amber-400">Context only ? not a trade signal</span>
+      <span class="text-[10px] text-amber-400">Context only — not a trade signal</span>
       <div class="flex-1"></div>
       <button @click="fetchMarketOverview(true)" class="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800">Refresh context</button>
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
       <template x-for="key in ['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY','INDIA_VIX']" :key="key">
         <div class="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2.5">
-          <div class="text-[10px] text-gray-500" x-text="marketOverview.indices[key]?.name || key"></div>
-          <div class="text-sm mono font-semibold text-gray-200" x-text="marketOverview.indices[key]?.last != null ? fmt2(marketOverview.indices[key].last) : '?'"></div>
-          <div class="text-[10px] mono" :class="(marketOverview.indices[key]?.change_pct || 0) >= 0 ? 'text-green-400' : 'text-red-400'"
-               x-text="marketOverview.indices[key]?.change_pct != null ? ((marketOverview.indices[key].change_pct >= 0 ? '+' : '') + marketOverview.indices[key].change_pct.toFixed(2) + '%') : 'unavailable'"></div>
+          <div class="text-[10px] text-gray-500" x-text="marketOverview?.indices[key]?.name || key"></div>
+          <div class="text-sm mono font-semibold text-gray-200" x-text="marketOverview?.indices[key]?.last != null ? fmt2(marketOverview?.indices[key].last) : '?'"></div>
+          <div class="text-[10px] mono" :class="(marketOverview?.indices[key]?.change_pct || 0) >= 0 ? 'text-green-400' : 'text-red-400'"
+               x-text="marketOverview?.indices[key]?.change_pct != null ? ((marketOverview?.indices[key].change_pct >= 0 ? '+' : '') + marketOverview?.indices[key].change_pct.toFixed(2) + '%') : 'unavailable'"></div>
         </div>
       </template>
       <div class="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2.5">
         <div class="text-[10px] text-gray-500">Breadth A / D</div>
-        <div class="text-sm mono font-semibold text-gray-200" x-text="(marketOverview.market_breadth.advances ?? '?') + ' / ' + (marketOverview.market_breadth.declines ?? '?')"></div>
-        <div class="text-[10px] text-gray-500" x-text="marketOverview.market_breadth.advance_decline_ratio != null ? 'A/D ' + marketOverview.market_breadth.advance_decline_ratio.toFixed(2) : 'unavailable'"></div>
+        <div class="text-sm mono font-semibold text-gray-200" x-text="(marketOverview?.market_breadth.advances ?? '?') + ' / ' + (marketOverview?.market_breadth.declines ?? '?')"></div>
+        <div class="text-[10px] text-gray-500" x-text="marketOverview?.market_breadth.advance_decline_ratio != null ? 'A/D ' + marketOverview?.market_breadth.advance_decline_ratio.toFixed(2) : 'unavailable'"></div>
       </div>
     </div>
     <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-500">
-      <span x-text="marketOverview.data_caveat"></span>
+      <span x-text="marketOverview?.data_caveat"></span>
     </div>
   </div>
 
@@ -195,11 +196,11 @@
 
   <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['signals','analytics','trades']" :key="tab">
+    <template x-for="tab in ['focus','signals','analytics','trades']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{signals:'?? Signals', analytics:'?? Analytics', trades:'?? Signal History'}[tab]"></span>
+        <span x-text="{focus:'🎯 Focus', signals:'📡 Signals', analytics:'📊 Analytics', trades:'📋 Signal History'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -255,8 +256,8 @@
         <select x-model="confidenceFilter"
                 class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded px-2 py-1.5 focus:outline-none">
           <option value="">All Confidence</option>
-          <option value="HIGH">??? HIGH only</option>
-          <option value="MEDIUM">?? MEDIUM only</option>
+          <option value="HIGH">⭐⭐⭐ HIGH only</option>
+          <option value="MEDIUM">⭐⭐ MEDIUM only</option>
         </select>
 
         <!-- The NSE OI feed has no sector field; unknown symbols remain visibly unclassified. -->
@@ -279,7 +280,7 @@
               <th class="px-3 py-2.5 text-left font-medium">Sector</th>
               <th class="px-3 py-2.5 text-left font-medium">Signal</th>
               <th class="px-3 py-2.5 text-left font-medium">Dir</th>
-              <th class="px-3 py-2.5 text-right font-medium">LTP ?</th>
+              <th class="px-3 py-2.5 text-right font-medium">LTP (₹)</th>
               <th class="px-3 py-2.5 text-right font-medium">Price%</th>
               <th class="px-3 py-2.5 text-right font-medium">OI%</th>
               <th class="px-3 py-2.5 text-right font-medium lv-entry">Entry</th>
@@ -287,7 +288,6 @@
               <th class="px-3 py-2.5 text-right font-medium lv-tg2">TG2</th>
               <th class="px-3 py-2.5 text-right font-medium lv-sl">SL</th>
               <th class="px-3 py-2.5 text-left font-medium">Confidence</th>
-              <th class="px-3 py-2.5 text-left font-medium">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -339,14 +339,14 @@
                             ? 'bg-orange-950 text-orange-300 border-orange-800'
                             : 'bg-gray-800 text-amber-300 border-gray-700'"
                         x-text="row.actionable
-                          ? (row.signal_direction==='BUY' ? '? BUY' : '? SELL')
-                          : 'OBSERVE ? NO TRADE'"></span>
+                          ? (row.signal_direction==='BUY' ? '▲ BUY' : '▼ SELL')
+                          : 'OBSERVE · NO TRADE'"></span>
                 </td>
 
                 <!-- LTP -->
                 <td class="px-3 py-2.5 text-right mono font-semibold"
                     :class="row.price_change_pct >= 0 ? 'text-green-400' : 'text-red-400'"
-                    x-text="row.ltp ? '?' + fmt2(row.ltp) : '?'"></td>
+                    x-text="row.ltp ? '₹' + fmt2(row.ltp) : '—'"></td>
 
                 <!-- Price % -->
                 <td class="px-3 py-2.5 text-right mono"
@@ -361,22 +361,22 @@
                 <!-- Entry -->
                 <td class="px-3 py-2.5 text-right mono font-semibold lv-entry"
                     :title="row.actionable ? 'Reference entry' : 'Reference only; not a trade recommendation'"
-                    x-text="row.ltp ? '?' + fmt2(levels(row).entry) : '?'"></td>
+                    x-text="row.ltp ? '₹' + fmt2(levels(row).entry) : '—'"></td>
 
                 <!-- TG1 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg1"
                     :title="row.actionable ? 'Reference target 1' : 'Reference only; not a trade recommendation'"
-                    x-text="row.ltp ? '?' + fmt2(levels(row).tg1) : '?'"></td>
+                    x-text="row.ltp ? '₹' + fmt2(levels(row).tg1) : '—'"></td>
 
                 <!-- TG2 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg2"
                     :title="row.actionable ? 'Reference target 2' : 'Reference only; not a trade recommendation'"
-                    x-text="row.ltp ? '?' + fmt2(levels(row).tg2) : '?'"></td>
+                    x-text="row.ltp ? '₹' + fmt2(levels(row).tg2) : '—'"></td>
 
                 <!-- SL -->
                 <td class="px-3 py-2.5 text-right mono lv-sl"
                     :title="row.actionable ? 'Reference stop loss' : 'Reference only; not a trade recommendation'"
-                    x-text="row.ltp ? '?' + fmt2(levels(row).sl) : '?'"></td>
+                    x-text="row.ltp ? '₹' + fmt2(levels(row).sl) : '—'"></td>
 
                 <!-- Confidence tier -->
                 <td class="px-3 py-2.5">
@@ -390,21 +390,7 @@
                           :class="row.confidence_tier==='HIGH'
                             ? 'bg-green-950 text-green-300 border-green-800'
                             : 'bg-blue-950 text-blue-300 border-blue-800'"
-                          x-text="row.confidence_tier==='HIGH' ? '??? HIGH' : '?? MED'"></span>
-                  </div>
-                </td>
-
-                <!-- Actions -->
-                <td class="px-3 py-2.5">
-                  <div class="flex items-center gap-1.5">
-                    <button @click="addTrade(row)"
-                            :disabled="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)"
-                            class="text-[10px] px-2 py-1 rounded border transition font-medium"
-                            :class="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)
-                              ? 'bg-gray-800 text-gray-600 border-gray-700 cursor-not-allowed'
-                              : 'bg-purple-900/40 hover:bg-purple-800 text-purple-300 border-purple-700 hover:text-white'">
-                      <span x-text="!row.actionable ? 'Needs validation (paper only)' : (alreadyAdded(row.symbol) ? '? Paper tracked' : '+ Paper track')"></span>
-                    </button>
+                          x-text="row.confidence_tier==='HIGH' ? '⭐⭐⭐ HIGH' : '⭐⭐ MED'"></span>
                   </div>
                 </td>
 
@@ -414,11 +400,11 @@
             <!-- Empty states -->
             <template x-if="!loading && filtered.length === 0 && signals.length === 0">
               <tr><td colspan="13" class="py-20 text-center text-gray-600">
-                <div class="text-5xl mb-3 opacity-30">??</div>
+                <div class="text-5xl mb-3 opacity-30">📡</div>
                 <div class="text-sm" x-text="dataStatus === 'UNAVAILABLE'
                   ? 'NSE live OI data is temporarily unavailable; no signal can be computed. Try Refresh.'
                   : (marketOpen
-                    ? 'Scanning all F&O stocks? No strong signals yet. Try refresh.'
+                    ? 'Scanning all F&O stocks… No strong signals yet. Try refresh.'
                     : (marketStatusLabel || 'Market closed (Mon?Fri 09:15?15:30 IST). Signals appear during live market.'))">
                 </div>
               </td></tr>
@@ -443,7 +429,7 @@
         <div class="flex items-start justify-between gap-3 mb-4">
           <div>
             <h2 class="text-sm font-semibold text-gray-200">Candidate Outcome Analytics</h2>
-            <p class="text-[10px] text-amber-400 mt-1">Stored OI/price candidate outcomes only ? not validated options-strategy performance.</p>
+            <p class="text-[10px] text-amber-400 mt-1">Stored OI/price candidate outcomes only — not validated options-strategy performance.</p>
           </div>
           <button @click="loadAnalytics()" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1">Refresh</button>
         </div>
@@ -481,233 +467,208 @@
   </div><!-- end analytics tab -->
 
   <!-- ??????????????????????????????????? TRADE HISTORY TAB ????????????????? -->
-  <div x-show="activeTab === 'trades'" x-transition>
-    <div class="space-y-4">
-
-      <!-- Header bar -->
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 class="text-base font-bold text-white">?? Signal History</h2>
-          <p class="text-xs text-gray-500 mt-0.5"
-             x-text="'Date: ' + todayLabel + '  ·  Daily history — resets at midnight IST'"></p>
-        </div>
-        <div class="flex items-center gap-2">
-          <!-- Stats -->
-          <div class="flex gap-2 text-xs">
-            <span class="px-2 py-1 bg-green-950 border border-green-800 rounded text-green-300">
-              WIN: <b x-text="tradeStats.tgHit"></b>
-            </span>
-            <span class="px-2 py-1 bg-red-950 border border-red-800 rounded text-red-300">
-              LOSS: <b x-text="tradeStats.slHit"></b>
-            </span>
-            <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-300">
-              FLAT: <b x-text="tradeStats.flat || 0"></b>
-            </span>
-            <span class="px-2 py-1 bg-blue-950 border border-blue-800 rounded text-blue-300">
-              Open: <b x-text="tradeStats.open"></b>
-            </span>
-          </div>
-          <button @click="clearTrades()"
-                  x-show="trades.length > 0 && historySource !== 'server'"
-                  class="text-xs text-red-400 hover:text-red-300 border border-red-900 hover:border-red-700
-                         px-3 py-1.5 rounded transition">
-            ?? Clear All
-          </button>
-        </div>
+  <div x-show="activeTab === 'focus'" x-transition>
+    <div class="space-y-5">
+      <div>
+        <h2 class="text-base font-bold text-white">🎯 Signal Focus</h2>
+        <p class="text-xs text-gray-500 mt-0.5">What is tradeable right now, and what each candidate is still waiting for. Everything is tracked automatically.</p>
       </div>
 
-      <!-- Trade cards -->
-      <template x-if="trades.length === 0">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center text-gray-600">
-          <div class="text-5xl mb-3 opacity-30">??</div>
-          <div class="text-sm">Signals auto-appear here once the scanner publishes them.</div>
-          <div class="text-xs mt-1">History is grouped by symbol and signal direction for the current IST day.</div>
-        </div>
-      </template>
-
-      <div x-show="historySource === 'server'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        <template x-for="t in historyGroups" :key="t.id">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade" :class="t.status === 'OPEN' ? 'trade-open' : ((t.status === 'SL_HIT' || (t.status === 'EXPIRED' && t.result === 'LOSS')) ? 'trade-sl' : (t.status === 'EXPIRED' ? 'trade-expired' : 'trade-tg1'))">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800"><div class="flex items-center gap-2"><span class="mono font-bold text-white text-sm" x-text="t.symbol"></span><span class="badge bg-gray-800 text-gray-300 border-gray-700" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal || '')"></span><span class="badge" :class="t.direction === 'BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'" x-text="t.direction === 'BUY' ? '↑ BUY' : '↓ SELL'"></span></div><span class="badge" :class="t.status === 'OPEN' ? 'bg-blue-950 text-blue-300 border-blue-800' : ((t.status === 'SL_HIT' || (t.status === 'EXPIRED' && t.result === 'LOSS')) ? 'bg-red-950 text-red-300 border-red-800' : (t.status === 'EXPIRED' && t.result === 'FLAT' ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-green-950 text-green-300 border-green-800'))" x-text="t.status === 'EXPIRED' && t.result ? (t.result + (t.result_source === 'bhavcopy_close' ? ' · close' : '')) : t.status"></span></div>
-            <div class="grid grid-cols-4 gap-px bg-gray-800 text-center"><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">Entry</div><div class="mono text-xs lv-entry" x-text="'₹' + fmt2(t.entry)"></div></div><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">Current</div><div class="mono text-xs" :class="t.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400'" x-text="'₹' + fmt2(t.currentLTP)"></div></div><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">P&amp;L</div><div class="mono text-xs" :class="t.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400'" x-text="(t.pnl_pct >= 0 ? '+' : '') + t.pnl_pct.toFixed(2) + '%'"></div></div><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">Tier</div><div class="mono text-xs text-amber-300" x-text="t.confidence_tier || '—'"></div></div></div>
-            <div class="px-4 py-2 text-[10px] text-gray-500 flex flex-wrap gap-x-3"><span x-text="'First: ' + (t.first_seen || '—')"></span><span x-text="'Last: ' + (t.last_update || '—')"></span><span x-text="t.stability_scans + ' scans'"></span><span x-text="'Conf ' + t.confidence_min + '–' + t.confidence_max"></span><span x-text="'SL ' + fmt2(t.sl) + ' · TG1 ' + fmt2(t.tg1) + ' · TG2 ' + fmt2(t.tg2)"></span></div>
-            <div class="px-4 py-2 border-t border-gray-800"><button @click="t.expanded = !t.expanded" class="text-xs text-brand hover:text-sky-300" x-text="(t.expanded ? '▾ Hide' : '▸ Show') + ' scan history (' + t.stability_scans + ' snapshots)' "></button><div x-show="t.expanded" class="mt-2 max-h-48 overflow-y-auto scrollbar-thin space-y-1"><template x-for="(e,i) in t.timeline" :key="e.id || i"><div class="grid grid-cols-4 gap-2 text-[10px] mono text-gray-500"><span x-text="e.captured_at_ist || e.addedAt || '—'"></span><span x-text="'₹' + fmt2(e.currentLTP ?? e.ltp)"></span><span x-text="Number(e.price_change_pct ?? e.price_change ?? 0).toFixed(2) + '%'"></span><span x-text="Number(e.oi_change_pct ?? e.oi_change ?? 0).toFixed(2) + '%'"></span></div></template><div x-show="t.stability_scans > 50" class="text-[10px] text-gray-600">Showing latest 50 snapshots.</div></div></div>
-          </div>
+      <section class="space-y-2">
+        <h3 class="text-sm font-semibold text-green-300">✅ Ready now <span class="text-gray-500 font-normal">— passed every check</span></h3>
+        <template x-if="focusReady.length === 0">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl py-6 text-center text-gray-500 text-sm">Nothing has passed every check right now. The closest candidates are below.</div>
         </template>
-      </div>
-      <div x-show="historySource !== 'server'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        <template x-for="t in trades" :key="t.id">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
-               :class="{
-                 'trade-open': t.status === 'OPEN',
-                 'trade-tg1':  t.status === 'TG1_HIT' || t.status === 'BE_EXIT',
-                 'trade-tg2':  t.status === 'TG2_HIT',
-                 'trade-sl':   t.status === 'SL_HIT',
-                 'trade-expired': t.status === 'EXPIRED',
-               }">
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <template x-for="s in focusReady" :key="s.symbol + s.signal">
+            <div class="bg-gray-900 border border-green-800 rounded-xl p-4">
+              <div class="flex items-center justify-between">
+                <span class="mono font-bold text-white" x-text="s.symbol"></span>
+                <span class="badge" :class="s.signal_direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'" x-text="s.signal_direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
+              </div>
+              <div class="mt-2 grid grid-cols-4 gap-1 text-center text-[10px]">
+                <div><div class="text-gray-600">Entry</div><div class="mono text-xs text-white" x-text="'₹' + fmt2(levels(s).entry)"></div></div>
+                <div><div class="text-gray-600">TG1</div><div class="mono text-xs text-green-400" x-text="'₹' + fmt2(levels(s).tg1)"></div></div>
+                <div><div class="text-gray-600">TG2</div><div class="mono text-xs text-emerald-400" x-text="'₹' + fmt2(levels(s).tg2)"></div></div>
+                <div><div class="text-gray-600">SL</div><div class="mono text-xs text-red-400" x-text="'₹' + fmt2(levels(s).sl)"></div></div>
+              </div>
+              <div class="mt-2 text-[10px] text-gray-500" x-text="'Quality ' + (s.quality_score ?? 0) + '/100 · auto-tracked from entry'"></div>
+            </div>
+          </template>
+        </div>
+      </section>
 
-            <!-- Card header -->
+      <section class="space-y-2">
+        <h3 class="text-sm font-semibold text-amber-300">👀 Closest to ready <span class="text-gray-500 font-normal">— and what each is waiting for</span></h3>
+        <template x-if="focusWatch.length === 0">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl py-6 text-center text-gray-500 text-sm">No other candidates right now.</div>
+        </template>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <template x-for="s in focusWatch" :key="s.symbol + s.signal">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <div class="flex items-center justify-between">
+                <span class="mono font-bold text-white" x-text="s.symbol"></span>
+                <span class="badge" :class="s.signal_direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'" x-text="s.signal_direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
+              </div>
+              <div class="mt-2 h-1.5 bg-gray-800 rounded"><div class="h-1.5 rounded bg-amber-500" :style="'width:' + Math.max(3, Math.min(100, s.quality_score || 0)) + '%'"></div></div>
+              <div class="mt-1 text-[10px] text-gray-500" x-text="'Quality ' + (s.quality_score ?? 0) + '/100'"></div>
+              <div class="mt-2 flex flex-wrap gap-1">
+                <template x-for="m in (s.missing_confirmations || [])" :key="m">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700" x-text="missingLabel(m)"></span>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <section class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="text-xs text-gray-400">Tracked automatically today:
+          <b class="text-white" x-text="tradeStats.total"></b> trades (<b class="text-blue-300" x-text="tradeStats.open"></b> open) ·
+          <b class="text-white" x-text="watchStats.total"></b> watched</div>
+        <div class="text-sm font-bold mono" :class="tradeStats.totalR >= 0 ? 'text-green-400' : 'text-red-400'" x-text="'Net ' + (tradeStats.totalR >= 0 ? '+' : '') + tradeStats.totalR + 'R'"></div>
+        <button @click="activeTab = 'trades'" class="text-xs text-brand hover:text-sky-300">Open Signal History →</button>
+      </section>
+    </div>
+  </div>
+
+  <div x-show="activeTab === 'trades'" x-transition>
+    <div class="space-y-6">
+      <div>
+        <h2 class="text-base font-bold text-white">📋 Signal History</h2>
+        <p class="text-xs text-gray-500 mt-0.5" x-text="'Date: ' + todayLabel + '  ·  tracked automatically by the server every 30 seconds — no manual marking, same on every device'"></p>
+      </div>
+
+      <section class="space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-green-300">✅ Trades <span class="text-gray-500 font-normal">— passed every check</span></h3>
+          <div class="flex flex-wrap gap-2 text-xs">
+          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-300">Total <b x-text="tradeStats.total"></b></span>
+          <span class="px-2 py-1 bg-blue-950 border border-blue-800 rounded text-blue-300">Open <b x-text="tradeStats.open"></b></span>
+          <span class="px-2 py-1 bg-emerald-950 border border-emerald-800 rounded text-emerald-300">TG2 <b x-text="tradeStats.tg2"></b></span>
+          <span class="px-2 py-1 bg-amber-950 border border-amber-800 rounded text-amber-300">TG1 then entry <b x-text="tradeStats.be"></b></span>
+          <span class="px-2 py-1 bg-red-950 border border-red-800 rounded text-red-300">SL <b x-text="tradeStats.sl"></b></span>
+          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-400">Time exit <b x-text="tradeStats.exp"></b></span>
+          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded" :class="tradeStats.totalR >= 0 ? 'text-green-300' : 'text-red-300'">Net <b x-text="(tradeStats.totalR >= 0 ? '+' : '') + tradeStats.totalR + 'R'"></b></span>
+        </div>
+        </div>
+        <template x-if="tradeEvents.length === 0">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl py-8 text-center text-gray-500 text-sm">No signal has passed every check yet today. See the watchlist below for what was seen.</div>
+        </template>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <template x-for="t in tradeEvents" :key="t.id">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
+               :class="{'trade-open': ['OPEN','TG1_HIT'].includes(t.status), 'trade-tg1': t.status === 'BE_EXIT', 'trade-tg2': t.status === 'TG2_HIT', 'trade-sl': t.status === 'SL_HIT', 'trade-expired': t.status === 'EXPIRED'}">
             <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
               <div class="flex items-center gap-2">
                 <span class="mono font-bold text-white text-sm" x-text="t.symbol"></span>
-                <span class="badge"
-                      :class="{
-                        'bg-green-950 text-green-300 border-green-800':  t.signal==='LONG_BUILDUP',
-                        'bg-red-950 text-red-300 border-red-800':        t.signal==='SHORT_BUILDUP',
-                        'bg-yellow-950 text-yellow-300 border-yellow-800':t.signal==='SHORT_COVERING',
-                        'bg-orange-950 text-orange-300 border-orange-800':t.signal==='LONG_UNWINDING',
-                      }" x-text="t.signal_emoji + ' ' + t.signal_label"></span>
-                <!-- Direction -->
-                <span class="badge"
-                      :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
-                      x-text="t.direction === 'BUY' ? '? BUY' : '? SELL'"></span>
+                <span class="badge" :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
+                      x-text="t.direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
+                <span class="text-[10px] text-gray-500" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal)"></span>
               </div>
-              <!-- Status badge -->
-              <div class="flex items-center gap-1.5">
-                <span class="badge"
-                      :class="{
-                        'bg-blue-950 text-blue-300 border-blue-800':     t.status==='OPEN',
-                        'bg-green-950 text-green-300 border-green-800':  t.status==='TG1_HIT',
-                        'bg-amber-950 text-amber-300 border-amber-800': t.status==='BE_EXIT',
-                        'bg-emerald-950 text-emerald-300 border-emerald-800': t.status==='TG2_HIT',
-                        'bg-red-950 text-red-300 border-red-800':        t.status==='SL_HIT',
-                        'bg-gray-800 text-gray-500 border-gray-700':     t.status==='EXPIRED',
-                      }">
-                  <span x-text="{OPEN:'? OPEN', TG1_HIT:'? TG1 Hit', TG2_HIT:'?? TG2 Hit', SL_HIT:'? SL Hit', BE_EXIT:'TG1 hit, stopped at entry', EXPIRED:'? Expired'}[t.status] + (t.result_r != null ? ' \u00b7 ' + (t.result_r >= 0 ? '+' : '') + Number(t.result_r).toFixed(2) + 'R' : '')"></span>
-                </span>
-                <button x-show="historySource !== 'server'" @click="removeTrade(t.id)"
-                        class="text-gray-600 hover:text-red-400 transition text-xs ml-1">?</button>
-              </div>
+              <span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span>
             </div>
-
-            <!-- Price levels grid -->
             <div class="grid grid-cols-4 gap-px bg-gray-800 text-center">
-              <!-- Entry -->
-              <div class="bg-gray-900 px-2 py-2.5">
-                <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider">Entry</div>
-                <div class="mono text-xs font-bold lv-entry" x-text="'?' + fmt2(t.entry)"></div>
-              </div>
-              <!-- TG1 -->
-              <div class="bg-gray-900 px-2 py-2.5"
-                   :class="t.status==='TG1_HIT'||t.status==='TG2_HIT' ? 'bg-green-950/30' : ''">
-                <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider flex items-center justify-center gap-1">
-                  TG 1
-                  <span x-show="t.status==='TG1_HIT'||t.status==='TG2_HIT'" class="text-green-500">?</span>
-                </div>
-                <div class="mono text-xs lv-tg1 font-semibold" x-text="'?' + fmt2(t.tg1)"></div>
-                <div class="text-[9px] text-green-700" x-text="t.tg1Pct + '%'"></div>
-              </div>
-              <!-- TG2 -->
-              <div class="bg-gray-900 px-2 py-2.5"
-                   :class="t.status==='TG2_HIT' ? 'bg-green-950/30' : ''">
-                <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider flex items-center justify-center gap-1">
-                  TG 2
-                  <span x-show="t.status==='TG2_HIT'" class="text-green-500">?</span>
-                </div>
-                <div class="mono text-xs lv-tg2 font-semibold" x-text="'?' + fmt2(t.tg2)"></div>
-                <div class="text-[9px] text-green-700" x-text="t.tg2Pct + '%'"></div>
-              </div>
-              <!-- SL -->
-              <div class="bg-gray-900 px-2 py-2.5"
-                   :class="t.status==='SL_HIT' ? 'bg-red-950/30' : ''">
-                <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider flex items-center justify-center gap-1">
-                  SL
-                  <span x-show="t.status==='SL_HIT'" class="text-red-400">?</span>
-                </div>
-                <div class="mono text-xs lv-sl font-semibold" x-text="'?' + fmt2(t.sl)"></div>
-                <div class="text-[9px] text-red-700" x-text="t.slPct + '%'"></div>
-              </div>
+              <div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600 uppercase tracking-wider">Entry</div>
+                <div class="mono text-xs font-bold lv-entry" x-text="'₹' + fmt2(t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 1 ? 'bg-green-950/30' : ''">
+                <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 1 <span x-show="Number(t.max_target_hit) >= 1" class="text-green-500">✓</span></div>
+                <div class="mono text-xs lv-tg1 font-semibold" x-text="'₹' + fmt2(t.tg1)"></div>
+                <div class="text-[9px] text-green-700" x-text="pctFrom(t.tg1, t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 2 ? 'bg-green-950/30' : ''">
+                <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 2 <span x-show="Number(t.max_target_hit) >= 2" class="text-green-500">✓</span></div>
+                <div class="mono text-xs lv-tg2 font-semibold" x-text="'₹' + fmt2(t.tg2)"></div>
+                <div class="text-[9px] text-green-700" x-text="pctFrom(t.tg2, t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5" :class="t.status === 'SL_HIT' ? 'bg-red-950/30' : ''">
+                <div class="text-[9px] text-gray-600 uppercase tracking-wider">SL <span x-show="t.status === 'SL_HIT'" class="text-red-400">✗</span></div>
+                <div class="mono text-xs lv-sl font-semibold" x-text="'₹' + fmt2(t.sl)"></div>
+                <div class="text-[9px] text-red-700" x-text="pctFrom(t.sl, t.entry)"></div></div>
             </div>
+            <div class="px-4 py-2.5 border-t border-gray-800 text-xs text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>Opened <b class="text-gray-300 mono" x-text="hm(t.captured_at_ist)"></b></span>
+              <span x-show="t.currentLTP">Last <b class="mono" :class="pnlClass(t)" x-text="'₹' + fmt2(t.currentLTP)"></b></span>
+              <span x-show="t.closed_at_ist">Closed <b class="text-gray-300 mono" x-text="hm(t.closed_at_ist) + (t.exitPrice ? ' @ ₹' + fmt2(t.exitPrice) : '')"></b></span>
+              <span class="text-gray-600" x-show="['OPEN','TG1_HIT'].includes(t.status)">auto-tracked · checked every 30s</span>
+            </div>
+            
+          </div>
+        </template>
+        </div>
+      </section>
 
-            <!-- Live tracker row -->
-            <div class="px-4 py-2.5 border-t border-gray-800 flex items-center justify-between">
-              <div class="flex items-center gap-3 text-xs">
-                <span class="text-gray-600">Added: <b class="text-gray-400 mono" x-text="t.addedAt"></b></span>
-                <span x-show="t.currentLTP" class="text-gray-600">
-                  CMP: <b class="mono"
-                          :class="t.direction==='BUY'
-                            ? (t.currentLTP >= t.entry ? 'text-green-400' : 'text-red-400')
-                            : (t.currentLTP <= t.entry ? 'text-green-400' : 'text-red-400')"
-                          x-text="'?' + fmt2(t.currentLTP)"></b>
-                </span>
+      <section class="space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-amber-300">👁 Watchlist <span class="text-gray-500 font-normal">— signals that did not pass the checks (same tracking, for comparison)</span></h3>
+          <div class="flex flex-wrap gap-2 text-xs">
+          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-300">Total <b x-text="watchStats.total"></b></span>
+          <span class="px-2 py-1 bg-blue-950 border border-blue-800 rounded text-blue-300">Open <b x-text="watchStats.open"></b></span>
+          <span class="px-2 py-1 bg-emerald-950 border border-emerald-800 rounded text-emerald-300">TG2 <b x-text="watchStats.tg2"></b></span>
+          <span class="px-2 py-1 bg-amber-950 border border-amber-800 rounded text-amber-300">TG1 then entry <b x-text="watchStats.be"></b></span>
+          <span class="px-2 py-1 bg-red-950 border border-red-800 rounded text-red-300">SL <b x-text="watchStats.sl"></b></span>
+          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-400">Time exit <b x-text="watchStats.exp"></b></span>
+          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded" :class="watchStats.totalR >= 0 ? 'text-green-300' : 'text-red-300'">Net <b x-text="(watchStats.totalR >= 0 ? '+' : '') + watchStats.totalR + 'R'"></b></span>
+        </div>
+        </div>
+        <template x-if="watchEvents.length === 0">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl py-8 text-center text-gray-500 text-sm">Nothing on the watchlist yet.</div>
+        </template>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <template x-for="t in watchEvents" :key="t.id">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
+               :class="{'trade-open': ['OPEN','TG1_HIT'].includes(t.status), 'trade-tg1': t.status === 'BE_EXIT', 'trade-tg2': t.status === 'TG2_HIT', 'trade-sl': t.status === 'SL_HIT', 'trade-expired': t.status === 'EXPIRED'}">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+              <div class="flex items-center gap-2">
+                <span class="mono font-bold text-white text-sm" x-text="t.symbol"></span>
+                <span class="badge" :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
+                      x-text="t.direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
+                <span class="text-[10px] text-gray-500" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal)"></span>
               </div>
-
-              <!-- Manual status override buttons -->
-              <div x-show="historySource !== 'server'" class="flex items-center gap-1">
-                <span class="text-[10px] text-gray-700">Mark:</span>
-                <button @click="markTrade(t.id, 'TG1_HIT')"
-                        :disabled="t.status !== 'OPEN'"
-                        class="text-[10px] px-1.5 py-0.5 rounded border disabled:opacity-30 transition"
-                        :class="t.status==='TG1_HIT' ? 'bg-green-900 text-green-300 border-green-700'
-                          : 'text-gray-500 border-gray-700 hover:border-green-700 hover:text-green-400'">
-                  TG1
-                </button>
-                <button @click="markTrade(t.id, 'TG2_HIT')"
-                        :disabled="t.status === 'SL_HIT'"
-                        class="text-[10px] px-1.5 py-0.5 rounded border disabled:opacity-30 transition"
-                        :class="t.status==='TG2_HIT' ? 'bg-emerald-900 text-emerald-300 border-emerald-700'
-                          : 'text-gray-500 border-gray-700 hover:border-emerald-700 hover:text-emerald-400'">
-                  TG2
-                </button>
-                <button @click="markTrade(t.id, 'SL_HIT')"
-                        :disabled="t.status !== 'OPEN'"
-                        class="text-[10px] px-1.5 py-0.5 rounded border disabled:opacity-30 transition"
-                        :class="t.status==='SL_HIT' ? 'bg-red-900 text-red-300 border-red-700'
-                          : 'text-gray-500 border-gray-700 hover:border-red-700 hover:text-red-400'">
-                  SL
-                </button>
-              </div>
+              <span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span>
+            </div>
+            <div class="grid grid-cols-4 gap-px bg-gray-800 text-center">
+              <div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600 uppercase tracking-wider">Entry</div>
+                <div class="mono text-xs font-bold lv-entry" x-text="'₹' + fmt2(t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 1 ? 'bg-green-950/30' : ''">
+                <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 1 <span x-show="Number(t.max_target_hit) >= 1" class="text-green-500">✓</span></div>
+                <div class="mono text-xs lv-tg1 font-semibold" x-text="'₹' + fmt2(t.tg1)"></div>
+                <div class="text-[9px] text-green-700" x-text="pctFrom(t.tg1, t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 2 ? 'bg-green-950/30' : ''">
+                <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 2 <span x-show="Number(t.max_target_hit) >= 2" class="text-green-500">✓</span></div>
+                <div class="mono text-xs lv-tg2 font-semibold" x-text="'₹' + fmt2(t.tg2)"></div>
+                <div class="text-[9px] text-green-700" x-text="pctFrom(t.tg2, t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5" :class="t.status === 'SL_HIT' ? 'bg-red-950/30' : ''">
+                <div class="text-[9px] text-gray-600 uppercase tracking-wider">SL <span x-show="t.status === 'SL_HIT'" class="text-red-400">✗</span></div>
+                <div class="mono text-xs lv-sl font-semibold" x-text="'₹' + fmt2(t.sl)"></div>
+                <div class="text-[9px] text-red-700" x-text="pctFrom(t.sl, t.entry)"></div></div>
+            </div>
+            <div class="px-4 py-2.5 border-t border-gray-800 text-xs text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>Opened <b class="text-gray-300 mono" x-text="hm(t.captured_at_ist)"></b></span>
+              <span x-show="t.currentLTP">Last <b class="mono" :class="pnlClass(t)" x-text="'₹' + fmt2(t.currentLTP)"></b></span>
+              <span x-show="t.closed_at_ist">Closed <b class="text-gray-300 mono" x-text="hm(t.closed_at_ist) + (t.exitPrice ? ' @ ₹' + fmt2(t.exitPrice) : '')"></b></span>
+              <span class="text-gray-600" x-show="['OPEN','TG1_HIT'].includes(t.status)">auto-tracked · checked every 30s</span>
+            </div>
+            <div x-show="(t.missing_confirmations || []).length" class="px-4 pb-3 flex flex-wrap gap-1">
+              <template x-for="m in (t.missing_confirmations || [])" :key="m">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700" x-text="missingLabel(m)"></span>
+              </template>
             </div>
           </div>
         </template>
-      </div>
-
-      <!-- P&L Summary (when trades exist) -->
-      <template x-if="trades.length > 0">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <div class="text-xs font-semibold text-gray-400 mb-3 uppercase tracking-wider">Day Summary</div>
-          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center text-sm">
-            <div class="bg-gray-800 rounded-lg p-3">
-              <div class="text-xs text-gray-500 mb-1">Total Signals</div>
-              <div class="font-bold mono text-white" x-text="trades.length"></div>
-            </div>
-            <div class="bg-green-950/50 rounded-lg p-3">
-              <div class="text-xs text-gray-500 mb-1">TG1 Hit</div>
-              <div class="font-bold mono text-green-400" x-text="tradeStats.tg1Hit"></div>
-            </div>
-            <div class="bg-emerald-950/50 rounded-lg p-3">
-              <div class="text-xs text-gray-500 mb-1">TG2 Hit</div>
-              <div class="font-bold mono text-emerald-400" x-text="tradeStats.tg2Hit"></div>
-            </div>
-            <div class="bg-red-950/50 rounded-lg p-3">
-              <div class="text-xs text-gray-500 mb-1">SL Hit</div>
-              <div class="font-bold mono text-red-400" x-text="tradeStats.slHit"></div>
-            </div>
-            <div class="bg-blue-950/50 rounded-lg p-3">
-              <div class="text-xs text-gray-500 mb-1">Win Rate</div>
-              <div class="font-bold mono"
-                   :class="tradeStats.winRate >= 50 ? 'text-green-400' : 'text-red-400'"
-                   x-text="tradeStats.winRate + '%'"></div>
-            </div>
-          </div>
         </div>
-      </template>
-
+      </section>
     </div>
   </div><!-- end trades tab -->
 
 </main>
 
 <footer class="text-center text-xs text-gray-800 py-5 mt-4 border-t border-gray-900">
-  NSE F&O OI Scanner ? Educational use only ? Not financial advice ?
+  NSE F&O OI Scanner · Educational use only · Not financial advice
   <a href="https://github.com/Sabari-2004/nse-oi-tracker" target="_blank"
      class="hover:text-gray-500 underline">Sabari-2004 / nse-oi-tracker</a>
 </footer>
 
 <!-- ??????????????????????????????????? ALPINE APP ???????????????????????????? -->
 <script>
-const STORAGE_KEY  = 'nse_oi_trades';
-const STORAGE_DATE = 'nse_oi_trade_date';
 
 // Per-signal scalp parameters
 const SIGNAL_PARAMS = {
@@ -729,23 +690,23 @@ function scanner() {
     loading: false,
     error: '', countdown: 60,
     clock: '', marketOpen: false, marketStatusLabel: '',
-    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'signals',
+    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'focus',
     search: '', sortBy: 'confidence',
-    trades: [], historyGroups: [], todayLabel: '', historySource: 'browser', historyPerformance: null, analyticsBreakdowns: null,
+    trades: [], todayLabel: '', historySource: 'server', historyPerformance: null, watchPerformance: null, analyticsBreakdowns: null,
 
 
     /* ?? signal type metadata ?? */
     SIG_TYPES: [
-      { key:'LONG_BUILDUP',   label:'Long Buildup',   emoji:'??', hint:'Price ? OI ? ? observation',
+      { key:'LONG_BUILDUP',   label:'Long Buildup',   emoji:'🟢', hint:'Price ↑ · OI ↑ · observation',
         cardClass:'bg-gray-900 border-green-900',   tc:'text-green-400',
         ringClass:'ring-green-500', activeCls:'bg-green-950 text-green-300 border-green-700' },
-      { key:'SHORT_BUILDUP',  label:'Short Buildup',  emoji:'??', hint:'Price ? OI ? ? observation',
+      { key:'SHORT_BUILDUP',  label:'Short Buildup',  emoji:'🔴', hint:'Price ↓ · OI ↑ · observation',
         cardClass:'bg-gray-900 border-red-900',     tc:'text-red-400',
         ringClass:'ring-red-500',   activeCls:'bg-red-950 text-red-300 border-red-700' },
-      { key:'SHORT_COVERING', label:'Short Covering', emoji:'??', hint:'Price ? OI ? ? observation',
+      { key:'SHORT_COVERING', label:'Short Covering', emoji:'🟡', hint:'Price ↑ · OI ↓ · observation',
         cardClass:'bg-gray-900 border-yellow-900',  tc:'text-yellow-400',
         ringClass:'ring-yellow-500',activeCls:'bg-yellow-950 text-yellow-300 border-yellow-700' },
-      { key:'LONG_UNWINDING', label:'Long Unwinding', emoji:'??', hint:'Price ? OI ? ? observation',
+      { key:'LONG_UNWINDING', label:'Long Unwinding', emoji:'🟠', hint:'Price ↓ · OI ↓ · observation',
         cardClass:'bg-gray-900 border-orange-900',  tc:'text-orange-400',
         ringClass:'ring-orange-500',activeCls:'bg-orange-950 text-orange-300 border-orange-700' },
     ],
@@ -762,30 +723,62 @@ function scanner() {
       return list;
     },
 
-    get tradeStats() {
-      if (this.historySource === 'server') {
-        const cards = this.historyGroups || [];
-        const tg1Hit = cards.filter(t => t.status === 'TG1_HIT').length;
-        const tg2Hit = cards.filter(t => t.status === 'TG2_HIT').length;
-        const slHit = cards.filter(t => t.status === 'SL_HIT').length;
-        const open = cards.filter(t => t.status === 'OPEN' || t.status === 'TG1_HIT').length;
-        const wins = cards.filter(t => t.status === 'EXPIRED' && (t.result === 'WIN' || Number(t.max_target_hit) >= 1)).length + tg1Hit + tg2Hit;
-        const losses = cards.filter(t => t.status === 'SL_HIT' || (t.status === 'EXPIRED' && t.result === 'LOSS')).length;
-        const flat = cards.filter(t => t.status === 'EXPIRED' && t.result === 'FLAT').length;
-        const graded = wins + losses + flat;
-        return {tg1Hit, tg2Hit, slHit, open, flat, graded, tgHit: tg1Hit + tg2Hit, winRate: graded ? Math.round((wins / graded) * 100) : 0};
+    get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE'); },
+    get watchEvents() { return this.trades.filter(t => t.tier === 'WATCH'); },
+    statsFor(list) {
+      const n = st => list.filter(t => t.status === st).length;
+      const open = n('OPEN') + n('TG1_HIT'), totalR = list.reduce((a, t) => a + (t.result_r == null ? 0 : Number(t.result_r)), 0);
+      return {total: list.length, open, tg2: n('TG2_HIT'), be: n('BE_EXIT'), sl: n('SL_HIT'), exp: n('EXPIRED'), totalR: Math.round(totalR * 100) / 100};
+    },
+    get tradeStats() { return this.statsFor(this.tradeEvents); },
+    get watchStats() { return this.statsFor(this.watchEvents); },
+    get focusReady() { return this.signals.filter(s => s.actionable); },
+    get focusWatch() {
+      return this.signals.filter(s => !s.actionable).sort((a, b) => (b.quality_score || 0) - (a.quality_score || 0)).slice(0, 6);
+    },
+    missingLabel(code) {
+      return ({oi_history_warmup:'Building 10-min OI history', oi_window_disagrees:'Last 15 min not confirming', persistence_short:'Not held for 4 scans',
+        wrong_side_of_vwap:'Wrong side of VWAP', opening_range_incomplete:'Opening range not known yet', inside_or_or_below:'Not above opening range',
+        inside_or_or_above:'Not below opening range', volume_too_low:'Volume below normal pace', rel_volume_unavailable:'Volume pace unknown',
+        extended_from_open:'Already moved too far', extended_from_vwap:'Stretched away from VWAP', gap_day_needs_volume:'Gap day needs stronger volume',
+        atr_unavailable:'ATR not ready', no_daily_bars:'No daily history', no_intraday_data:'No intraday data', fo_ban_period:'In F&O ban',
+        stale_price:'Price is stale', not_a_buildup_entry:'Not a build-up entry', gate_error:'Check error'})[code] || code;
+    },
+    statusClass(st) {
+      return ({OPEN:'bg-blue-950 text-blue-300 border-blue-800', TG1_HIT:'bg-green-950 text-green-300 border-green-800', BE_EXIT:'bg-amber-950 text-amber-300 border-amber-800',
+        TG2_HIT:'bg-emerald-950 text-emerald-300 border-emerald-800', SL_HIT:'bg-red-950 text-red-300 border-red-800', EXPIRED:'bg-gray-800 text-gray-400 border-gray-700'})[st] || '';
+    },
+    statusLabel(t) {
+      const base = ({OPEN:'\u25cf OPEN', TG1_HIT:'\u2705 TG1 hit \u00b7 stop at entry', TG2_HIT:'\uD83C\uDFAF TG2 hit', SL_HIT:'\u274C SL hit',
+        BE_EXIT:'\u21A9 TG1 hit, stopped at entry', EXPIRED:'\u23F1 Time exit'})[t.status] || t.status;
+      return base + (t.result_r != null ? ' \u00b7 ' + (t.result_r >= 0 ? '+' : '') + Number(t.result_r).toFixed(2) + 'R' : '');
+    },
+    pctFrom(level, entry) {
+      const e = Number(entry), l = Number(level);
+      return (e && l) ? ((l - e) / e * 100 >= 0 ? '+' : '') + ((l - e) / e * 100).toFixed(2) + '%' : '';
+    },
+    hm(iso) {
+      if (!iso) return '\u2014';
+      const d = new Date(iso);
+      return isNaN(d) ? '\u2014' : d.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hour12:false});
+    },
+    pnlClass(t) {
+      const up = t.direction === 'BUY' ? t.currentLTP >= t.entry : t.currentLTP <= t.entry;
+      return up ? 'text-green-400' : 'text-red-400';
+    },
+    async loadServerHistory() {
+      try {
+        const r = await fetch('/api/history/today');
+        if (!r.ok) return;
+        const data = await r.json();
+        this.trades = data.events || [];                  // the server is the only source: same on every device
+        this.historyPerformance = data.performance || null;
+        this.watchPerformance = data.watch_performance || null;
+        this.historySource = 'server';
+        this.todayLabel = data.trade_date || this.todayLabel;
+      } catch (e) {
+        console.warn('Server history unavailable', e);
       }
-      const tg1Hit = this.trades.filter(t => t.status === 'TG1_HIT').length;
-      const tg2Hit = this.trades.filter(t => t.status === 'TG2_HIT').length;
-      const slHit  = this.trades.filter(t => t.status === 'SL_HIT').length;
-      const open   = this.trades.filter(t => t.status === 'OPEN').length;
-      const closed = this.trades.length - open;
-      const won    = tg1Hit + tg2Hit;
-      return {
-        tg1Hit, tg2Hit, slHit, open,
-        tgHit:  tg1Hit + tg2Hit,
-        winRate: closed > 0 ? Math.round((won / closed) * 100) : 0,
-      };
     },
 
     /* ?? lifecycle ?? */
@@ -798,6 +791,7 @@ function scanner() {
         {label:'Stops observed', value:data.sl_hits ?? 0, cls:'text-red-400'},
         {label:'Open / partial', value:data.open ?? 0, cls:'text-blue-300'},
         {label:'Candidate hit rate', value:(data.accuracy ?? 0) + '%', cls:'text-amber-300'},
+        {label:'Net result', value:((data.total_r ?? 0) >= 0 ? '+' : '') + (data.total_r ?? 0) + 'R', cls:'text-green-300'},
       ];
     },
 
@@ -813,8 +807,6 @@ function scanner() {
 
     async boot() {
       this.todayLabel = new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'short', day:'numeric' });
-      this.loadTrades();
-      this.loadTradesFromIndexedDB();
       this.tickClock();
       setInterval(() => this.tickClock(), 1000);
       await this.fetchSignals();
@@ -828,7 +820,6 @@ function scanner() {
     tickClock() {
       const now = new Date();
       this.clock = now.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' IST';
-      this.ensureTradeDay();
       // Market status is API-owned: the server includes NSE holidays and
       // unknown-year safeguards that a weekday/time-only browser test cannot.
     },
@@ -886,7 +877,6 @@ function scanner() {
         this.availableSectors = d.available_sectors || this.availableSectors;
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';
-        this.autoSaveSignals(this.signals);
         await this.loadServerHistory();
       } catch(e) {
         this.error = e.name === 'AbortError'
@@ -895,38 +885,7 @@ function scanner() {
       } finally { clearTimeout(timeout); this.loading = false; }
     },
 
-    groupHistory(events) {
-      const groups = new Map();
-      (events || []).forEach(event => { const key = `${event.symbol || ''}|${event.direction || event.signal_direction || ''}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(event); });
-      return [...groups.values()].map(items => {
-        items.sort((a,b) => String(a.captured_at_ist || a.addedAt || '').localeCompare(String(b.captured_at_ist || b.addedAt || '')));
-        const first = items[0], last = items[items.length - 1];
-        const confidence = items.map(e => Number(e.confidence)).filter(Number.isFinite);
-        const entry = Number(first.entry || first.ltp || 0), currentLTP = Number(last.currentLTP ?? last.ltp ?? last.current_price ?? entry);
-        const direction = last.direction || last.signal_direction || 'BUY';
-        const pnl_pct = entry ? ((currentLTP-entry)/entry*100) * (direction === 'SELL' ? -1 : 1) : 0;
-        return {...last, id:`${last.symbol}-${direction}`, first_seen:first.captured_at_ist || first.addedAt, last_update:last.captured_at_ist || last.addedAt, stability_scans:items.length, confidence_min:confidence.length ? Math.min(...confidence) : 0, confidence_max:confidence.length ? Math.max(...confidence) : 0, entry, currentLTP, pnl_pct, status:last.status || 'OPEN', result:last.result || null, result_source:last.result_source || null, max_target_hit:items.reduce((m,e) => Math.max(m, Number(e.max_target_hit) || 0), 0), timeline:items.slice(-50), expanded:false};
-      });
-    },
     /* ?????? server-owned history ?????? */
-    async loadServerHistory() {
-      try {
-        const r = await fetch('/api/history/today');
-        if (!r.ok) return;
-        const data = await r.json();
-        // Keep a pre-existing browser log usable until the server has its
-        // first persisted scan. Once it has events, it is authoritative.
-        if ((data.total_events || 0) > 0) {
-          this.trades = data.events || [];
-          this.historyGroups = this.groupHistory(this.trades);
-          this.historyPerformance = data.performance || null;
-          this.historySource = 'server';
-          this.todayLabel = data.trade_date || this.todayLabel;
-        }
-      } catch (e) {
-        console.warn('Server history unavailable; using browser fallback', e);
-      }
-    },
 
     /* ?? option chain ?? */
     async loadAnalytics() {
@@ -951,6 +910,7 @@ function scanner() {
 
     /* Compute entry / TG1 / TG2 / SL for a signal row */
     levels(row) {
+      if (row.plan && row.plan.entry) return {entry: row.plan.entry, tg1: row.plan.target_1, tg2: row.plan.target_2, sl: row.plan.stop_loss};
       const ltp = row.ltp || 0;
       const p   = SIGNAL_PARAMS[row.signal] || { dir:'BUY', tg1p:0.5, tg2p:1.0, slp:0.3 };
       const dir = p.dir;
@@ -968,212 +928,33 @@ function scanner() {
       return { entry, tg1, tg2, sl };
     },
 
-    alreadyAdded(sym) {
-      return this.trades.some(t => t.symbol === sym);
-    },
 
-    autoSaveSignals(rows) {
-      // A received signal is itself a history event. Save each symbol once per
-      // IST day so the user does not have to click + Trade before refresh.
-      (rows || []).forEach(row => {
-        if (!this.alreadyAdded(row.symbol)) this.addTrade(row, true);
-      });
-    },
 
-    addTrade(row, silent=false) {
-      if (this.alreadyAdded(row.symbol)) return;
-      const p      = SIGNAL_PARAMS[row.signal] || { dir:'BUY', tg1p:0.5, tg2p:1.0, slp:0.3 };
-      const lv     = this.levels(row);
-      const dir    = p.dir;
-      const sign   = dir === 'BUY' ? '+' : '?';
 
-      const trade = {
-        id:               Date.now(),
-        symbol:           row.symbol,
-        tradeDate:        this.todayIST(),
-        signal:           row.signal,
-        signal_label:     row.signal_label,
-        signal_emoji:     row.signal_emoji,
-        direction:        dir,
-        confidence:       row.confidence || 0,
-        confidence_tier:  row.confidence_tier || 'MEDIUM',
-        entry:            lv.entry,
-        tg1:              lv.tg1,
-        tg2:              lv.tg2,
-        sl:               lv.sl,
-        tg1Pct:           sign + p.tg1p,
-        tg2Pct:           sign + p.tg2p,
-        slPct:            (dir==='BUY'?'?':'+') + p.slp,
-        status:           'OPEN',
-        currentLTP:       row.ltp,
-        addedAt:          new Date().toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit'}),
-      };
 
-      this.trades.push(trade);
-      this.saveTrades();
-      if (!silent) this.activeTab = 'trades';
-    },
 
-    removeTrade(id) {
-      this.trades = this.trades.filter(t => t.id !== id);
-      this.saveTrades();
-    },
-
-    markTrade(id, status) {
-      const t = this.trades.find(t => t.id === id);
-      if (t) { t.status = status; this.saveTrades(); }
-    },
-
-    clearTrades() {
-      if (confirm('Clear all saved trades? This cannot be undone.')) {
-        this.trades = [];
-        this.saveTrades();
-      }
-    },
 
     /* Update CMP on open trades using latest signal data */
-    updateTradesCMP() {
-      this.trades.forEach(t => {
-        if (t.status !== 'OPEN') return;
-        const sig = this.signals.find(s => s.symbol === t.symbol);
-        if (!sig) return;
-        t.currentLTP = sig.ltp;
-        // Auto-detect status from CMP
-        if (t.direction === 'BUY') {
-          if (sig.ltp >= t.tg2)      t.status = 'TG2_HIT';
-          else if (sig.ltp >= t.tg1) t.status = 'TG1_HIT';
-          else if (sig.ltp <= t.sl)  t.status = 'SL_HIT';
-        } else {
-          if (sig.ltp <= t.tg2)      t.status = 'TG2_HIT';
-          else if (sig.ltp <= t.tg1) t.status = 'TG1_HIT';
-          else if (sig.ltp >= t.sl)  t.status = 'SL_HIT';
-        }
-      });
-      this.saveTrades();
-    },
 
     /* Browser-local persistence ? one independent trade list per IST day. */
     todayIST() {
       return new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Kolkata'});
     },
-    ensureTradeDay() {
-      const today = this.todayIST();
-      if (localStorage.getItem(STORAGE_DATE) !== today) {
-        localStorage.setItem(STORAGE_DATE, today);
-      }
-    },
-    saveTrades() {
-      const today = this.todayIST();
-      try {
-        localStorage.setItem(STORAGE_DATE, today);
-        localStorage.setItem(`${STORAGE_KEY}:${today}`, JSON.stringify(this.trades));
-        // Compatibility mirror for older deployed bundles. The daily key is
-        // authoritative; this mirror is only read when it was written today.
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
-      } catch (err) {
-        console.warn('Trade history could not be saved in browser storage:', err);
-      }
-      this.saveTradesToIndexedDB(today, this.trades);
-    },
 
-    saveTradesToIndexedDB(today, trades) {
-      if (!window.indexedDB) return;
-      try {
-        const request = indexedDB.open('nse_oi_tracker_history', 1);
-        request.onupgradeneeded = () => {
-          const db = request.result;
-          if (!db.objectStoreNames.contains('daily')) db.createObjectStore('daily', { keyPath: 'date' });
-        };
-        request.onsuccess = () => {
-          const db = request.result;
-          const tx = db.transaction('daily', 'readwrite');
-          tx.objectStore('daily').put({ date: today, trades: JSON.parse(JSON.stringify(trades)) });
-          tx.oncomplete = () => db.close();
-          tx.onerror = () => db.close();
-        };
-        request.onerror = () => console.warn('IndexedDB trade backup unavailable');
-      } catch (err) { console.warn('IndexedDB trade backup failed:', err); }
-    },
 
-    loadTradesFromIndexedDB() {
-      if (!window.indexedDB) return;
-      const today = this.todayIST();
-      try {
-        const request = indexedDB.open('nse_oi_tracker_history', 1);
-        request.onupgradeneeded = () => {
-          const db = request.result;
-          if (!db.objectStoreNames.contains('daily')) db.createObjectStore('daily', { keyPath: 'date' });
-        };
-        request.onsuccess = () => {
-          const db = request.result;
-          const cleanupTx = db.transaction('daily', 'readwrite');
-          const cleanupStore = cleanupTx.objectStore('daily');
-          const cleanup = cleanupStore.openCursor();
-          cleanup.onsuccess = () => {
-            const cursor = cleanup.result;
-            if (!cursor) return;
-            if (cursor.key !== today) cursor.delete();
-            cursor.continue();
-          };
-          const get = db.transaction('daily', 'readonly').objectStore('daily').get(today);
-          get.onsuccess = () => {
-            const saved = get.result;
-            if (!this._dailyStoragePresent && saved && Array.isArray(saved.trades)) {
-              this.trades = saved.trades;
-              this.saveTrades();
-            }
-            db.close();
-          };
-          get.onerror = () => db.close();
-        };
-      } catch (err) { console.warn('IndexedDB trade recovery failed:', err); }
-    },
 
-    clearOldBrowserHistory(today) {
-      try {
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const key = localStorage.key(i);
-          if (key && key.startsWith(`${STORAGE_KEY}:`) && key !== `${STORAGE_KEY}:${today}`) {
-            localStorage.removeItem(key);
-          }
-        }
-        const marker = localStorage.getItem(STORAGE_DATE);
-        if (marker && marker !== today) localStorage.removeItem(STORAGE_KEY);
-      } catch (err) { console.warn('Old browser history cleanup failed:', err); }
-    },
-    loadTrades() {
-      const today = this.todayIST();
-      this.clearOldBrowserHistory(today);
-      try {
-        let daily = localStorage.getItem(`${STORAGE_KEY}:${today}`);
-        // Migrate trades saved by the previous bundle only when its date marker
-        // proves they belong to today. Never resurrect an older day's history.
-        if (!daily && localStorage.getItem(STORAGE_DATE) === today) {
-          daily = localStorage.getItem(STORAGE_KEY);
-        }
-        this._dailyStoragePresent = Boolean(daily);
-        const parsed = daily ? JSON.parse(daily) : [];
-        this.trades = Array.isArray(parsed) ? parsed : [];
-        this.trades.forEach(t => { if (!t.tradeDate) t.tradeDate = today; });
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
-        localStorage.setItem(`${STORAGE_KEY}:${today}`, JSON.stringify(this.trades));
-        localStorage.setItem(STORAGE_DATE, today);
-      } catch {
-        this.trades = [];
-      }
-    },
 
     /* ?? helpers ?? */
     toggleFilter(key) { this.activeFilter = this.activeFilter === key ? '' : key; },
 
-    fmt2(v)  { return v ? Number(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '?'; },
+    fmt2(v)  { return v ? Number(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'; },
 
     fmtCrore(v) {
       return v == null ? 'unavailable' : ((v >= 0 ? '+' : '') + Number(v).toLocaleString('en-IN', {maximumFractionDigits:2}) + ' cr');
     },
 
     fmtOI(v) {
-      if (v===null||v===undefined) return '?';
+      if (v===null||v===undefined) return '—';
       const n=Math.abs(v), s=v<0?'-':'';
       if (n>=1e7) return s+(n/1e7).toFixed(2)+'Cr';
       if (n>=1e5) return s+(n/1e5).toFixed(2)+'L';
