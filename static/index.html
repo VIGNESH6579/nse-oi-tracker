@@ -195,17 +195,51 @@
 
   <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['signals','analytics','trades']" :key="tab">
+    <template x-for="tab in ['signals','tracking','analytics','trades']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{signals:'?? Signals', analytics:'?? Analytics', trades:'?? Signal History'}[tab]"></span>
+        <span x-text="{signals:'?? Signals', tracking:'?? Live Tracking', analytics:'?? Analytics', trades:'?? Signal History'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
         </template>
       </button>
     </template>
+  </div>
+
+  <!-- ??????????????????????????????????? SIGNAL TRACKING TAB ?????????????? -->
+  <div x-show="activeTab === 'tracking'" x-transition>
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-800 flex flex-wrap items-center gap-2">
+        <div>
+          <h2 class="text-base font-bold text-white">?? Live Signal Tracking</h2>
+          <p class="text-xs text-gray-500">One row per real setup; server-owned status and R result.</p>
+        </div>
+        <div class="flex-1"></div>
+        <template x-for="item in [['active','Active'],['tg1_hit','TG1'],['tg2_hit','TG2'],['sl_hit','SL'],['breakeven_exit','BE'],['time_exit','Time']]" :key="item[0]">
+          <span class="badge bg-gray-800 text-gray-300 border-gray-700"><span x-text="item[1]"></span>: <b x-text="trackingCounts[item[0]] || 0"></b></span>
+        </template>
+      </div>
+      <div x-show="tracking.length === 0" class="py-14 text-center text-gray-600 text-sm">No accepted setups are being tracked today.</div>
+      <div x-show="tracking.length > 0" class="overflow-x-auto scrollbar-thin">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-950 text-gray-500"><tr>
+            <th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-left">Direction</th><th class="px-3 py-2 text-right">Entry</th><th class="px-3 py-2 text-right">Current</th><th class="px-3 py-2 text-right">SL / TG1 / TG2</th><th class="px-3 py-2 text-right">Live R</th><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Last update</th>
+          </tr></thead>
+          <tbody><template x-for="row in tracking" :key="row.id"><tr class="border-t border-gray-800 hover:bg-gray-800/50">
+            <td class="px-3 py-2.5 mono font-semibold text-white" x-text="row.symbol"></td>
+            <td class="px-3 py-2.5" :class="row.direction === 'BUY' ? 'text-blue-300' : 'text-orange-300'" x-text="row.direction"></td>
+            <td class="px-3 py-2.5 text-right mono lv-entry" x-text="'₹' + fmt2(row.entry)"></td>
+            <td class="px-3 py-2.5 text-right mono" :class="row.live_r >= 0 ? 'text-green-400' : 'text-red-400'" x-text="'₹' + fmt2(row.current_price)"></td>
+            <td class="px-3 py-2.5 text-right mono text-gray-400" x-text="fmt2(row.stop_loss) + ' / ' + fmt2(row.target_1) + ' / ' + fmt2(row.target_2)"></td>
+            <td class="px-3 py-2.5 text-right mono font-semibold" :class="row.live_r >= 0 ? 'text-green-400' : 'text-red-400'" x-text="(row.live_r >= 0 ? '+' : '') + Number(row.live_r || 0).toFixed(2) + 'R'"></td>
+            <td class="px-3 py-2.5"><span class="badge" :class="row.status === 'OPEN' || row.status === 'TG1_HIT' ? 'bg-blue-950 text-blue-300 border-blue-800' : (row.status === 'SL_HIT' ? 'bg-red-950 text-red-300 border-red-800' : 'bg-green-950 text-green-300 border-green-800')" x-text="row.status_label"></span><span x-show="row.result_r != null" class="ml-1 text-gray-500 mono" x-text="(row.result_r >= 0 ? '+' : '') + Number(row.result_r).toFixed(2) + 'R'"></span></td>
+            <td class="px-3 py-2.5 text-gray-500 mono" x-text="row.last_seen_at_ist || row.captured_at_ist || '—'"></td>
+          </tr></template></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- ??????????????????????????????????? SIGNALS TAB ??????????????????????? -->
@@ -731,7 +765,7 @@ function scanner() {
     clock: '', marketOpen: false, marketStatusLabel: '',
     activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'signals',
     search: '', sortBy: 'confidence',
-    trades: [], historyGroups: [], todayLabel: '', historySource: 'browser', historyPerformance: null, analyticsBreakdowns: null,
+    trades: [], historyGroups: [], tracking: [], trackingCounts: {}, todayLabel: '', historySource: 'browser', historyPerformance: null, analyticsBreakdowns: null,
 
 
     /* ?? signal type metadata ?? */
@@ -820,6 +854,7 @@ function scanner() {
       await this.fetchSignals();
       await this.fetchMarketOverview();
       await this.loadServerHistory();
+      await this.loadTracking();
       await this.loadAnalytics();
       this.startTimer();
     },
@@ -888,6 +923,7 @@ function scanner() {
         this.marketStatusLabel = d.market_status_label || '';
         this.autoSaveSignals(this.signals);
         await this.loadServerHistory();
+        await this.loadTracking();
       } catch(e) {
         this.error = e.name === 'AbortError'
           ? 'Live scan is taking longer than 45s; showing the last received data and retrying.'
@@ -925,6 +961,18 @@ function scanner() {
         }
       } catch (e) {
         console.warn('Server history unavailable; using browser fallback', e);
+      }
+    },
+
+    async loadTracking() {
+      try {
+        const r = await fetch('/api/tracking/today');
+        if (!r.ok) return;
+        const data = await r.json();
+        this.tracking = data.setups || [];
+        this.trackingCounts = data.counts || {};
+      } catch (e) {
+        console.warn('Signal tracking unavailable', e);
       }
     },
 
