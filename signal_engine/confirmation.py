@@ -14,7 +14,7 @@ from typing import Any
 from analytics.intraday_confirm import relative_volume, SESSION_START_MIN
 
 ENTRY_SIGNALS = {"LONG_BUILDUP": "BUY", "SHORT_BUILDUP": "SELL"}
-INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"})
+INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI"})
 
 
 def _f(name: str, default: float) -> float:

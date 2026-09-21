@@ -25,7 +25,7 @@ ANGEL_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files
 NSE_LOTS_URL = "https://archives.nseindia.com/content/fo/fo_mktlots.csv"
 FALLBACK_PATH = Path(__file__).resolve().parents[1] / "data" / "fno_symbols.json"
 
-INDEX_UNDERLYINGS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"})
+INDEX_UNDERLYINGS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI"})
 MIN_UNIVERSE = 120   # sanity bounds: NSE lists roughly 180-230 F&O stocks
 MAX_UNIVERSE = 400
 CACHE_TTL_S = 7 * 24 * 3600

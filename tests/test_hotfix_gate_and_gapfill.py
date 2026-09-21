@@ -92,7 +92,7 @@ def test_maybe_fill_feed_gaps_finds_feed_names_missing_from_universe(tmp_path, m
     monkeypatch.setattr(oi, "_feed_symbols", {"TCS", "TMPV"})
     monkeypatch.setattr(main, "backfill_symbol_gaps", lambda repo_, syms, **kw: seen.update(symbols=set(syms)) or {"stored": 5})
     monkeypatch.setattr(main, "add_extra_symbols", lambda syms: seen.update(extras=set(syms)))
-    main._gap_fill.update(running=False, last_start=None, symbols=[], result=None)
+    main._gap_fill.update(running=False, last_start=None, symbols=[], result=None, gave_up=set())
     assert main.maybe_fill_feed_gaps() is True
     for _ in range(50):
         if not main._gap_fill["running"]:
@@ -109,3 +109,39 @@ def test_gate_stats_record_failing_symbols(monkeypatch):
     sig = {"symbol": "TMPV", "signal": "LONG_BUILDUP", "ltp": 104.5, "oi_window": {}, "intraday_context": None, "technical_context": {}}
     main._apply_confirmation_gate([sig], {})
     assert "no_daily_bars" in main._gate_stats["failed_symbols"]["TMPV"]
+
+
+def test_merge_bars_does_not_erase_stock_history_regression(tmp_path):
+    """Regression: dict.update() with the index result (empty lists) blanked every stock's bars."""
+    repo = SignalRepository(tmp_path / "m.sqlite3")
+    repo.upsert_daily_equity_bars([{"trade_date": f"2026-08-{d:02d}", "symbol": "PATANJALI", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10}
+                                   for d in range(1, 21)])
+    with repo._connect() as c:
+        c.executemany("INSERT INTO daily_index_bars(trade_date, symbol, open, high, low, close) VALUES (?,?,?,?,?,?)",
+                      [(f"2026-08-{d:02d}", "NIFTY", 1, 2, 1, 2) for d in range(1, 21)])
+    syms = ["PATANJALI", "NIFTY", "NIFTYFPI"]
+    equity, index = repo.daily_equity_bars_for_symbols(syms), repo.daily_index_bars_for_symbols(syms)
+    naive = dict(equity); naive.update(index)
+    assert len(naive["PATANJALI"]) == 0                       # the old behaviour (bug)
+    merged = main._merge_bars(equity, index)
+    assert len(merged["PATANJALI"]) == 20 and len(merged["NIFTY"]) == 20 and merged["NIFTYFPI"] == []
+
+
+def test_gap_fill_gives_up_on_symbols_with_no_bhavcopy_rows(tmp_path, monkeypatch):
+    repo = SignalRepository(tmp_path / "gu.sqlite3")
+    calls = []
+    monkeypatch.setattr(main, "repository", repo)
+    monkeypatch.setattr(main, "render_startup_backfill_enabled", lambda: True)
+    monkeypatch.setattr(main, "cached_universe", lambda: {"AAA"})
+    monkeypatch.setattr(oi, "_feed_symbols", set())
+    monkeypatch.setattr(main, "backfill_symbol_gaps", lambda repo_, syms, **kw: calls.append(set(syms)) or {"stored": 0})
+    monkeypatch.setattr(main, "add_extra_symbols", lambda syms: 0)
+    main._gap_fill.update(running=False, last_start=None, symbols=[], result=None, gave_up=set())
+    assert main.maybe_fill_feed_gaps() is True
+    for _ in range(60):
+        if not main._gap_fill["running"]:
+            break
+        time.sleep(0.05)
+    assert calls == [{"AAA"}] and main._gap_fill["gave_up"] == {"AAA"}
+    main._gap_fill["last_start"] = None
+    assert main.maybe_fill_feed_gaps() is False                # nothing left to try
