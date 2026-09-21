@@ -1182,30 +1182,6 @@ async def today_history(
     }
 
 
-@app.get("/api/tracking/today")
-async def today_tracking(
-    limit: int = Query(500, ge=1, le=1000, description="Maximum tracked setups"),
-):
-    """Return one live tracking row per current-day symbol/direction setup."""
-    trade_date = ist_trade_date()
-    rows = await asyncio.to_thread(repository.tracking_for_date, trade_date, limit=limit)
-    active = sum(1 for row in rows if row["status"] in {"OPEN", "TG1_HIT"})
-    return {
-        "trade_date": trade_date,
-        "setups": rows,
-        "counts": {
-            "total": len(rows),
-            "active": active,
-            "tg1_hit": sum(1 for row in rows if row["status"] == "TG1_HIT"),
-            "tg2_hit": sum(1 for row in rows if row["status"] == "TG2_HIT"),
-            "sl_hit": sum(1 for row in rows if row["status"] == "SL_HIT"),
-            "breakeven_exit": sum(1 for row in rows if row["status"] == "BE_EXIT"),
-            "time_exit": sum(1 for row in rows if row["status"] == "EXPIRED"),
-        },
-        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
-    }
-
-
 @app.get("/api/analytics/today")
 async def today_analytics():
     """Return server-calculated daily performance for durable signal events."""

@@ -75,18 +75,6 @@ def test_open_trade_keeps_being_monitored_when_symbol_left_the_signal_list(tmp_p
     assert _state(repo, e["id"])["status"] == "SL_HIT"
 
 
-def test_tracking_returns_one_current_row_per_setup_with_live_r(tmp_path):
-    repo = SignalRepository(tmp_path / "tracking.sqlite3")
-    _open(repo, symbol="AAA")
-    repo.update_open_events([], AT + timedelta(minutes=2), extra_prices={"AAA": 100.5})
-    rows = repo.tracking_for_date("2026-09-21")
-    assert len(rows) == 1
-    assert rows[0]["symbol"] == "AAA"
-    assert rows[0]["status"] == "TG1_HIT"
-    assert rows[0]["live_r"] > 0
-    assert rows[0]["status_label"] == "TG1 HIT"
-
-
 def test_time_exit_after_tg1_keeps_locked_profit_and_pre_tg1_exit_is_plain_r(tmp_path):
     repo = SignalRepository(tmp_path / "f.sqlite3")
     a, b = _open(repo, symbol="AAA"), _open(repo, symbol="BBB")
