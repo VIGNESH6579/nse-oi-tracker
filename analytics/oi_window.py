@@ -43,20 +43,26 @@ class OIWindow:
         self._points: dict[str, deque[tuple[datetime, float, float]]] = {}
         self._first: dict[str, tuple[datetime, float, float]] = {}
         self._streak: dict[str, tuple[int, datetime]] = {}
+        self._source: dict[str, str] = {}
         self._day = None
         self._lock = threading.Lock()
 
     def reset(self) -> None:
         with self._lock:
-            self._points.clear(); self._first.clear(); self._streak.clear(); self._day = None
+            self._points.clear(); self._first.clear(); self._streak.clear(); self._source.clear(); self._day = None
 
-    def update(self, symbol: str, ts: datetime, ltp: float, oi: float) -> None:
+    def update(self, symbol: str, ts: datetime, ltp: float, oi: float, source: str = "") -> None:
         if not symbol or ltp <= 0 or oi <= 0:
             return
         with self._lock:
             if self._day != ts.date():
-                self._points.clear(); self._first.clear(); self._streak.clear()
+                self._points.clear(); self._first.clear(); self._streak.clear(); self._source.clear()
                 self._day = ts.date()
+            if source and self._source.get(symbol, source) != source:
+                # data source changed (NSE <-> Angel): OI definitions differ, so restart this symbol
+                self._points.pop(symbol, None); self._first.pop(symbol, None); self._streak.pop(symbol, None)
+            if source:
+                self._source[symbol] = source
             points = self._points.setdefault(symbol, deque())
             if points and ts <= points[-1][0]:
                 return                                   # duplicate / out-of-order scan

@@ -45,6 +45,7 @@ def summarize_candles(candles: list[dict]) -> dict[str, Any]:
         "day_high": max(float(c["high"]) for c in rows),
         "day_low": min(float(c["low"]) for c in rows),
         "last_close": float(rows[-1]["close"]),
+        "twap": round(sum((float(c["high"]) + float(c["low"]) + float(c["close"])) / 3 for c in rows) / len(rows), 4),
         "session_volume": sum(float(c.get("volume") or 0) for c in rows),
         "or_high": max((float(c["high"]) for c in opening), default=None),
         "or_low": min((float(c["low"]) for c in opening), default=None),

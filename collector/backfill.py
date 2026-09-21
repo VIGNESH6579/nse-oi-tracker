@@ -90,6 +90,39 @@ def backfill_recent_bhavcopies(
     }
 
 
+def backfill_symbol_gaps(
+    repository: SignalRepository,
+    symbols: set[str],
+    *,
+    end_date: date,
+    dates: int = 20,
+    delay_seconds: float | None = None,
+) -> dict[str, int]:
+    """Re-download recent bhavcopies but keep ONLY rows for ``symbols``.
+
+    Used for F&O names the OI feed reports that Angel's master names differently
+    (renames/demergers), so they get ATR/volume history without re-storing everything.
+    """
+    wanted = {str(s).upper() for s in symbols if s}
+    if not wanted or dates <= 0:
+        return {"requested": 0, "downloaded": 0, "stored": 0, "failed": 0}
+    if delay_seconds is None:
+        delay_seconds = 60.0 / get_settings().backfill_max_per_min
+    candidates = recent_nse_trading_dates(end_date, dates)
+    downloaded = stored = failed = 0
+    for index, candidate in enumerate(candidates, start=1):
+        try:
+            rows = [bar for bar in collect_equity_bhavcopy(candidate) if str(bar.get("symbol") or "").upper() in wanted]
+            stored += repository.upsert_daily_equity_bars(rows)
+            downloaded += 1
+        except Exception:
+            failed += 1
+            logger.warning("Gap-fill download failed date=%s", candidate, exc_info=True)
+        if delay_seconds > 0 and index < len(candidates):
+            time.sleep(delay_seconds)
+    return {"requested": len(candidates), "downloaded": downloaded, "stored": stored, "failed": failed}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill free public NSE EQ bhavcopy bars.")
     parser.add_argument("--days", type=int, default=60, help="Recent NSE trading days required (default: 60)")

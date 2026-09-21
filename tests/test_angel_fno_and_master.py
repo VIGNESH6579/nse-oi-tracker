@@ -89,3 +89,10 @@ def test_intraday_candles_use_ist_session_window(monkeypatch):
     monkeypatch.setattr(angel, "now_ist", lambda: datetime(2026, 9, 21, 11, 5, 30, tzinfo=IST))
     assert len(c.intraday_candles("TCS")) == 1
     assert sent["fromdate"] == "2026-09-21 09:15" and sent["todate"] == "2026-09-21 11:05"
+
+
+def test_fno_quotes_skips_nse_test_instruments():
+    c = _client()
+    c._instruments = dict([_fut("011NSETEST30SEP26FUT", "30SEP2026"), _fut("TCS30SEP26FUT", "30SEP2026")])
+    c.full_quotes = lambda symbols, exchange="NFO": {s: {"ltp": 1.0, "oi": 10.0} for s in symbols}
+    assert set(c.fno_quotes(today=date(2026, 9, 10))) == {"TCS"}

@@ -4,6 +4,7 @@
 
 import logging
 import asyncio
+import threading
 import time
 import csv
 import io
@@ -55,12 +56,13 @@ from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
 from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s, last_snapshot_info
-from collector.universe import universe_source, cached_universe_size, cached_universe
+from collector.universe import universe_source, cached_universe_size, cached_universe, add_extra_symbols
+from collector.backfill import backfill_symbol_gaps
 import app.self_test as self_test
 from app.market_calendar import is_trading_holiday
 from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
 from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles
-from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS
+from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS, INDEX_SYMBOLS
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
 from analytics.backtest import summarize_candidate_backtest
@@ -216,12 +218,15 @@ def _refresh_signals() -> list[dict]:
                 else:
                     candles = []
                 summary = summarize_candles(candles)
-                broker_vwap = summary.get("vwap") if summary.get("available") else candle_vwap(candles)
-                _data_quality["candle_ok" if broker_vwap is not None else "candle_empty"] += 1
-                if broker_vwap is not None:
+                broker_vwap = candle_vwap(candles)
+                _data_quality["candle_ok" if summary.get("available") else "candle_empty"] += 1
+                if summary.get("available"):
+                    # Indices have no volume: fall back to the time-weighted average (TWAP).
                     context = {
                         **summary,
-                        "vwap": broker_vwap, "available": True,
+                        "vwap": broker_vwap if broker_vwap is not None else summary.get("twap"),
+                        "vwap_kind": "vwap" if broker_vwap is not None else "twap",
+                        "available": True,
                         "source": "angel_one_5m_ohlcv",
                         "data_frequency": "FIVE_MINUTE",
                         "candle_count": len(candles),
@@ -541,6 +546,7 @@ async def automatic_startup_backfill() -> None:
 async def scheduled_durable_snapshot() -> None:
     """Persist today's working database during market hours."""
     memory_watchdog()
+    maybe_fill_feed_gaps()
     current = now_ist()
     minutes = current.hour * 60 + current.minute
     if current.weekday() < 5 and 540 <= minutes <= 945:
@@ -569,6 +575,43 @@ async def scheduled_backfill_topup() -> None:
         logger.info("Post-close bhavcopy top-up finished: %s", result)
     except Exception:
         logger.exception("Post-close bhavcopy top-up failed")
+
+
+_gap_fill: dict = {"running": False, "last_start": None, "symbols": [], "result": None}
+
+
+def maybe_fill_feed_gaps() -> bool:
+    """Give bars to F&O names the OI feed reports but the Angel-derived universe lacks.
+
+    Renamed/demerged stocks (e.g. TMPV/TMCV) would otherwise fail the gate forever with
+    ``no_daily_bars``. Runs in a background thread, at most once per 20 minutes.
+    """
+    if not render_startup_backfill_enabled():
+        return False
+    last = _gap_fill["last_start"]
+    if _gap_fill["running"] or _backfill_lock.locked() or (last is not None and time.monotonic() - last < 1200):
+        return False
+    universe = cached_universe()
+    if not universe:
+        return False
+    extras = set(oi_engine._feed_symbols) - universe
+    missing = set(repository.symbols_missing_bars(universe | extras, 15))
+    if not missing:
+        return False
+    _gap_fill.update(running=True, last_start=time.monotonic(), symbols=sorted(missing)[:20])
+
+    def worker() -> None:
+        try:
+            add_extra_symbols(extras)
+            _gap_fill["result"] = backfill_symbol_gaps(repository, missing, end_date=_backfill_end_date(), dates=20)
+            logger.info("Feed gap-fill finished symbols=%s result=%s", sorted(missing)[:20], _gap_fill["result"])
+        except Exception:
+            logger.exception("Feed gap-fill failed")
+        finally:
+            _gap_fill["running"] = False
+
+    threading.Thread(target=worker, daemon=True, name="feed-gap-fill").start()
+    return True
 
 
 def _current_rss_mb() -> float | None:
@@ -603,8 +646,8 @@ def _market_bias_cached() -> str:
     if angel_market_data is not None:
         try:
             bias = bias_from_candles(angel_market_data.intraday_candles("NIFTY", interval="FIVE_MINUTE", exchange="NSE", days=1))
-        except Exception:
-            logger.warning("Nifty regime unavailable; treating as UNKNOWN")
+        except Exception as exc:
+            logger.warning("Nifty regime unavailable; treating as UNKNOWN (%s)", str(exc)[:120])
     _bias_cache = (time.monotonic(), bias)
     return bias
 
@@ -615,7 +658,7 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
     today = now.date().isoformat()
     banned = banned_symbols()
     bias = _market_bias_cached()
-    out, missing_counts = [], {}
+    out, missing_counts, failed_symbols = [], {}, {}
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         tech = signal.get("technical_context") or {}
@@ -626,12 +669,15 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
             prev_close=float(bars[-1]["close"]) if bars else None,
             ema20=tech.get("ema20"), ema50=tech.get("ema50"),
             banned=symbol.upper() in banned, market_bias=bias, now=now,
+            has_bars=bool(bars), is_index=symbol.upper() in INDEX_SYMBOLS,
         )
+        if gate["missing_confirmations"]:
+            failed_symbols[symbol] = gate["missing_confirmations"][:4]
         for reason in gate["missing_confirmations"]:
             missing_counts[reason] = missing_counts.get(reason, 0) + 1
         out.append({**signal, **gate})
     passed = sum(1 for item in out if item.get("actionable"))
-    _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), at=now.isoformat(timespec="seconds"))
+    _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), failed_symbols=dict(list(failed_symbols.items())[:10]), at=now.isoformat(timespec="seconds"))
     return out
 
 
@@ -889,6 +935,7 @@ async def health():
             **ban_info(),
             "gate_last_scan": _gate_stats,
             "self_test": self_test.latest(),
+            "gap_fill": {"running": _gap_fill["running"], "symbols": _gap_fill["symbols"], "result": _gap_fill["result"]},
             "universe_missing_bars": _universe_gap()[:40],
         },
         "readiness": self_test.readiness(),

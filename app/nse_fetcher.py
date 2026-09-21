@@ -333,7 +333,7 @@ class NSESession:
                     logger.warning(f"HTTP {code} option-chain: {api_url}")
                     return None
 
-            logger.error(f"Option chain failed after {retries} attempts: {api_url}")
+            logger.error(f"NSE request failed after {retries} attempts: {api_url}")
             return None
 
 
