@@ -55,6 +55,25 @@ def summarize_candles(candles: list[dict]) -> dict[str, Any]:
     }
 
 
+def quote_context(quote: dict, opening_range: dict | None, now_minute: int) -> dict[str, Any] | None:
+    """Intraday context from a live Angel quote: exchange VWAP (avgPrice), session volume and
+    day range, plus an opening range observed by our own scans. Needs no candle API call."""
+    avg, day_open = float(quote.get("avg_price") or 0), float(quote.get("open") or 0)
+    if avg <= 0 or day_open <= 0:
+        return None
+    covered = bool(opening_range) and float(opening_range.get("span_min") or 0) >= 8 and now_minute >= OR_END_MIN
+    return {
+        "available": True, "vwap": avg, "vwap_kind": "exchange_avg_price", "day_open": day_open,
+        "day_high": float(quote.get("high") or 0), "day_low": float(quote.get("low") or 0),
+        "last_close": float(quote.get("ltp") or 0), "session_volume": float(quote.get("volume") or 0),
+        "or_high": opening_range["high"] if opening_range else None,
+        "or_low": opening_range["low"] if opening_range else None,
+        "or_complete": covered, "or_source": "observed_scans",
+        "last_minute": now_minute - 5,                      # gate adds 5 back: minutes since the open
+        "source": "angel_quote", "data_frequency": "scan", "vwap_age_s": 0.0, "candle_count": 0,
+    }
+
+
 def average_daily_volume(bars: list[dict], period: int = 20) -> float | None:
     volumes = [float(b.get("volume") or 0) for b in bars[-period:] if float(b.get("volume") or 0) > 0]
     return sum(volumes) / len(volumes) if len(volumes) >= max(5, period // 2) else None

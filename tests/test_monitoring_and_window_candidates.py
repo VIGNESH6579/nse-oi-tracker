@@ -138,6 +138,7 @@ def test_window_candidates_find_fresh_buildups_that_day_change_filter_misses(mon
 
 class _Resp:
     status_code = 403
+    text = "Access denied because of exceeding access rate"
     def raise_for_status(self):
         raise RuntimeError("HTTP Error 403")
 
@@ -150,8 +151,49 @@ def test_angel_historical_api_cools_down_after_403_instead_of_hammering(monkeypa
     calls = []
     monkeypatch.setattr(angel.requests, "post", lambda *a, **k: calls.append(1) or _Resp())
     monkeypatch.setenv("ANGEL_HIST_MIN_INTERVAL", "0")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="exceeding access rate"):        # body snippet is surfaced for diagnosis
         client.intraday_candles("TCS")
     with pytest.raises(angel.AngelUnavailable):
         client.intraday_candles("TCS")
     assert len(calls) == 1                                          # second call never left the process
+
+
+# ---------------- quote-based intraday context (no candle API) ----------------
+from analytics.intraday_confirm import quote_context
+from analytics.oi_window import OIWindow
+
+
+def test_opening_range_is_tracked_from_scan_prices_and_needs_coverage():
+    w = OIWindow()
+    day = datetime(2026, 9, 21, tzinfo=IST)
+    for minute, price in ((556, 100.0), (560, 101.5), (564, 99.5), (568, 100.8)):        # 09:16 .. 09:28
+        w.update("TCS", day.replace(hour=minute // 60, minute=minute % 60), price, 1000)
+    w.update("TCS", day.replace(hour=9, minute=40), 105.0, 1000)                         # after the range: ignored
+    rng = w.opening_range("TCS")
+    assert rng == {"high": 101.5, "low": 99.5, "span_min": 12, "samples": 4}
+    assert w.opening_range("NOPE") is None
+    w.update("LATE", day.replace(hour=9, minute=29), 50.0, 1000)
+    assert w.opening_range("LATE")["span_min"] == 0                                       # restarted at 09:29: not covered
+
+
+def test_quote_context_uses_exchange_vwap_and_flags_incomplete_opening_range():
+    quote = {"avg_price": 102.0, "open": 100.0, "high": 106.0, "low": 99.0, "ltp": 105.0, "volume": 30000}
+    full = quote_context(quote, {"high": 104.0, "low": 99.0, "span_min": 12, "samples": 6}, 10 * 60 + 5)
+    assert full["vwap"] == 102.0 and full["or_complete"] is True and full["last_minute"] == 10 * 60 and full["source"] == "angel_quote"
+    assert quote_context(quote, None, 10 * 60)["or_complete"] is False                  # e.g. right after a mid-day restart
+    assert quote_context(quote, {"high": 1, "low": 1, "span_min": 3, "samples": 2}, 10 * 60)["or_complete"] is False
+    assert quote_context({"avg_price": 0, "open": 100}, None, 600) is None             # index / missing avgPrice
+
+
+def test_gate_passes_a_setup_using_only_quote_context(monkeypatch):
+    monkeypatch.setattr(main, "banned_symbols", lambda: frozenset())
+    monkeypatch.setattr(main, "_market_bias_cached", lambda: "BULL")
+    monkeypatch.setattr(main, "now_ist", lambda: datetime(2026, 9, 21, 10, 0, tzinfo=IST))
+    ctx = quote_context({"avg_price": 102.0, "open": 100.0, "high": 106.0, "low": 99.0, "ltp": 104.5, "volume": 45000},
+                        {"high": 104.0, "low": 99.0, "span_min": 12, "samples": 6}, 10 * 60)
+    sig = {"symbol": "OKAY", "signal": "LONG_BUILDUP", "ltp": 104.5,
+           "oi_window": {"history_minutes": 30, "window_signal": "LONG_BUILDUP", "streak": 5, "h15": {"oi_pct": 1.0}},
+           "intraday_context": ctx, "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99}}
+    bars = {"OKAY": [{"trade_date": f"2026-08-{d:02d}", "close": 99.5, "volume": 50000} for d in range(1, 21)]}
+    out = main._apply_confirmation_gate([sig], bars)[0]
+    assert out["actionable"], out["missing_confirmations"]
