@@ -101,7 +101,7 @@ from utils.time import now_ist
 
 oi_window = OIWindow()
 _feed_symbols: set[str] = set()      # every underlying the OI feed reported (F&O truth for today)
-_NON_STOCK = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+_NON_STOCK = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI"}
 _last_scan_stats: dict = {"rows": 0, "parsed": 0, "candidates": 0}
 
 

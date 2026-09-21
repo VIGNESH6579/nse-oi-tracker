@@ -233,17 +233,17 @@ def _refresh_signals() -> list[dict]:
                         "vwap_age_s": 0.0,
                     }
                     _vwap_cache[cache_key] = (time.monotonic(), dict(context))
-            except Exception:
+            except Exception as exc:
                 _data_quality["candle_fail"] += 1
-                logger.warning("Angel candle VWAP unavailable for %s; retaining observation VWAP", symbol)
+                logger.warning("Angel candle VWAP unavailable for %s; retaining observation VWAP (%s)", symbol, str(exc)[:120])
         enriched_intraday.append({**signal, "intraday_context": context})
     signals = enriched_intraday
     if signals:
         bars_by_symbol: dict = {}
         try:
             symbols = [str(signal.get("symbol") or "") for signal in signals]
-            bars_by_symbol = repository.daily_equity_bars_for_symbols(symbols)
-            bars_by_symbol.update(repository.daily_index_bars_for_symbols(symbols))
+            bars_by_symbol = _merge_bars(repository.daily_equity_bars_for_symbols(symbols),
+                                         repository.daily_index_bars_for_symbols(symbols))
             signals = [
                 apply_daily_technical_context(
                     signal,
@@ -577,7 +577,7 @@ async def scheduled_backfill_topup() -> None:
         logger.exception("Post-close bhavcopy top-up failed")
 
 
-_gap_fill: dict = {"running": False, "last_start": None, "symbols": [], "result": None}
+_gap_fill: dict = {"running": False, "last_start": None, "symbols": [], "result": None, "gave_up": set()}
 
 
 def maybe_fill_feed_gaps() -> bool:
@@ -595,7 +595,7 @@ def maybe_fill_feed_gaps() -> bool:
     if not universe:
         return False
     extras = set(oi_engine._feed_symbols) - universe
-    missing = set(repository.symbols_missing_bars(universe | extras, 15))
+    missing = set(repository.symbols_missing_bars(universe | extras, 15)) - _gap_fill["gave_up"]
     if not missing:
         return False
     _gap_fill.update(running=True, last_start=time.monotonic(), symbols=sorted(missing)[:20])
@@ -604,7 +604,8 @@ def maybe_fill_feed_gaps() -> bool:
         try:
             add_extra_symbols(extras)
             _gap_fill["result"] = backfill_symbol_gaps(repository, missing, end_date=_backfill_end_date(), dates=20)
-            logger.info("Feed gap-fill finished symbols=%s result=%s", sorted(missing)[:20], _gap_fill["result"])
+            _gap_fill["gave_up"].update(repository.symbols_missing_bars(missing, 15))     # no bhavcopy rows exist: stop retrying
+            logger.info("Feed gap-fill finished symbols=%s result=%s gave_up=%s", sorted(missing)[:20], _gap_fill["result"], sorted(_gap_fill["gave_up"]))
         except Exception:
             logger.exception("Feed gap-fill failed")
         finally:
@@ -650,6 +651,21 @@ def _market_bias_cached() -> str:
             logger.warning("Nifty regime unavailable; treating as UNKNOWN (%s)", str(exc)[:120])
     _bias_cache = (time.monotonic(), bias)
     return bias
+
+
+def _merge_bars(equity: dict, index: dict) -> dict:
+    """Combine equity and index bars WITHOUT letting empty index lists erase stock history.
+
+    daily_index_bars_for_symbols() returns ``{symbol: []}`` for every requested symbol, so a
+    plain dict.update() blanked every stock's bars (ATR/EMA/volume were never available).
+    """
+    merged = dict(equity)
+    for symbol, bars in index.items():
+        if bars:
+            merged[symbol] = bars
+        else:
+            merged.setdefault(symbol, [])
+    return merged
 
 
 def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[dict]:
