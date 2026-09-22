@@ -545,7 +545,7 @@ function scanner() {
     clock: '', marketOpen: false, marketStatusLabel: '',
     activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'focus',
     search: '', sortBy: 'confidence',
-    trades: [], todayLabel: '', historySource: 'server', historyPerformance: null, watchPerformance: null, analyticsBreakdowns: null,
+    trades: [], todayLabel: '', historySource: 'server', historyPerformance: null,
 
 
     /* ?? signal type metadata ?? */
@@ -577,26 +577,12 @@ function scanner() {
     },
 
     get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE'); },
-    get watchEvents() { return this.trades.filter(t => t.tier === 'WATCH'); },
     statsFor(list) {
       const n = st => list.filter(t => t.status === st).length;
       const open = n('OPEN') + n('TG1_HIT'), totalR = list.reduce((a, t) => a + (t.result_r == null ? 0 : Number(t.result_r)), 0);
       return {total: list.length, open, tg2: n('TG2_HIT'), be: n('BE_EXIT'), sl: n('SL_HIT'), exp: n('EXPIRED'), totalR: Math.round(totalR * 100) / 100};
     },
     get tradeStats() { return this.statsFor(this.tradeEvents); },
-    get watchStats() { return this.statsFor(this.watchEvents); },
-    get focusReady() { return this.signals.filter(s => s.actionable); },
-    get focusWatch() {
-      return this.signals.filter(s => !s.actionable).sort((a, b) => (b.quality_score || 0) - (a.quality_score || 0)).slice(0, 6);
-    },
-    missingLabel(code) {
-      return ({oi_history_warmup:'Building 10-min OI history', oi_window_disagrees:'Last 15 min not confirming', persistence_short:'Not held for 4 scans',
-        wrong_side_of_vwap:'Wrong side of VWAP', opening_range_incomplete:'Opening range not known yet', inside_or_or_below:'Not above opening range',
-        inside_or_or_above:'Not below opening range', volume_too_low:'Volume below normal pace', rel_volume_unavailable:'Volume pace unknown',
-        extended_from_open:'Already moved too far', extended_from_vwap:'Stretched away from VWAP', gap_day_needs_volume:'Gap day needs stronger volume',
-        atr_unavailable:'ATR not ready', no_daily_bars:'No daily history', no_intraday_data:'No intraday data', fo_ban_period:'In F&O ban',
-        stale_price:'Price is stale', not_a_buildup_entry:'Not a build-up entry', gate_error:'Check error'})[code] || code;
-    },
     statusClass(st) {
       return ({OPEN:'bg-blue-950 text-blue-300 border-blue-800', TG1_HIT:'bg-green-950 text-green-300 border-green-800', BE_EXIT:'bg-amber-950 text-amber-300 border-amber-800',
         TG2_HIT:'bg-emerald-950 text-emerald-300 border-emerald-800', SL_HIT:'bg-red-950 text-red-300 border-red-800', EXPIRED:'bg-gray-800 text-gray-400 border-gray-700'})[st] || '';
@@ -626,7 +612,6 @@ function scanner() {
         const data = await r.json();
         this.trades = data.events || [];                  // the server is the only source: same on every device
         this.historyPerformance = data.performance || null;
-        this.watchPerformance = data.watch_performance || null;
         this.historySource = 'server';
         this.todayLabel = data.trade_date || this.todayLabel;
       } catch (e) {
