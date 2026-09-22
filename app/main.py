@@ -947,8 +947,30 @@ async def lifespan(app: FastAPI):
     # Preserve an already-populated cache (important for warm restarts and
     # deterministic API tests); production still performs the initial refresh
     # whenever no current signal snapshot exists.
+    #
+    # The scan/self-test/snapshot jobs registered above are correctly gated on
+    # market hours or a fixed clock window so they never hammer NSE/Angel
+    # outside trading hours. But Render Free sleeps and cold-starts at an
+    # arbitrary time, so relying only on those gated jobs left /api/health
+    # showing readiness=UNTESTED, last_scan_at=null and snapshot_*=null
+    # indefinitely whenever the process happened to boot outside those
+    # windows. Each pipeline is therefore also run ONCE, unconditionally,
+    # right here, in addition to (not instead of) the scheduled jobs. This
+    # does not change signal logic, add infra, or alter the recurring
+    # schedule; it only makes startup itself prove readiness once.
     if cache.get("all_signals") is None:
-        await scheduled_refresh()
+        try:
+            await refresh_signals()
+        except Exception:
+            logger.exception("Startup signal refresh failed")
+    try:
+        await scheduled_self_test("pre_open")
+    except Exception:
+        logger.exception("Startup self-test failed")
+    try:
+        await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
+    except Exception:
+        logger.warning("Startup snapshot skipped", exc_info=True)
     yield
     try:
         await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
