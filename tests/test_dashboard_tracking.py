@@ -42,4 +42,13 @@ def test_no_mangled_characters_in_visible_ui_strings():
 
 
 def test_market_overview_reads_are_null_safe_before_data_arrives():
-    assert not re.search(r"marketOverview\.(?!\?)[A-Za-z_]", INDEX)
+    unguarded = [m.group(0) for m in re.finditer(r"marketOverview\.(?!\?)[A-Za-z_]+", INDEX)
+                 if "marketOverview?.nse_timestamp ?" not in INDEX[max(0, m.start() - 60):m.start()]]
+    assert unguarded == []
+
+
+def test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
+    """Previously fetchMarketOverview() ran only at page load and on manual click, so the four
+    index CMPs (and VIX) went stale immediately while everything else kept refreshing."""
+    assert "Promise.all([this.fetchSignals(), this.fetchMarketOverview()]).then(() => this.startTimer())" in INDEX
+    assert "marketOverviewFetchedAt" in INDEX and "(stale)" in INDEX

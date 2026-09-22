@@ -76,12 +76,16 @@ class AngelOneMarketData:
         self._last_error_code = ""
         self._lock = RLock()
 
-    @staticmethod
-    def _lookup_symbol(symbol: str, *, exchange: str = "NSE") -> str:
+    _INDEX_ALIASES = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK", "FINNIFTY": "NIFTY FIN SERVICE",
+                      "MIDCPNIFTY": "NIFTY MID SELECT", "VIX": "INDIA VIX", "INDIAVIX": "INDIA VIX"}
+
+    @classmethod
+    def _lookup_symbol(cls, symbol: str, *, exchange: str = "NSE") -> str:
         """Normalize dashboard symbols to instrument-master lookup symbols."""
         normalized = symbol.upper().strip()
         if exchange.upper() == "NSE":
             normalized = normalized.removesuffix("-EQ")
+            normalized = cls._INDEX_ALIASES.get(normalized, normalized)
         return normalized
 
     @classmethod
@@ -214,13 +218,6 @@ class AngelOneMarketData:
 
     def instrument(self, symbol: str, *, exchange: str = "NSE") -> AngelInstrument | None:
         symbol = self._lookup_symbol(symbol, exchange=exchange)
-        if exchange.upper() == "NSE":
-            symbol = {
-                "NIFTY": "NIFTY 50",
-                "BANKNIFTY": "NIFTY BANK",
-                "FINNIFTY": "NIFTY FIN SERVICE",
-                "MIDCPNIFTY": "NIFTY MID SELECT",
-            }.get(symbol, symbol)
         instruments = self._get_instruments()
         return instruments.get((exchange.upper(), symbol))
 
@@ -231,10 +228,16 @@ class AngelOneMarketData:
         self._login()
         instruments = self._get_instruments()
         normalized_exchange = exchange.upper()
-        normalized_symbols = [self._lookup_symbol(symbol, exchange=normalized_exchange) for symbol in symbols]
-        tokens = [instruments[(normalized_exchange, symbol)].token
-                  for symbol in normalized_symbols
-                  if (normalized_exchange, symbol) in instruments]
+        # Map each ORIGINAL requested symbol (e.g. "NIFTY") to Angel's token, and remember which
+        # original key it was: Angel's response is keyed by its own tradingSymbol ("NIFTY 50"),
+        # which would never match a caller looking up quotes.get("NIFTY").
+        token_to_original: dict[str, str] = {}
+        for original in symbols:
+            normalized = self._lookup_symbol(original, exchange=normalized_exchange)
+            instrument = instruments.get((normalized_exchange, normalized))
+            if instrument:
+                token_to_original.setdefault(instrument.token, original.upper().strip())
+        tokens = list(token_to_original)
         output: dict[str, dict] = {}
         for offset in range(0, len(tokens), 50):
             batch = tokens[offset:offset + 50]
@@ -256,8 +259,11 @@ class AngelOneMarketData:
                 raise RuntimeError(f"Angel One quote request failed: {body.get('message', 'unknown error')}")
             self._last_quote_at = time.monotonic()
             for row in (body.get("data") or {}).get("fetched", []) or []:
-                raw_symbol = str(row.get("tradingSymbol") or row.get("symbol") or "").upper()
-                symbol = raw_symbol.removesuffix("-EQ")
+                token = str(row.get("symbolToken") or row.get("symboltoken") or "")
+                symbol = token_to_original.get(token)
+                if not symbol:
+                    raw_symbol = str(row.get("tradingSymbol") or row.get("symbol") or "").upper()
+                    symbol = raw_symbol.removesuffix("-EQ")
                 if symbol:
                     output[symbol] = {
                         "ltp": float(row.get("ltp") or 0),
