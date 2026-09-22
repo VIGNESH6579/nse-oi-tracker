@@ -13,9 +13,14 @@ def test_history_is_server_only_no_browser_log_and_no_manual_marking():
     assert "this.trades = data.events || []" in INDEX
 
 
-def test_trades_and_watchlist_are_separate_sections_with_automatic_statuses():
-    assert "get tradeEvents()" in INDEX and "get watchEvents()" in INDEX
-    assert "Watchlist" in INDEX and "passed every check" in INDEX
+def test_signal_history_shows_confirmed_trades_only_no_rejected_watchlist():
+    # Signal History must show only setups that passed the confirmation
+    # gate. A separate "Watchlist" listing of rejected candidates belongs
+    # nowhere in that tab; the user explicitly does not want it there.
+    assert "get tradeEvents()" in INDEX
+    assert "passed every check" in INDEX
+    assert "👁 Watchlist" not in INDEX
+    assert "signals that did not pass the checks" not in INDEX
     for label in ("TG2 hit", "SL hit", "TG1 hit, stopped at entry", "Time exit"):
         assert label in INDEX
     assert "no manual marking" in INDEX

@@ -122,7 +122,6 @@
            @click="activeTab = 'trades'">
         <span class="text-purple-300 font-bold" x-text="tradeEvents.length"></span>
         <span class="text-purple-600"> trades</span>
-        <span class="text-gray-500" x-text="' · ' + watchEvents.length + ' watched'"></span>
       </div>
 
       <!-- Countdown / refresh -->
@@ -312,6 +311,7 @@
                 <td class="px-3 py-2.5 text-gray-600 mono" x-text="idx+1"></td>
 
                 <td class="px-3 py-2.5">
+                  <span class="mono font-bold text-white text-xs" x-text="row.symbol"></span>
                 </td>
 
                 <td class="px-3 py-2.5 text-[10px] text-gray-400" x-text="row.sector || 'Unclassified'"></td>
@@ -553,7 +553,7 @@
         </div>
         </div>
         <template x-if="tradeEvents.length === 0">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl py-8 text-center text-gray-500 text-sm">No signal has passed every check yet today. See the watchlist below for what was seen.</div>
+          <div class="bg-gray-900 border border-gray-800 rounded-xl py-8 text-center text-gray-500 text-sm">No signal has passed every check yet today.</div>
         </template>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         <template x-for="t in tradeEvents" :key="t.id">
@@ -596,66 +596,6 @@
         </div>
       </section>
 
-      <section class="space-y-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="text-sm font-semibold text-amber-300">👁 Watchlist <span class="text-gray-500 font-normal">— signals that did not pass the checks (same tracking, for comparison)</span></h3>
-          <div class="flex flex-wrap gap-2 text-xs">
-          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-300">Total <b x-text="watchStats.total"></b></span>
-          <span class="px-2 py-1 bg-blue-950 border border-blue-800 rounded text-blue-300">Open <b x-text="watchStats.open"></b></span>
-          <span class="px-2 py-1 bg-emerald-950 border border-emerald-800 rounded text-emerald-300">TG2 <b x-text="watchStats.tg2"></b></span>
-          <span class="px-2 py-1 bg-amber-950 border border-amber-800 rounded text-amber-300">TG1 then entry <b x-text="watchStats.be"></b></span>
-          <span class="px-2 py-1 bg-red-950 border border-red-800 rounded text-red-300">SL <b x-text="watchStats.sl"></b></span>
-          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-400">Time exit <b x-text="watchStats.exp"></b></span>
-          <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded" :class="watchStats.totalR >= 0 ? 'text-green-300' : 'text-red-300'">Net <b x-text="(watchStats.totalR >= 0 ? '+' : '') + watchStats.totalR + 'R'"></b></span>
-        </div>
-        </div>
-        <template x-if="watchEvents.length === 0">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl py-8 text-center text-gray-500 text-sm">Nothing on the watchlist yet.</div>
-        </template>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        <template x-for="t in watchEvents" :key="t.id">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
-               :class="{'trade-open': ['OPEN','TG1_HIT'].includes(t.status), 'trade-tg1': t.status === 'BE_EXIT', 'trade-tg2': t.status === 'TG2_HIT', 'trade-sl': t.status === 'SL_HIT', 'trade-expired': t.status === 'EXPIRED'}">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-              <div class="flex items-center gap-2">
-                <span class="mono font-bold text-white text-sm" x-text="t.symbol"></span>
-                <span class="badge" :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
-                      x-text="t.direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
-                <span class="text-[10px] text-gray-500" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal)"></span>
-              </div>
-              <span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span>
-            </div>
-            <div class="grid grid-cols-4 gap-px bg-gray-800 text-center">
-              <div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600 uppercase tracking-wider">Entry</div>
-                <div class="mono text-xs font-bold lv-entry" x-text="'₹' + fmt2(t.entry)"></div></div>
-              <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 1 ? 'bg-green-950/30' : ''">
-                <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 1 <span x-show="Number(t.max_target_hit) >= 1" class="text-green-500">✓</span></div>
-                <div class="mono text-xs lv-tg1 font-semibold" x-text="'₹' + fmt2(t.tg1)"></div>
-                <div class="text-[9px] text-green-700" x-text="pctFrom(t.tg1, t.entry)"></div></div>
-              <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 2 ? 'bg-green-950/30' : ''">
-                <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 2 <span x-show="Number(t.max_target_hit) >= 2" class="text-green-500">✓</span></div>
-                <div class="mono text-xs lv-tg2 font-semibold" x-text="'₹' + fmt2(t.tg2)"></div>
-                <div class="text-[9px] text-green-700" x-text="pctFrom(t.tg2, t.entry)"></div></div>
-              <div class="bg-gray-900 px-2 py-2.5" :class="t.status === 'SL_HIT' ? 'bg-red-950/30' : ''">
-                <div class="text-[9px] text-gray-600 uppercase tracking-wider">SL <span x-show="t.status === 'SL_HIT'" class="text-red-400">✗</span></div>
-                <div class="mono text-xs lv-sl font-semibold" x-text="'₹' + fmt2(t.sl)"></div>
-                <div class="text-[9px] text-red-700" x-text="pctFrom(t.sl, t.entry)"></div></div>
-            </div>
-            <div class="px-4 py-2.5 border-t border-gray-800 text-xs text-gray-500 flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span>Opened <b class="text-gray-300 mono" x-text="hm(t.captured_at_ist)"></b></span>
-              <span x-show="t.currentLTP">Last <b class="mono" :class="pnlClass(t)" x-text="'₹' + fmt2(t.currentLTP)"></b></span>
-              <span x-show="t.closed_at_ist">Closed <b class="text-gray-300 mono" x-text="hm(t.closed_at_ist) + (t.exitPrice ? ' @ ₹' + fmt2(t.exitPrice) : '')"></b></span>
-              <span class="text-gray-600" x-show="['OPEN','TG1_HIT'].includes(t.status)">auto-tracked · checked every 30s</span>
-            </div>
-            <div x-show="(t.missing_confirmations || []).length" class="px-4 pb-3 flex flex-wrap gap-1">
-              <template x-for="m in (t.missing_confirmations || [])" :key="m">
-                <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700" x-text="missingLabel(m)"></span>
-              </template>
-            </div>
-          </div>
-        </template>
-        </div>
-      </section>
     </div>
   </div><!-- end trades tab -->
 
