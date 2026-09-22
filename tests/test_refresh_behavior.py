@@ -49,7 +49,7 @@ def test_startup_warns_when_bhavcopy_history_is_empty():
 
 
 def test_dashboard_and_api_only_keep_required_sections():
-    """Lean app: only signals / analytics / signal-history tabs and the endpoints they use."""
+    """Lean app: only focus / signals / signal-history tabs and the endpoints they use."""
     for tab in ("chain", "heatmap", "intel", "guide"):
         assert f"activeTab === '{tab}'" not in INDEX
     for route in ("/api/option-chain", "/api/market-intelligence", "/api/participant-oi", "/api/technical",
@@ -57,7 +57,9 @@ def test_dashboard_and_api_only_keep_required_sections():
         assert route not in MAIN
     for kept in ("/api/oi-signals", "/api/history/today", "/api/analytics/today", "/api/market-overview", "/api/health"):
         assert kept in MAIN
-    assert "['focus','signals','analytics','trades']" in INDEX
+    assert "['focus','signals','trades']" in INDEX
+    assert "activeTab === 'analytics'" not in INDEX
+    assert "/api/analytics/today" not in INDEX
 
 
 def test_data_source_labels_are_truthful():

@@ -195,11 +195,11 @@
 
   <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['focus','signals','analytics','trades']" :key="tab">
+    <template x-for="tab in ['focus','signals','trades']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{focus:'🎯 Focus', signals:'📡 Signals', analytics:'📊 Analytics', trades:'📋 Signal History'}[tab]"></span>
+        <span x-text="{focus:'🎯 Focus', signals:'📡 Signals', trades:'📋 Signal History'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -421,50 +421,6 @@
       </div>
     </div>
   </div><!-- end signals tab -->
-
-  <!-- Server-owned outcome analytics are deliberately labeled as candidates. -->
-  <div x-show="activeTab === 'analytics'" x-transition>
-    <div class="space-y-4">
-      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
-        <div class="flex items-start justify-between gap-3 mb-4">
-          <div>
-            <h2 class="text-sm font-semibold text-gray-200">Candidate Outcome Analytics</h2>
-            <p class="text-[10px] text-amber-400 mt-1">Stored OI/price candidate outcomes only — not validated options-strategy performance.</p>
-          </div>
-          <button @click="loadAnalytics()" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1">Refresh</button>
-        </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-center">
-          <template x-for="metric in analyticsCards()" :key="metric.label">
-            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3">
-              <div class="text-[10px] text-gray-500" x-text="metric.label"></div>
-              <div class="mono font-bold mt-1" :class="metric.cls" x-text="metric.value"></div>
-            </div>
-          </template>
-        </div>
-      </div>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" x-show="analyticsBreakdowns">
-        <template x-for="kind in ['sector_accuracy', 'stock_accuracy']" :key="kind">
-          <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-            <h3 class="px-4 py-3 text-xs font-semibold text-gray-300 border-b border-gray-800" x-text="kind === 'sector_accuracy' ? 'Sector candidate outcomes' : 'Stock candidate outcomes'"></h3>
-            <div class="max-h-80 overflow-y-auto scrollbar-thin">
-              <template x-for="item in breakdownRows(kind)" :key="item.name">
-                <div class="grid grid-cols-4 gap-2 px-4 py-2 border-b border-gray-800/60 text-[11px]">
-                  <span class="mono text-gray-300 truncate" x-text="item.name"></span>
-                  <span class="text-gray-500" x-text="item.events + ' events'"></span>
-                  <span class="text-amber-300" x-text="item.accuracy + '% hit' "></span>
-                  <span class="mono text-gray-400" x-text="item.pnl_points + ' pts'"></span>
-                </div>
-              </template>
-              <div x-show="breakdownRows(kind).length === 0" class="p-5 text-xs text-gray-600">No closed candidate outcomes yet.</div>
-            </div>
-          </div>
-        </template>
-      </div>
-      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4 text-xs text-gray-400 leading-relaxed">
-        Results are saved as a scan-time audit trail. The application does not know instrument selection, fill price, slippage, brokerage, position sizing, or whether an option contract was tradeable. Do not treat the figures as realised P&amp;L.
-      </div>
-    </div>
-  </div><!-- end analytics tab -->
 
   <!-- ??????????????????????????????????? TRADE HISTORY TAB ????????????????? -->
   <div x-show="activeTab === 'focus'" x-transition>
@@ -721,26 +677,6 @@ function scanner() {
       }
     },
 
-    /* ?? lifecycle ?? */
-    analyticsCards() {
-      const data = this.historyPerformance || {};
-      return [
-        {label:'Candidates', value:data.signals_generated ?? 0, cls:'text-gray-200'},
-        {label:'TP1 observed', value:data.tp1_hits ?? 0, cls:'text-green-400'},
-        {label:'TP2 observed', value:data.tp2_hits ?? 0, cls:'text-emerald-400'},
-        {label:'Stops observed', value:data.sl_hits ?? 0, cls:'text-red-400'},
-        {label:'Open / partial', value:data.open ?? 0, cls:'text-blue-300'},
-        {label:'Candidate hit rate', value:(data.accuracy ?? 0) + '%', cls:'text-amber-300'},
-        {label:'Net result', value:((data.total_r ?? 0) >= 0 ? '+' : '') + (data.total_r ?? 0) + 'R', cls:'text-green-300'},
-      ];
-    },
-
-    breakdownRows(kind) {
-      return Object.entries(this.analyticsBreakdowns?.[kind] || {})
-        .map(([name, value]) => ({name, ...value}))
-        .sort((a, b) => b.events - a.events || a.name.localeCompare(b.name));
-    },
-
     objectRows(record) {
       return Object.entries(record || {}).map(([name, value]) => ({name, value}));
     },
@@ -750,7 +686,6 @@ function scanner() {
       this.tickClock();
       setInterval(() => this.tickClock(), 1000);
       await Promise.all([this.fetchSignals(), this.fetchMarketOverview()]);
-      await this.loadAnalytics();
       this.startTimer();
     },
 
@@ -832,22 +767,6 @@ function scanner() {
     /* ?????? server-owned history ?????? */
 
     /* ?? option chain ?? */
-    async loadAnalytics() {
-      try {
-        const r = await fetch('/api/analytics/today');
-        if (!r.ok) return;
-        const data = await r.json();
-        this.historyPerformance = data.metrics || this.historyPerformance;
-        this.analyticsBreakdowns = data.breakdowns || null;
-      } catch (e) {
-        console.warn('Server analytics unavailable', e);
-      }
-    },
-
-
-
-
-
     /* ??????????????????????????????????????
        TRADE HISTORY LOGIC
     ?????????????????????????????????????? */
