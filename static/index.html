@@ -153,7 +153,7 @@
   <div x-show="marketOverview" class="bg-gray-900 rounded-xl border border-gray-800 p-3.5">
     <div class="flex flex-wrap items-center gap-2 mb-3">
       <h2 class="text-xs font-bold text-gray-200">Market Context: NSE indices &amp; VIX</h2>
-      <span class="text-[10px] text-gray-600 mono" x-text="marketOverview?.nse_timestamp || 'NSE timestamp unavailable'"></span>
+      <span class="text-[10px] text-gray-600 mono" x-text="(marketOverview?.nse_timestamp ? 'NSE ' + marketOverview.nse_timestamp : 'NSE timestamp unavailable') + (marketOverviewFetchedAt && (Date.now() - marketOverviewFetchedAt) > 90000 ? ' (stale)' : '')"></span>
       <span class="text-[10px] text-amber-400">Context only — not a trade signal</span>
       <div class="flex-1"></div>
       <button @click="fetchMarketOverview(true)" class="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800">Refresh context</button>
@@ -683,7 +683,7 @@ function scanner() {
     /* ?? state ?? */
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
     marketDataSource: '', oiSource: '', dataStatus: 'NOT_RUN', lastRefreshAt: '', isStale: false,
-    marketOverview: null, marketOverviewError: '',
+    marketOverview: null, marketOverviewError: '', marketOverviewFetchedAt: 0,
 
 
 
@@ -809,9 +809,7 @@ function scanner() {
       this.todayLabel = new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'short', day:'numeric' });
       this.tickClock();
       setInterval(() => this.tickClock(), 1000);
-      await this.fetchSignals();
-      await this.fetchMarketOverview();
-      await this.loadServerHistory();
+      await Promise.all([this.fetchSignals(), this.fetchMarketOverview()]);
       await this.loadAnalytics();
       this.startTimer();
     },
@@ -828,7 +826,12 @@ function scanner() {
     startTimer() {
       this.countdown = 60;
       const t = setInterval(() => {
-        if (--this.countdown <= 0) { clearInterval(t); this.fetchSignals().then(() => this.startTimer()); }
+        if (--this.countdown <= 0) {
+          clearInterval(t);
+          // Signals and the index/VIX context both refresh on the same 60s cycle now; previously the
+          // Market Context card only ever loaded once at page open, so its CMP went stale immediately.
+          Promise.all([this.fetchSignals(), this.fetchMarketOverview()]).then(() => this.startTimer());
+        }
       }, 1000);
     },
 
@@ -846,6 +849,7 @@ function scanner() {
         const r = await fetch('/api/market-overview' + (force ? '?refresh=true' : ''));
         if (!r.ok) throw new Error('HTTP ' + r.status);
         this.marketOverview = await r.json();
+      this.marketOverviewFetchedAt = Date.now();
       } catch (e) {
         this.marketOverviewError = 'NSE market context unavailable: ' + e.message;
       }
