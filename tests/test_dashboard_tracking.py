@@ -28,9 +28,9 @@ def test_signal_history_shows_confirmed_trades_only_no_rejected_watchlist():
 
 def test_focus_tab_explains_what_each_candidate_is_waiting_for():
     assert "['focus','signals','trades']" in INDEX and "activeTab: 'focus'" in INDEX
-    assert "get focusReady()" in INDEX and "get focusWatch()" in INDEX and "missingLabel(code)" in INDEX
-    for code in ("oi_window_disagrees", "persistence_short", "extended_from_open", "wrong_side_of_vwap", "no_daily_bars"):
-        assert code in INDEX
+    assert "Only signals that passed every rule are monitored here" in INDEX
+    assert "tradeEvents" in INDEX and "No signal has passed every rule yet today." in INDEX
+    assert "focusWatch" not in INDEX
 
 
 def test_signal_table_uses_the_server_plan_so_levels_match_the_tracked_trade():

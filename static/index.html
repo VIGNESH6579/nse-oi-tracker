@@ -427,64 +427,21 @@
     <div class="space-y-5">
       <div>
         <h2 class="text-base font-bold text-white">🎯 Signal Focus</h2>
-        <p class="text-xs text-gray-500 mt-0.5">What is tradeable right now, and what each candidate is still waiting for. Everything is tracked automatically.</p>
+        <p class="text-xs text-gray-500 mt-0.5">Only signals that passed every rule are monitored here until TG1, TG2, SL, breakeven, or time exit.</p>
       </div>
-
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-green-300">✅ Ready now <span class="text-gray-500 font-normal">— passed every check</span></h3>
-        <template x-if="focusReady.length === 0">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl py-6 text-center text-gray-500 text-sm">Nothing has passed every check right now. The closest candidates are below.</div>
+      <template x-if="tradeEvents.length === 0">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl py-10 text-center text-gray-500 text-sm">No signal has passed every rule yet today.</div>
+      </template>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <template x-for="t in tradeEvents" :key="t.id">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade" :class="{'trade-open': ['OPEN','TG1_HIT'].includes(t.status), 'trade-tg1': t.status === 'BE_EXIT', 'trade-tg2': t.status === 'TG2_HIT', 'trade-sl': t.status === 'SL_HIT', 'trade-expired': t.status === 'EXPIRED'}">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800"><div><span class="mono font-bold text-white" x-text="t.symbol"></span><span class="ml-2 text-[10px] text-gray-500" x-text="(t.signal_label || t.signal) + ' · ' + t.direction"></span></div><span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span></div>
+            <div class="grid grid-cols-4 gap-px bg-gray-800 text-center"><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">Entry</div><div class="mono text-xs" x-text="'₹' + fmt2(t.entry)"></div></div><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">Current</div><div class="mono text-xs" :class="pnlClass(t)" x-text="'₹' + fmt2(t.currentLTP)"></div></div><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">TG1 / TG2</div><div class="mono text-xs text-green-400" x-text="fmt2(t.tg1) + ' / ' + fmt2(t.tg2)"></div></div><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">SL</div><div class="mono text-xs text-red-400" x-text="fmt2(t.sl)"></div></div></div>
+            <div class="px-4 py-2 text-[10px] text-gray-500 flex flex-wrap gap-x-3"><span x-text="'P&L ' + ((pnlClass(t) === 'text-green-400' ? '+' : '') + (((t.currentLTP - t.entry) / t.entry * 100) * (t.direction === 'SELL' ? -1 : 1)).toFixed(2) + '%')"></span><span x-text="'Opened ' + hm(t.captured_at_ist)"></span><span x-show="t.closed_at_ist" x-text="'Closed ' + hm(t.closed_at_ist)"></span></div>
+          </div>
         </template>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          <template x-for="s in focusReady" :key="s.symbol + s.signal">
-            <div class="bg-gray-900 border border-green-800 rounded-xl p-4">
-              <div class="flex items-center justify-between">
-                <span class="mono font-bold text-white" x-text="s.symbol"></span>
-                <span class="badge" :class="s.signal_direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'" x-text="s.signal_direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
-              </div>
-              <div class="mt-2 grid grid-cols-4 gap-1 text-center text-[10px]">
-                <div><div class="text-gray-600">Entry</div><div class="mono text-xs text-white" x-text="'₹' + fmt2(levels(s).entry)"></div></div>
-                <div><div class="text-gray-600">TG1</div><div class="mono text-xs text-green-400" x-text="'₹' + fmt2(levels(s).tg1)"></div></div>
-                <div><div class="text-gray-600">TG2</div><div class="mono text-xs text-emerald-400" x-text="'₹' + fmt2(levels(s).tg2)"></div></div>
-                <div><div class="text-gray-600">SL</div><div class="mono text-xs text-red-400" x-text="'₹' + fmt2(levels(s).sl)"></div></div>
-              </div>
-              <div class="mt-2 text-[10px] text-gray-500" x-text="'Quality ' + (s.quality_score ?? 0) + '/100 · auto-tracked from entry'"></div>
-            </div>
-          </template>
-        </div>
-      </section>
-
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-amber-300">👀 Closest to ready <span class="text-gray-500 font-normal">— and what each is waiting for</span></h3>
-        <template x-if="focusWatch.length === 0">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl py-6 text-center text-gray-500 text-sm">No other candidates right now.</div>
-        </template>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          <template x-for="s in focusWatch" :key="s.symbol + s.signal">
-            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-              <div class="flex items-center justify-between">
-                <span class="mono font-bold text-white" x-text="s.symbol"></span>
-                <span class="badge" :class="s.signal_direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'" x-text="s.signal_direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
-              </div>
-              <div class="mt-2 h-1.5 bg-gray-800 rounded"><div class="h-1.5 rounded bg-amber-500" :style="'width:' + Math.max(3, Math.min(100, s.quality_score || 0)) + '%'"></div></div>
-              <div class="mt-1 text-[10px] text-gray-500" x-text="'Quality ' + (s.quality_score ?? 0) + '/100'"></div>
-              <div class="mt-2 flex flex-wrap gap-1">
-                <template x-for="m in (s.missing_confirmations || [])" :key="m">
-                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700" x-text="missingLabel(m)"></span>
-                </template>
-              </div>
-            </div>
-          </template>
-        </div>
-      </section>
-
-      <section class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-        <div class="text-xs text-gray-400">Tracked automatically today:
-          <b class="text-white" x-text="tradeStats.total"></b> trades (<b class="text-blue-300" x-text="tradeStats.open"></b> open) ·
-          <b class="text-white" x-text="watchStats.total"></b> watched</div>
-        <div class="text-sm font-bold mono" :class="tradeStats.totalR >= 0 ? 'text-green-400' : 'text-red-400'" x-text="'Net ' + (tradeStats.totalR >= 0 ? '+' : '') + tradeStats.totalR + 'R'"></div>
-        <button @click="activeTab = 'trades'" class="text-xs text-brand hover:text-sky-300">Open Signal History →</button>
-      </section>
+      </div>
+      <section class="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3"><div class="text-xs text-gray-400"><b class="text-white" x-text="tradeStats.total"></b> confirmed signals monitored today · <b class="text-blue-300" x-text="tradeStats.open"></b> still open</div><div class="text-sm font-bold mono" :class="tradeStats.totalR >= 0 ? 'text-green-400' : 'text-red-400'" x-text="'Net ' + (tradeStats.totalR >= 0 ? '+' : '') + tradeStats.totalR + 'R'"></div><button @click="activeTab = 'trades'" class="text-xs text-brand hover:text-sky-300">Open Signal History →</button></section>
     </div>
   </div>
 
