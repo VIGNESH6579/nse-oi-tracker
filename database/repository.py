@@ -820,7 +820,7 @@ class SignalRepository:
                         plan["target_2"],
                         plan["risk_reward"],
                         plan["source"],
-                        float(payload.get("ltp") or 0),
+                        float(plan["entry"]),
                         captured_at.isoformat(),
                         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str),
                     ),

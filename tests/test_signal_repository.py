@@ -34,7 +34,16 @@ def test_snapshots_are_deduplicated_and_events_are_server_owned(tmp_path):
     assert total == 1
     assert events[0]["symbol"] == "RELIANCE"
     assert events[0]["entry"] == 100.0
+    assert events[0]["currentLTP"] == events[0]["entry"]
     assert events[0]["risk_source"] == "percentage_fallback_pending_atr"
+
+
+def test_initial_ltp_is_normalized_to_rounded_entry(tmp_path):
+    repository = SignalRepository(tmp_path / "prices.sqlite3")
+    repository.record_scan([_signal("PRICE", 100.1234)], datetime(2026, 9, 10, 10, 0, tzinfo=IST))
+    events, _ = repository.history_for_date("2026-09-10")
+    assert events[0]["entry"] == 100.12
+    assert events[0]["currentLTP"] == events[0]["entry"]
 
 
 def test_repeated_open_setup_is_not_counted_as_a_new_trade(tmp_path):
@@ -122,7 +131,6 @@ def test_daily_equity_bars_are_upserted_and_returned_chronologically(tmp_path):
     assert [row["trade_date"] for row in multi["RELIANCE"]] == ["2026-09-10", "2026-09-11"]
     assert multi["MISSING"] == []
     assert repository.daily_equity_bar_summary()["bars"] == 2
-
 
 
 
