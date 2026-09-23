@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from signal_engine.risk import build_risk_plan
+from app.config import CONFIDENCE_HIGH
 from config.settings import get_settings
 from utils.time import as_ist, ist_trade_date
 
@@ -734,6 +735,9 @@ class SignalRepository:
                 if payload.get("confirmation_gate") == "FAILED":
                     # Failed confirmation candidates are not trades and must not enter
                     # the event table or the independent trade monitor.
+                    continue
+                if int(payload.get("confidence") or 0) < CONFIDENCE_HIGH:
+                    # The event table is reserved for high-quality setups only.
                     continue
                 settings = get_settings()
                 skip_reason = None

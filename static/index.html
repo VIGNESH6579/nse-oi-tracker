@@ -435,7 +435,16 @@
 
       <section class="space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="text-sm font-semibold text-green-300">✅ Trades <span class="text-gray-500 font-normal">— passed every check</span></h3>
+          <div>
+            <h3 class="text-sm font-semibold text-green-300">✅ High-quality confirmed trades <span class="text-gray-500 font-normal">— all four signal types, passed every check</span></h3>
+            <div class="flex flex-wrap gap-1.5 mt-2">
+              <template x-for="kind in signalTypeFilters" :key="kind.key">
+                <button @click="signalTypeFilter = kind.key" class="text-[10px] px-2 py-1 rounded border transition"
+                        :class="signalTypeFilter === kind.key ? 'bg-sky-950 border-sky-700 text-sky-200' : 'bg-gray-900 border-gray-700 text-gray-500 hover:text-gray-300'"
+                        x-text="kind.label"></button>
+              </template>
+            </div>
+          </div>
           <div class="flex flex-wrap gap-2 text-xs">
           <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-gray-300">Total <b x-text="tradeStats.total"></b></span>
           <span class="px-2 py-1 bg-blue-950 border border-blue-800 rounded text-blue-300">Open <b x-text="tradeStats.open"></b></span>
@@ -446,16 +455,16 @@
           <span class="px-2 py-1 bg-gray-900 border border-gray-700 rounded" :class="tradeStats.totalR >= 0 ? 'text-green-300' : 'text-red-300'">Net <b x-text="(tradeStats.totalR >= 0 ? '+' : '') + tradeStats.totalR + 'R'"></b></span>
         </div>
         </div>
-        <template x-if="tradeEvents.length === 0">
+        <template x-if="highQualityTradeEvents.length === 0">
           <div class="bg-gray-900 border border-gray-800 rounded-xl py-8 text-center text-gray-500 text-sm">No signal has passed every check yet today.</div>
         </template>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        <template x-for="t in tradeEvents" :key="t.id">
+        <template x-for="t in highQualityTradeEvents" :key="t.id">
           <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
                :class="{'trade-open': ['OPEN','TG1_HIT'].includes(t.status), 'trade-tg1': t.status === 'BE_EXIT', 'trade-tg2': t.status === 'TG2_HIT', 'trade-sl': t.status === 'SL_HIT', 'trade-expired': t.status === 'EXPIRED'}">
             <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
               <div class="flex items-center gap-2">
-                <span class="mono font-bold text-white text-sm" x-text="t.symbol"></span>
+                <span class="text-[9px] text-gray-600 uppercase">Stock</span><span class="mono font-bold text-white text-sm" x-text="t.symbol"></span>
                 <span class="badge" :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
                       x-text="t.direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
                 <span class="text-[10px] text-gray-500" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal)"></span>
@@ -525,7 +534,12 @@ function scanner() {
     error: '', countdown: 60,
     clock: '', marketOpen: false, marketStatusLabel: '',
     activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'trades',
-    search: '', sortBy: 'confidence',
+    search: '', sortBy: 'confidence', signalTypeFilter: 'ALL',
+    signalTypeFilters: [
+      {key:'ALL', label:'All confirmed'}, {key:'LONG_BUILDUP', label:'Long Buildup'},
+      {key:'SHORT_BUILDUP', label:'Short Buildup'}, {key:'SHORT_COVERING', label:'Short Covering'},
+      {key:'LONG_UNWINDING', label:'Long Unwinding'},
+    ],
     trades: [], todayLabel: '', historySource: 'server', historyPerformance: null,
 
 
@@ -557,7 +571,10 @@ function scanner() {
       return list;
     },
 
-    get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE'); },
+    get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE' && Number(t.confidence || 0) >= 75); },
+    get highQualityTradeEvents() {
+      return this.tradeEvents.filter(t => this.signalTypeFilter === 'ALL' || t.signal === this.signalTypeFilter);
+    },
     statsFor(list) {
       const n = st => list.filter(t => t.status === st).length;
       const open = n('OPEN') + n('TG1_HIT'), totalR = list.reduce((a, t) => a + (t.result_r == null ? 0 : Number(t.result_r)), 0);
