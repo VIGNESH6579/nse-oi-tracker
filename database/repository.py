@@ -732,10 +732,8 @@ class SignalRepository:
                     )
                     continue
                 if payload.get("confirmation_gate") == "FAILED":
-                    # Not tradeable by the quality gate, but still tracked automatically (entry at first
-                    # sighting, TG/SL graded by the server) so every signal gets a result and you can see
-                    # whether the gate is blocking winners.
-                    self._record_watch(connection, snapshot_id, trade_date, captured_at, payload, plan, symbol, signal_name, direction)
+                    # Failed confirmation candidates are not trades and must not enter
+                    # the event table or the independent trade monitor.
                     continue
                 settings = get_settings()
                 skip_reason = None
