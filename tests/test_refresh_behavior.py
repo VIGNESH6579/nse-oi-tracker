@@ -57,7 +57,8 @@ def test_dashboard_and_api_only_keep_required_sections():
         assert route not in MAIN
     for kept in ("/api/oi-signals", "/api/history/today", "/api/analytics/today", "/api/market-overview", "/api/health"):
         assert kept in MAIN
-    assert "['focus','signals','trades']" in INDEX
+    assert "['trades']" in INDEX
+    assert "activeTab === 'signals'" not in INDEX
     assert "activeTab === 'analytics'" not in INDEX
     assert "/api/analytics/today" not in INDEX
 

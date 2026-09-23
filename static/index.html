@@ -97,25 +97,6 @@
            :class="isStale ? 'bg-amber-950 border-amber-800 text-amber-300' : 'bg-gray-800 border-gray-700 text-gray-400'"
            x-text="(isStale ? 'Stale scan · ' : 'Updated · ') + lastRefreshAt"></div>
 
-      <!-- Active signals badge -->
-      <div x-show="totalActive > 0"
-           class="bg-blue-950 border border-blue-800 px-2.5 py-1 rounded-full text-xs">
-        <span class="text-blue-300 font-bold" x-text="totalActive"></span>
-        <span class="text-blue-600"> signals</span>
-      </div>
-
-      <!-- HIGH confidence badge -->
-      <div x-show="highConf > 0"
-           class="bg-green-950 border border-green-800 px-2.5 py-1 rounded-full text-xs font-semibold text-green-300">
-        ⭐⭐⭐ <span x-text="highConf"></span> HIGH
-      </div>
-
-      <!-- MEDIUM confidence badge -->
-      <div x-show="mediumConf > 0"
-           class="bg-blue-950 border border-blue-800 px-2.5 py-1 rounded-full text-xs font-semibold text-blue-300">
-        ⭐⭐ <span x-text="mediumConf"></span> MED
-      </div>
-
       <!-- Trades badge -->
       <div x-show="trades.length > 0"
            class="bg-purple-950 border border-purple-800 px-2.5 py-1 rounded-full text-xs cursor-pointer"
@@ -195,11 +176,11 @@
 
   <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['focus','signals','trades']" :key="tab">
+    <template x-for="tab in ['trades']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{focus:'🎯 Focus', signals:'📡 Signals', trades:'📋 Signal History'}[tab]"></span>
+        <span x-text="{trades:'📋 Confirmed Signal History'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -448,8 +429,8 @@
   <div x-show="activeTab === 'trades'" x-transition>
     <div class="space-y-6">
       <div>
-        <h2 class="text-base font-bold text-white">📋 Signal History</h2>
-        <p class="text-xs text-gray-500 mt-0.5" x-text="'Date: ' + todayLabel + '  ·  tracked automatically by the server every 30 seconds — no manual marking, same on every device'"></p>
+        <h2 class="text-base font-bold text-white">📋 Confirmed Signal History</h2>
+        <p class="text-xs text-gray-500 mt-0.5" x-text="'Date: ' + todayLabel + '  ·  only signals that passed every rule · entry, exit, target and stop tracked automatically'"></p>
       </div>
 
       <section class="space-y-3">
@@ -543,7 +524,7 @@ function scanner() {
     loading: false,
     error: '', countdown: 60,
     clock: '', marketOpen: false, marketStatusLabel: '',
-    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'focus',
+    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'trades',
     search: '', sortBy: 'confidence',
     trades: [], todayLabel: '', historySource: 'server', historyPerformance: null,
 

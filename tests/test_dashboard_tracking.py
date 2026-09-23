@@ -23,14 +23,14 @@ def test_signal_history_shows_confirmed_trades_only_no_rejected_watchlist():
     assert "signals that did not pass the checks" not in INDEX
     for label in ("TG2 hit", "SL hit", "TG1 hit, stopped at entry", "Time exit"):
         assert label in INDEX
-    assert "no manual marking" in INDEX
+    assert "entry, exit, target and stop tracked automatically" in INDEX
 
 
-def test_focus_tab_explains_what_each_candidate_is_waiting_for():
-    assert "['focus','signals','trades']" in INDEX and "activeTab: 'focus'" in INDEX
-    assert "Only signals that passed every rule are monitored here" in INDEX
-    assert "tradeEvents" in INDEX and "No signal has passed every rule yet today." in INDEX
-    assert "focusWatch" not in INDEX
+def test_single_confirmed_history_tab_replaces_focus_and_raw_signals():
+    assert "['trades']" in INDEX and "activeTab: 'trades'" in INDEX
+    assert "Confirmed Signal History" in INDEX
+    assert "tradeEvents" in INDEX and "No signal has passed every check yet today." in INDEX
+    assert "activeTab === 'signals'" not in INDEX
 
 
 def test_signal_table_uses_the_server_plan_so_levels_match_the_tracked_trade():
@@ -41,7 +41,7 @@ def test_no_mangled_characters_in_visible_ui_strings():
     """A tool once replaced every emoji/rupee sign with '?'. Guard the visible ones."""
     assert "'?' + fmt2(" not in INDEX
     assert not re.search(r"emoji:'\?\?'", INDEX)
-    assert "\u20b9" in INDEX and "\U0001F3AF Focus" in INDEX
+    assert "\u20b9" in INDEX and "Confirmed Signal History" in INDEX
     assert "<title>NSE F&O OI Scanner ??</title>" not in INDEX
     assert "FII/DII values are public" not in INDEX
 

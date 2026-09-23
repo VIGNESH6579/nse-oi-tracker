@@ -113,6 +113,11 @@ _last_refresh_was_stale = False
 _last_snapshot_id: int | None = None
 _last_refresh_completed_monotonic = 0.0
 _started_at = now_ist()
+_startup_state = "STARTING"
+_startup_ready_at_ist: str | None = None
+_startup_error: str | None = None
+_scheduler_started_at_ist: str | None = None
+_scheduler_heartbeat_at_ist: str | None = None
 MIN_REFRESH_INTERVAL_SECONDS = 45.0
 _vwap_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 _last_vwap_request_at = 0.0
@@ -389,6 +394,8 @@ async def refresh_signals() -> list[dict]:
 
 async def scheduled_refresh() -> None:
     """Refresh only during an exchange-open session."""
+    global _scheduler_heartbeat_at_ist
+    _scheduler_heartbeat_at_ist = now_ist().isoformat()
     if not is_market_open():
         return
     try:
@@ -567,31 +574,6 @@ async def automatic_startup_backfill() -> None:
         logger.info("Automatic bhavcopy backfill finished (market_hours=%s cap=%d): %s", in_market_hours, limit, result)
     except Exception:
         logger.exception("Automatic bhavcopy backfill failed")
-
-
-async def _startup_backfill_then_retest() -> None:
-    """Run the bounded startup backfill, then re-run scan + self-test once.
-
-    automatic_startup_backfill() runs as a background task so it never blocks
-    app startup, but that means the startup self-test (which runs immediately
-    at boot) can capture a stale BLOCKED/bars_coverage verdict from before the
-    backfill it depends on has finished. Re-running once, only after the
-    backfill task itself completes, closes that gap without ever blocking
-    startup and without changing the backfill's own bounded behaviour.
-    """
-    try:
-        await automatic_startup_backfill()
-    except Exception:
-        logger.exception("Startup backfill wrapper failed")
-        return
-    try:
-        await refresh_signals()
-    except Exception:
-        logger.exception("Post-backfill signal refresh failed")
-    try:
-        await scheduled_self_test("pre_open")
-    except Exception:
-        logger.exception("Post-backfill self-test failed")
 
 
 async def scheduled_durable_snapshot() -> None:
@@ -811,7 +793,9 @@ async def scheduled_trade_monitor() -> None:
     Independent of the signal list and of dashboard visits, so target/stop/breakeven are
     caught even after a symbol drops off the published signals.
     """
+    global _scheduler_heartbeat_at_ist
     now = now_ist()
+    _scheduler_heartbeat_at_ist = now.isoformat()
     minutes = now.hour * 60 + now.minute
     if now.weekday() >= 5 or not (9 * 60 + 15 <= minutes <= 15 * 60 + 15):
         return
@@ -870,7 +854,11 @@ async def background_poller():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _startup_state, _startup_ready_at_ist, _startup_error
+    global _scheduler_started_at_ist, _scheduler_heartbeat_at_ist
     logger.info(f"NSE OI Tracker v{APP_VERSION} starting")
+    _startup_state = "STARTING"
+    _startup_error = None
     scheduler = AsyncIOScheduler(timezone=IST)
     scheduler.add_job(
         scheduled_refresh,
@@ -945,6 +933,8 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
+    _scheduler_started_at_ist = now_ist().isoformat()
+    _scheduler_heartbeat_at_ist = _scheduler_started_at_ist
     gc.freeze()
     # Restore analytics before any market-data backfill; the restore is optional
     # and bounded, so an unavailable bucket never blocks application startup.
@@ -960,7 +950,7 @@ async def lifespan(app: FastAPI):
     # blocking health/startup. The deployment setting controls whether it runs.
     if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):
         if settings.startup_backfill and render_startup_backfill_enabled():
-            asyncio.create_task(_startup_backfill_then_retest())
+            asyncio.create_task(automatic_startup_backfill())
         else:
             logger.warning("Daily bhavcopy history is empty or stale and automatic backfill is disabled.")
     if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
@@ -972,31 +962,13 @@ async def lifespan(app: FastAPI):
     # Preserve an already-populated cache (important for warm restarts and
     # deterministic API tests); production still performs the initial refresh
     # whenever no current signal snapshot exists.
-    #
-    # The scan/self-test/snapshot jobs registered above are correctly gated on
-    # market hours or a fixed clock window so they never hammer NSE/Angel
-    # outside trading hours. But Render Free sleeps and cold-starts at an
-    # arbitrary time, so relying only on those gated jobs left /api/health
-    # showing readiness=UNTESTED, last_scan_at=null and snapshot_*=null
-    # indefinitely whenever the process happened to boot outside those
-    # windows. Each pipeline is therefore also run ONCE, unconditionally,
-    # right here, in addition to (not instead of) the scheduled jobs. This
-    # does not change signal logic, add infra, or alter the recurring
-    # schedule; it only makes startup itself prove readiness once.
     if cache.get("all_signals") is None:
-        try:
-            await refresh_signals()
-        except Exception:
-            logger.exception("Startup signal refresh failed")
-    try:
-        await scheduled_self_test("pre_open")
-    except Exception:
-        logger.exception("Startup self-test failed")
-    try:
-        await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
-    except Exception:
-        logger.warning("Startup snapshot skipped", exc_info=True)
+        await scheduled_refresh()
+    _startup_state = "READY"
+    _startup_ready_at_ist = now_ist().isoformat()
+    logger.info("NSE OI Tracker startup READY scheduler=%s", _scheduler_started_at_ist)
     yield
+    _startup_state = "STOPPING"
     try:
         await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
     except Exception:
@@ -1036,6 +1008,9 @@ async def root():
 async def health():
     """Health check ? GET and HEAD supported (UptimeRobot uses HEAD)."""
     now = now_ist()
+    persisted_snapshot = repository.latest_snapshot_metadata()
+    effective_last_scan_at = _last_refresh_at_ist or (persisted_snapshot or {}).get("captured_at_ist")
+    effective_snapshot_id = _last_snapshot_id or (persisted_snapshot or {}).get("id")
     status = get_market_status(now)
     daily_equity_data = repository.daily_equity_bar_summary()
     daily_index_data = repository.daily_index_bar_summary()
@@ -1054,7 +1029,7 @@ async def health():
         "uptime_s":      round(max(0.0, (now - _started_at).total_seconds()), 2),
         "data_source":   oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet",
         "price_source":  "angel_one_quotes" if angel_market_data else "nse_oi_feed",
-        "last_scan_at":  _last_refresh_at_ist,
+        "last_scan_at":  effective_last_scan_at,
         "scan_age_s":    round(scan_age, 2) if scan_age is not None else None,
         "atr_coverage_pct": coverage["atr_coverage_pct"],
         "history_ready_pct": coverage["history_ready_pct"],
@@ -1077,13 +1052,18 @@ async def health():
             "gap_fill": {"running": _gap_fill["running"], "symbols": _gap_fill["symbols"], "result": _gap_fill["result"]},
             "universe_missing_bars": _universe_gap()[:40],
         },
-        "readiness": self_test.readiness(),
+        "readiness": self_test.readiness() if self_test.readiness() != "UNTESTED" else _startup_state,
+        "startup_state": _startup_state,
+        "startup_ready_at_ist": _startup_ready_at_ist,
+        "startup_error": _startup_error,
+        "scheduler_started_at_ist": _scheduler_started_at_ist,
+        "scheduler_heartbeat_at_ist": _scheduler_heartbeat_at_ist,
         "fno_universe_source": universe_source(),
         "fno_universe_size": cached_universe_size(),
         **last_snapshot_info(),
-        "last_refresh_at_ist": _last_refresh_at_ist,
+        "last_refresh_at_ist": _last_refresh_at_ist or effective_last_scan_at,
         "last_refresh_was_stale": _last_refresh_was_stale,
-        "last_snapshot_id": _last_snapshot_id,
+        "last_snapshot_id": effective_snapshot_id,
         "holiday_calendar": holiday_calendar_metadata(),
         "daily_equity_data": daily_equity_data,
         "bhavcopy_backfill_required": bhavcopy_backfill_required(daily_equity_data, now),
@@ -1234,14 +1214,15 @@ async def today_history(
 ):
     """Return server-owned signal events visible for the current IST date."""
     trade_date = ist_trade_date()
-    events, total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
+    events, _total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
+    events = [event for event in events if (event.get("tier") or "TRADE") == "TRADE"]
     performance = await asyncio.to_thread(repository.performance_for_date, trade_date)
     watch_performance = await asyncio.to_thread(repository.performance_for_date, trade_date, "WATCH")
     return {
         "trade_date": trade_date,
         "visible_history_scope": "today_ist",
         "reset_policy": "Previous-day events are archived at 00:05 IST.",
-        "total_events": total,
+        "total_events": len(events),
         "events": events,
         "performance": performance,
         "watch_performance": watch_performance,

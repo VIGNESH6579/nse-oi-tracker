@@ -825,6 +825,19 @@ class SignalRepository:
                 )
             return SnapshotWrite(snapshot_id=snapshot_id, created=True, signal_count=len(signals))
 
+    def latest_snapshot_metadata(self) -> dict[str, Any] | None:
+        """Return the newest persisted scan marker for restart-safe health data."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, captured_at_ist, is_stale, signal_count
+                FROM scan_snapshots
+                ORDER BY captured_at_ist DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+
     def update_open_events(self, signals: Iterable[dict[str, Any]], observed_at: datetime,
                            extra_prices: dict[str, float] | None = None) -> int:
         """Monitor same-day open events against live prices.
