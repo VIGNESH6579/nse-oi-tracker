@@ -30,7 +30,7 @@ def test_single_confirmed_history_tab_replaces_focus_and_raw_signals():
     assert "['trades']" in INDEX and "activeTab: 'trades'" in INDEX
     assert "Confirmed Signal History" in INDEX
     assert "tradeEvents" in INDEX and "No signal has passed every check yet today." in INDEX
-    assert "activeTab === 'signals'" not in INDEX
+    assert "x-for=\"tab in ['trades']\"" in INDEX
 
 
 def test_signal_table_uses_the_server_plan_so_levels_match_the_tracked_trade():
