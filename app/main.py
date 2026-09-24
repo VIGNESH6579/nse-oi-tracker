@@ -1215,7 +1215,11 @@ async def today_history(
     """Return server-owned signal events visible for the current IST date."""
     trade_date = ist_trade_date()
     events, _total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
-    events = [event for event in events if (event.get("tier") or "TRADE") in {"TRADE", "CANDIDATE"}]
+    events = [
+        event for event in events
+        if (event.get("tier") or "TRADE") in {"TRADE", "CANDIDATE"}
+        and int(event.get("confidence") or 0) >= 75
+    ]
     performance = await asyncio.to_thread(repository.performance_for_date, trade_date)
     watch_performance = await asyncio.to_thread(repository.performance_for_date, trade_date, "WATCH")
     return {

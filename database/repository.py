@@ -245,6 +245,12 @@ class SignalRepository:
                 )
             if "tier" not in columns:
                 connection.execute("ALTER TABLE signal_events ADD COLUMN tier TEXT NOT NULL DEFAULT 'TRADE'")
+            connection.execute(
+                """UPDATE signal_events SET tier = 'CANDIDATE'
+                   WHERE tier = 'TRADE' AND confidence >= ?
+                     AND json_extract(payload_json, '$.confirmation_gate') = 'FAILED'""",
+                (CONFIDENCE_HIGH,),
+            )
             if "result_r" not in columns:
                 connection.execute("ALTER TABLE signal_events ADD COLUMN result_r REAL")
             if "last_seen_at_ist" not in columns:
