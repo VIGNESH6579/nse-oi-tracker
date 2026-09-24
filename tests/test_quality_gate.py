@@ -184,7 +184,7 @@ def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
     with repo._connect() as c:
         events = [r[0] for r in c.execute("SELECT symbol FROM signal_events ORDER BY id")]
         skips = [(r[0], r[1]) for r in c.execute("SELECT symbol, skip_reason FROM setup_skips")]
-    assert events == ["OKAY"] and skips == []           # gate-failed candidates are not trades
+    assert events == ["OKAY", "BAN"] and skips == []           # high-quality failed-gate candidate remains visible, not monitored
     with repo._connect() as c:
         tiers = dict(c.execute("SELECT symbol, tier FROM signal_events").fetchall())
-    assert tiers == {"OKAY": "TRADE"}
+    assert tiers == {"OKAY": "TRADE", "BAN": "CANDIDATE"}

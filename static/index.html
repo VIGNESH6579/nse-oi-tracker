@@ -571,7 +571,8 @@ function scanner() {
       return list;
     },
 
-    get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE' && Number(t.confidence || 0) >= 75); },
+    get tradeEvents() { return this.trades.filter(t => ['TRADE', 'CANDIDATE'].includes(t.tier || 'TRADE') && Number(t.confidence || 0) >= 75); },
+    get confirmedTradeEvents() { return this.tradeEvents.filter(t => (t.tier || 'TRADE') === 'TRADE'); },
     get highQualityTradeEvents() {
       return this.tradeEvents.filter(t => this.signalTypeFilter === 'ALL' || t.signal === this.signalTypeFilter);
     },
@@ -580,13 +581,13 @@ function scanner() {
       const open = n('OPEN') + n('TG1_HIT'), totalR = list.reduce((a, t) => a + (t.result_r == null ? 0 : Number(t.result_r)), 0);
       return {total: list.length, open, tg2: n('TG2_HIT'), be: n('BE_EXIT'), sl: n('SL_HIT'), exp: n('EXPIRED'), totalR: Math.round(totalR * 100) / 100};
     },
-    get tradeStats() { return this.statsFor(this.tradeEvents); },
+    get tradeStats() { return this.statsFor(this.confirmedTradeEvents); },
     statusClass(st) {
       return ({OPEN:'bg-blue-950 text-blue-300 border-blue-800', TG1_HIT:'bg-green-950 text-green-300 border-green-800', BE_EXIT:'bg-amber-950 text-amber-300 border-amber-800',
         TG2_HIT:'bg-emerald-950 text-emerald-300 border-emerald-800', SL_HIT:'bg-red-950 text-red-300 border-red-800', EXPIRED:'bg-gray-800 text-gray-400 border-gray-700'})[st] || '';
     },
     statusLabel(t) {
-      const base = ({OPEN:'\u25cf OPEN', TG1_HIT:'\u2705 TG1 hit \u00b7 stop at entry', TG2_HIT:'\uD83C\uDFAF TG2 hit', SL_HIT:'\u274C SL hit',
+      const base = ({CANDIDATE:'HIGH SIGNAL · WAITING FOR CONFIRMATION', OPEN:'\u25cf OPEN', TG1_HIT:'\u2705 TG1 hit \u00b7 stop at entry', TG2_HIT:'\uD83C\uDFAF TG2 hit', SL_HIT:'\u274C SL hit',
         BE_EXIT:'\u21A9 TG1 hit, stopped at entry', EXPIRED:'\u23F1 Time exit'})[t.status] || t.status;
       return base + (t.result_r != null ? ' \u00b7 ' + (t.result_r >= 0 ? '+' : '') + Number(t.result_r).toFixed(2) + 'R' : '');
     },

@@ -219,16 +219,17 @@ def test_gate_failed_signal_is_not_tracked_or_graded(tmp_path):
     repo = SignalRepository(tmp_path / "w.sqlite3")
     for minute in (0, 2, 4, 6):                                       # same candidate seen on 4 scans
         repo.record_scan([_failed("WATCHME", price=100.0 + minute * 0.01)], AT + timedelta(minutes=minute))
-    assert _rows(repo) == []
+    assert _rows(repo) == [("WATCHME", "CANDIDATE", "OPEN")]
+    assert repo.update_open_events([], AT + timedelta(minutes=10), extra_prices={"WATCHME": 101.0}) == 0
 
 
 def test_rejected_candidates_do_not_consume_trade_caps(tmp_path):
     repo = SignalRepository(tmp_path / "t.sqlite3")
     repo.record_scan([_failed("W1"), _failed("W2"), _failed("W3")], AT)
     repo.record_scan([_passed("TRADE1")], AT + timedelta(minutes=2))
-    assert [r[1] for r in _rows(repo)] == ["TRADE"]
+    assert [r[1] for r in _rows(repo)] == ["CANDIDATE", "CANDIDATE", "CANDIDATE", "TRADE"]
     repo.record_scan([_passed("W1")], AT + timedelta(minutes=4))
-    assert [(r[0], r[1]) for r in _rows(repo)] == [("TRADE1", "TRADE"), ("W1", "TRADE")]
+    assert [(r[0], r[1]) for r in _rows(repo)] == [("W1", "CANDIDATE"), ("W2", "CANDIDATE"), ("W3", "CANDIDATE"), ("TRADE1", "TRADE"), ("W1", "TRADE")]
     trade = repo.performance_for_date("2026-09-21", "TRADE")
     assert trade["signals_generated"] == 2
 
@@ -239,9 +240,9 @@ def test_rejected_rows_are_not_created_late_or_early(tmp_path):
     assert _rows(repo) == []
     repo.record_scan([_failed("EARLY")], AT)
     events, total = repo.history_for_date("2026-09-21")
-    assert total == 0 and events == []
+    assert total == 1 and events[0]["tier"] == "CANDIDATE"
     assert repo.backtest_events("2026-09-21", "2026-09-21") == []
-    assert repo.backtest_events("2026-09-21", "2026-09-21", tier=None) == []
+    assert len(repo.backtest_events("2026-09-21", "2026-09-21", tier=None)) == 1
 
 
 def test_daily_ingestion_stores_only_the_fno_universe_and_coverage_uses_it(tmp_path, monkeypatch):

@@ -625,6 +625,31 @@ class SignalRepository:
             ).fetchall()
         return [{**dict(row), "payload": json.loads(str(row["payload_json"]))} for row in rows]
 
+    @staticmethod
+    def _record_candidate(connection: sqlite3.Connection, snapshot_id: int, trade_date: str, captured_at: datetime,
+                          payload: dict[str, Any], plan: dict[str, Any], symbol: str, signal_name: str, direction: str) -> None:
+        """Persist a high-confidence visible candidate without enabling trade monitoring."""
+        existing = connection.execute(
+            "SELECT id FROM signal_events WHERE trade_date = ? AND archived = 0 AND tier = 'CANDIDATE' AND symbol = ? AND direction = ? ORDER BY id DESC LIMIT 1",
+            (trade_date, symbol, direction),
+        ).fetchone()
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        if existing is not None:
+            connection.execute(
+                "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ?, payload_json = ? WHERE id = ?",
+                (float(payload.get("ltp") or 0), captured_at.isoformat(), encoded, existing["id"]),
+            )
+            return
+        connection.execute(
+            """INSERT INTO signal_events (
+                snapshot_id, trade_date, captured_at_ist, symbol, signal, direction, confidence, entry, stop_loss,
+                target_1, target_2, risk_reward, risk_source, current_price, last_seen_at_ist, payload_json, tier
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CANDIDATE')""",
+            (snapshot_id, trade_date, captured_at.isoformat(), symbol, signal_name, direction,
+             int(payload.get("confidence") or 0), plan["entry"], plan["stop_loss"], plan["target_1"], plan["target_2"],
+             plan["risk_reward"], plan["source"], float(plan["entry"]), captured_at.isoformat(), encoded),
+        )
+
     def _record_watch(self, connection: sqlite3.Connection, snapshot_id: int, trade_date: str, captured_at: datetime,
                       payload: dict[str, Any], plan: dict[str, Any], symbol: str, signal_name: str, direction: str) -> None:
         """Track a gate-failed candidate as a WATCH row: one per symbol+direction per day."""
@@ -733,8 +758,8 @@ class SignalRepository:
                     )
                     continue
                 if payload.get("confirmation_gate") == "FAILED":
-                    # Failed confirmation candidates are not trades and must not enter
-                    # the event table or the independent trade monitor.
+                    if int(payload.get("confidence") or 0) >= CONFIDENCE_HIGH and self._inside_entry_window(captured_at):
+                        self._record_candidate(connection, snapshot_id, trade_date, captured_at, payload, plan, symbol, signal_name, direction)
                     continue
                 if int(payload.get("confidence") or 0) < CONFIDENCE_HIGH:
                     # The event table is reserved for high-quality setups only.
@@ -867,7 +892,7 @@ class SignalRepository:
                 """
                 SELECT id, symbol, direction, entry, stop_loss, target_1, target_2, max_target_hit
                 FROM signal_events
-                WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')
+                WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE' AND status IN ('OPEN', 'TG1_HIT')
                 """,
                 (trade_date,),
             ).fetchall()
