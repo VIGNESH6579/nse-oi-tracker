@@ -30,6 +30,18 @@ def test_signal_api_exposes_actual_data_source_status():
     assert 'realtime_source' in MAIN
 
 
+def test_angel_candles_are_preferred_over_quote_opening_range_proxy():
+    assert 'intraday_candles(symbol, interval="FIVE_MINUTE"' in MAIN
+    assert 'if qctx and qctx["or_complete"]' not in MAIN
+
+
+def test_fii_dii_cash_activity_is_not_advertised_as_signal_input():
+    sources = (ROOT / "analytics" / "sources.py").read_text(encoding="utf-8")
+    overview = (ROOT / "analytics" / "market_overview.py").read_text(encoding="utf-8")
+    assert '"status": "NOT_USED"' in sources
+    assert "intentionally omitted from signal logic" in overview
+
+
 def test_refreshes_have_a_minimum_interval_guard():
     assert "MIN_REFRESH_INTERVAL_SECONDS = 45.0" in MAIN
     assert "Skipping duplicate signal refresh inside" in MAIN

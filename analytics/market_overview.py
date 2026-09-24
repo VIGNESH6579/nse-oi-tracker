@@ -26,7 +26,7 @@ def normalize_market_overview(
     indices_payload: Mapping[str, Any] | None,
     fii_dii_rows: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Produce a compact stable public-market snapshot with source timestamps."""
+    """Produce a compact stable index snapshot; FII/DII is compatibility-only."""
     payload = indices_payload or {}
     rows = payload.get("data", []) if isinstance(payload, Mapping) else []
     by_index = {
@@ -74,5 +74,5 @@ def normalize_market_overview(
             "advance_decline_ratio": round(advances / declines, 4) if advances is not None and declines else None,
         },
         "fii_dii_cash_activity": activity,
-        "data_caveat": "FII/DII values are public cash-market activity, not a real-time positioning signal.",
+        "data_caveat": "FII/DII cash activity is intentionally omitted from signal logic; context uses indices, VIX, and breadth.",
     }

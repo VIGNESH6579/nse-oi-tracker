@@ -37,6 +37,11 @@ def test_signal_table_uses_the_server_plan_so_levels_match_the_tracked_trade():
     assert "row.plan && row.plan.entry" in INDEX
 
 
+def test_confirmed_history_keeps_only_trade_levels_and_times():
+    assert "Entry time" in INDEX and "Exit" in INDEX
+    assert "auto-tracked · checked every 30s" not in INDEX
+
+
 def test_no_mangled_characters_in_visible_ui_strings():
     """A tool once replaced every emoji/rupee sign with '?'. Guard the visible ones."""
     assert "'?' + fmt2(" not in INDEX

@@ -205,15 +205,10 @@ def _refresh_signals() -> list[dict]:
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
-        # Every buildup candidate needs candles for the gate (VWAP, opening range, volume pace),
-        # not only confidence>=70 ones; the per-scan budget below bounds the Angel call rate.
+        # Prefer candles for the gate (VWAP, opening range, volume pace). Quote
+        # context remains a fallback only; the budget bounds historical calls.
         _now = now_ist()
         qctx = quote_context(signal.get("angel_quote") or {}, oi_engine.oi_window.opening_range(symbol), _now.hour * 60 + _now.minute)
-        if qctx and qctx["or_complete"] and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
-            # Everything the gate needs is already here: no historical-candle call (Angel answers many with 403).
-            _data_quality["quote_ctx"] = _data_quality.get("quote_ctx", 0) + 1
-            enriched_intraday.append({**signal, "intraday_context": qctx})
-            continue
         if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
             try:
                 global _last_vwap_request_at
