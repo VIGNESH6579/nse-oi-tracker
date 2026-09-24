@@ -464,7 +464,7 @@
                :class="{'trade-open': ['OPEN','TG1_HIT'].includes(t.status), 'trade-tg1': t.status === 'BE_EXIT', 'trade-tg2': t.status === 'TG2_HIT', 'trade-sl': t.status === 'SL_HIT', 'trade-expired': t.status === 'EXPIRED'}">
             <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
               <div class="flex items-center gap-2">
-                <span class="text-[9px] text-gray-600 uppercase">Stock</span><span class="mono font-bold text-white text-sm" x-text="t.symbol"></span>
+                <span class="text-[9px] text-gray-600 uppercase">Stock</span><span class="mono font-bold text-white text-sm" x-text="t.stock_name || t.symbol"></span>
                 <span class="badge" :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
                       x-text="t.direction === 'BUY' ? '▲ BUY' : '▼ SELL'"></span>
                 <span class="text-[10px] text-gray-500" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal)"></span>

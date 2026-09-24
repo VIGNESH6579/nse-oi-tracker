@@ -1133,6 +1133,7 @@ class SignalRepository:
                 {
                     "id": int(row["id"]),
                     "tradeDate": row["trade_date"],
+                    "stock_name": payload.get("stock_name") or row["symbol"],
                     "captured_at_ist": row["captured_at_ist"],
                     "direction": row["direction"],
                     "entry": row["entry"],
