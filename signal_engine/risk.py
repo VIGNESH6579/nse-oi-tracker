@@ -53,7 +53,7 @@ def build_risk_plan(
     if atr > 0:
         # Daily ATR is a conservative proxy for missing five-minute ATR.
         atr_intraday = atr * 0.5
-        stop_pct = min(1.2, max(0.35, (1.2 * atr_intraday / ltp) * 100.0))
+        stop_pct = min(2.5, max(0.35, (1.2 * atr_intraday / ltp) * 100.0))
         risk = ltp * stop_pct / 100.0
         if direction == "BUY":
             stop_loss, target_1, target_2 = ltp - risk, ltp + risk, ltp + (risk * 2)
