@@ -719,7 +719,9 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
             prev_close=float(bars[-1]["close"]) if bars else None,
             ema20=tech.get("ema20"), ema50=tech.get("ema50"),
             banned=symbol.upper() in banned, market_bias=bias, now=now,
-            has_bars=bool(bars), is_index=symbol.upper() in INDEX_SYMBOLS,
+            has_bars=bool(bars), daily_validation_ready=tech.get("validation_ready") is True,
+            require_real_intraday=True,
+            is_index=symbol.upper() in INDEX_SYMBOLS,
         )
         if gate["missing_confirmations"]:
             failed_symbols[symbol] = gate["missing_confirmations"][:4]

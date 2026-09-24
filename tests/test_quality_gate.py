@@ -105,6 +105,17 @@ def test_gate_fails_closed_on_missing_inputs():
     assert "atr_unavailable" in evaluate_gate(**g)["missing_confirmations"]
 
 
+def test_gate_fails_closed_when_bhavcopy_history_is_incomplete():
+    g = _good(); g["daily_validation_ready"] = False
+    result = evaluate_gate(**g)
+    assert not result["actionable"] and "daily_history_incomplete" in result["missing_confirmations"]
+
+
+def test_production_gate_rejects_quote_only_intraday_context():
+    result = evaluate_gate(**_good(), require_real_intraday=True)
+    assert not result["actionable"] and "real_5m_candles_unavailable" in result["missing_confirmations"]
+
+
 def test_gate_extension_ban_gap_and_counter_trend():
     g = _good(); g["signal"] = {"signal": "LONG_BUILDUP", "ltp": 106.0}
     assert "extended_from_open" in evaluate_gate(**g)["missing_confirmations"]
@@ -169,8 +180,9 @@ def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
     good = {"symbol": "OKAY", "signal": "LONG_BUILDUP", "signal_direction": "BUY", "ltp": 104.5, "confidence": 90,
             "oi_window": {"history_minutes": 30, "window_signal": "LONG_BUILDUP", "streak": 5, "h15": {"oi_pct": 1.0}},
             "intraday_context": {"available": True, "vwap": 102.0, "or_high": 104.0, "or_low": 99.0, "or_complete": True,
-                                 "day_open": 100.0, "last_minute": 9 * 60 + 55, "session_volume": 30000},
-            "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99}}
+                                  "day_open": 100.0, "last_minute": 9 * 60 + 55, "session_volume": 30000,
+                                  "source": "angel_one_5m_ohlcv", "data_frequency": "FIVE_MINUTE", "candle_count": 12},
+            "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99, "validation_ready": True}}
     bad = {**good, "symbol": "BAN"}
     bars = {s: [{"trade_date": "2026-09-18", "close": 99.5, "volume": 50000}] * 12 for s in ("OKAY", "BAN")}
     out = {r["symbol"]: r for r in main._apply_confirmation_gate([good, bad], bars)}

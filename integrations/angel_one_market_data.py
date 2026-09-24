@@ -265,12 +265,22 @@ class AngelOneMarketData:
                     raw_symbol = str(row.get("tradingSymbol") or row.get("symbol") or "").upper()
                     symbol = raw_symbol.removesuffix("-EQ")
                 if symbol:
+                    ltp = float(row.get("ltp") or 0)
+                    open_price = float(row.get("open") or 0)
+                    high = float(row.get("high") or 0)
+                    low = float(row.get("low") or 0)
+                    close = float(row.get("close") or 0)
+                    if (min(ltp, open_price, high, low, close) <= 0
+                            or high < max(ltp, open_price, low, close)
+                            or low > min(ltp, open_price, high, close)):
+                        logger.warning("Ignoring malformed Angel quote for %s: invalid OHLC range", symbol)
+                        continue
                     output[symbol] = {
-                        "ltp": float(row.get("ltp") or 0),
-                        "open": float(row.get("open") or 0),
-                        "high": float(row.get("high") or 0),
-                        "low": float(row.get("low") or 0),
-                        "close": float(row.get("close") or 0),
+                        "ltp": ltp,
+                        "open": open_price,
+                        "high": high,
+                        "low": low,
+                        "close": close,
                         "volume": int(float(row.get("tradeVolume") or row.get("volume") or 0)),
                         "oi": int(float(row.get("opnInterest") or row.get("openInterest") or 0)),
                         "change_pct": float(row.get("percentChange") or 0),

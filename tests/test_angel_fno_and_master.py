@@ -133,6 +133,24 @@ def test_full_quotes_covers_indices_and_keys_results_by_the_requested_symbol():
     assert sent["exchangeTokens"]["NSE"] == ["99926000", "99926009", "11536"]
 
 
+def test_full_quotes_discards_impossible_ohlc_rows():
+    c = _client()
+    c._instruments = {("NSE", "POLICYBZR"): AngelInstrument("POLICYBZR", "77", "NSE")}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"status": True, "data": {"fetched": [{
+                "symbolToken": "77", "tradingSymbol": "POLICYBZR-EQ",
+                "ltp": 1282.3, "open": 1697.7, "high": 1697.7,
+                "low": 1282.3, "close": 1886.3, "tradeVolume": 1,
+                "percentChange": -31.56, "avgPrice": 1303.78,
+            }]}}
+
+    c.full_quotes.__globals__["requests"].post = lambda *a, **k: R()
+    assert c.full_quotes(["POLICYBZR"]) == {}
+
+
 def test_lookup_symbol_aliases_all_four_indices_and_vix():
     for raw, expected in (("NIFTY", "NIFTY 50"), ("BANKNIFTY", "NIFTY BANK"), ("FINNIFTY", "NIFTY FIN SERVICE"),
                           ("MIDCPNIFTY", "NIFTY MID SELECT"), ("VIX", "INDIA VIX")):

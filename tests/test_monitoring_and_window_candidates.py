@@ -193,10 +193,10 @@ def test_gate_passes_a_setup_using_only_quote_context(monkeypatch):
                         {"high": 104.0, "low": 99.0, "span_min": 12, "samples": 6}, 10 * 60)
     sig = {"symbol": "OKAY", "signal": "LONG_BUILDUP", "ltp": 104.5,
            "oi_window": {"history_minutes": 30, "window_signal": "LONG_BUILDUP", "streak": 5, "h15": {"oi_pct": 1.0}},
-           "intraday_context": ctx, "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99}}
+           "intraday_context": ctx, "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99, "validation_ready": True}}
     bars = {"OKAY": [{"trade_date": f"2026-08-{d:02d}", "close": 99.5, "volume": 50000} for d in range(1, 21)]}
     out = main._apply_confirmation_gate([sig], bars)[0]
-    assert out["actionable"], out["missing_confirmations"]
+    assert not out["actionable"] and "real_5m_candles_unavailable" in out["missing_confirmations"]
 
 
 # ---------------- tiers: every signal is tracked automatically ----------------

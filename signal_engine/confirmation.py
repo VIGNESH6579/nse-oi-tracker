@@ -48,6 +48,8 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
                   atr14: float | None, avg_volume: float | None, prev_close: float | None,
                   ema20: float | None, ema50: float | None, banned: bool, market_bias: str,
                   now: datetime, cfg: GateConfig | None = None, has_bars: bool = True,
+                  daily_validation_ready: bool = True,
+                  require_real_intraday: bool = False,
                   is_index: bool = False) -> dict[str, Any]:
     cfg = cfg or GateConfig.from_env()
     name = str(signal.get("signal") or "NEUTRAL")
@@ -63,6 +65,7 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
 
     need(direction is not None, "not_a_buildup_entry")
     need(has_bars, "no_daily_bars")
+    need(daily_validation_ready, "daily_history_incomplete")
     need(not banned, "fo_ban_period")
     need(signal.get("stale_price") is not True, "stale_price")
     history = float(oi_ctx.get("history_minutes") or 0)
@@ -72,6 +75,11 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
     intraday = intraday or {}
     vwap = intraday.get("vwap")
     have_intraday = bool(intraday.get("available")) and vwap and ltp > 0
+    if require_real_intraday:
+        real_candles = (intraday.get("source") == "angel_one_5m_ohlcv"
+                        and intraday.get("data_frequency") == "FIVE_MINUTE"
+                        and int(intraday.get("candle_count") or 0) >= 3)
+        need(real_candles, "real_5m_candles_unavailable")
     rel = None
     if need(have_intraday, "no_intraday_data") and direction:
         need((ltp > vwap) if direction == "BUY" else (ltp < vwap), "wrong_side_of_vwap")
