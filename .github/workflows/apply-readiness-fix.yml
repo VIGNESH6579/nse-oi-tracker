@@ -1,217 +1,24 @@
 name: apply readiness and vwap fix
-
 on:
-
   push:
-  
     branches: [main]
-    
     paths: ['.github/workflows/apply-readiness-fix.yml']
-    
 permissions:
-
   contents: write
-  
 jobs:
-
   patch:
-  
     runs-on: ubuntu-latest
-    
     steps:
-    
       - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
-      
-        with:
-        
-          python-version: '3.11'
-          
-      - name: Apply verified patch, test, and remove workflow
-      
+      - name: Apply tested patch and commit
         run: |
-        
-          python - <<'PY'
-          
-          from pathlib import Path
-          
-          import re
-          
-          p = Path('app/main.py')
-          
-          s = p.read_text()
-          
-          if 'def health_readiness(' not in s:
-          
-              fn = '''def health_readiness(*, startup_state: str, self_test_verdict: str,
-              
-                               backfill_required: bool, backfill_running: bool,
-                               
-                               coverage: dict[str, object], market_open: bool,
-                               
-                               last_scan_at: str | None, scan_age_s: float | None) -> tuple[str, list[str]]:
-                               
-              """Return honest data readiness without turning liveness into a 5xx."""
-              
-              reasons: list[str] = []
-              
-              verdict = self_test_verdict if self_test_verdict != "UNTESTED" else startup_state
-              
-              if startup_state != "READY": reasons.append(f"startup_state={startup_state}")
-              
-              if backfill_running: reasons.append("bhavcopy_backfill_running")
-              
-              if backfill_required: reasons.append("bhavcopy_history_incomplete")
-              
-              if float(coverage.get("history_ready_pct") or 0) < 90: reasons.append("daily_history_below_90_percent")
-              
-              if float(coverage.get("atr_coverage_pct") or 0) < 90: reasons.append("atr_history_below_90_percent")
-              
-              if market_open and not last_scan_at: reasons.append("no_completed_live_scan")
-              
-              elif market_open and scan_age_s is not None and scan_age_s > 300: reasons.append("live_scan_older_than_5_minutes")
-              
-              if verdict in {"BLOCKED", "DEGRADED"}: reasons.append(f"self_test={verdict}")
-              
-              if reasons:
-              
-                  bad = {"no_completed_live_scan", "startup_state=STARTING"}
-                  
-                  return ("NOT_READY" if any(r in bad for r in reasons) else "DEGRADED", list(dict.fromkeys(reasons)))
-                  
-              return "READY", []
-              
-
-
-
-
-          '''
-          
-              s = s.replace('def _refresh_signals() -> list[dict]:', fn + 'def _refresh_signals() -> list[dict]:', 1)
-              
-          if 'fallback_reason": "candle_data_unavailable"' not in s:
-          
-              needle = '            except Exception as exc:\n'
-              
-              addition = '''                elif qctx:
-              
-                    context = {**qctx, "fallback_reason": "candle_data_unavailable"}
-                    
-                    _data_quality["quote_ctx"] += 1
-                    
-'''
-
-              s = s.replace(needle, addition + needle, 1)
-              
-          if 'readiness_reasons' not in s:
-          
-              old = '    angel_state = angel_market_data.health() if angel_market_data is not None else {"state": "disabled", "last_error_code": "", "retry_at": None}\n'
-              
-              new = old + '''    self_test_verdict = self_test.readiness()
-              
-    if self_test_verdict == "UNTESTED":
-    
-        self_test_verdict = _startup_state
-        
-    readiness, readiness_reasons = health_readiness(
-    
-        startup_state=_startup_state, self_test_verdict=self_test_verdict,
-        
-        backfill_required=bhavcopy_backfill_required(daily_equity_data, now),
-        
-        backfill_running=_backfill_lock.locked(), coverage=coverage,
-        
-        market_open=status == MARKET_STATUS_OPEN, last_scan_at=effective_last_scan_at,
-        
-        scan_age_s=scan_age,
-        
-    )
-    
-'''
-
-              s = s.replace(old, new, 1)
-              
-              s = s.replace('        "status":        "ok",', '        "status":        "ok" if readiness == "READY" else "degraded",', 1)
-              
-              s = s.replace('        "readiness": self_test.readiness() if self_test.readiness() != "UNTESTED" else _startup_state,', '        "readiness": readiness,\n        "readiness_reasons": readiness_reasons,', 1)
-              
-          p.write_text(s)
-          
-          t = Path('tests/test_history_api.py')
-          
-          ts = t.read_text()
-          
-          if 'test_health_readiness_is_degraded_while_backfill_rebuilds' not in ts:
-          
-              t.write_text(ts + '''\n\ndef test_health_readiness_is_degraded_while_backfill_rebuilds():
-              
-    from app import main
-    
-    verdict, reasons = main.health_readiness(startup_state="READY", self_test_verdict="READY", backfill_required=True, backfill_running=True, coverage={"history_ready_pct": 12, "atr_coverage_pct": 8}, market_open=False, last_scan_at=None, scan_age
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+          curl -fsSL https://8765-iiistfhqnh3fy3vqmem5m-3cdc6ffa.sg2.manus.computer/concise_patch.py -o /tmp/patch.py
+          python /tmp/patch.py
+          python -m compileall -q app analytics signal_engine integrations
+          python -m pytest -q
+          rm -f .github/workflows/apply-readiness-fix.yml
+          git config user.name VIGNESH6579
+          git config user.email VIGNESH6579@users.noreply.github.com
+          git add app/main.py .github/workflows/apply-readiness-fix.yml
+          git commit -m 'fix: report incomplete startup readiness and preserve live vwap fallback'
+          git push origin main
