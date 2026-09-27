@@ -580,6 +580,31 @@ async def automatic_startup_backfill() -> None:
         logger.exception("Automatic bhavcopy backfill failed")
 
 
+async def _startup_backfill_then_retest() -> None:
+    """Run the bounded startup backfill, then re-run scan + self-test once.
+
+    automatic_startup_backfill() runs as a background task so it never blocks
+    app startup, but that means the startup self-test (which runs immediately
+    at boot) can capture a stale BLOCKED/bars_coverage verdict from before the
+    backfill it depends on has finished. Re-running once, only after the
+    backfill task itself completes, closes that gap without ever blocking
+    startup and without changing the backfill's own bounded behaviour.
+    """
+    try:
+        await automatic_startup_backfill()
+    except Exception:
+        logger.exception("Startup backfill wrapper failed")
+        return
+    try:
+        await refresh_signals()
+    except Exception:
+        logger.exception("Post-backfill signal refresh failed")
+    try:
+        await scheduled_self_test("pre_open")
+    except Exception:
+        logger.exception("Post-backfill self-test failed")
+
+
 async def scheduled_durable_snapshot() -> None:
     """Persist today's working database during market hours."""
     memory_watchdog()
@@ -956,7 +981,7 @@ async def lifespan(app: FastAPI):
     # blocking health/startup. The deployment setting controls whether it runs.
     if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):
         if settings.startup_backfill and render_startup_backfill_enabled():
-            asyncio.create_task(automatic_startup_backfill())
+            asyncio.create_task(_startup_backfill_then_retest())
         else:
             logger.warning("Daily bhavcopy history is empty or stale and automatic backfill is disabled.")
     if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
@@ -968,8 +993,27 @@ async def lifespan(app: FastAPI):
     # Preserve an already-populated cache (important for warm restarts and
     # deterministic API tests); production still performs the initial refresh
     # whenever no current signal snapshot exists.
+    #
+    # scheduled_refresh()/scheduled_self_test() are correctly gated on market
+    # hours / a fixed clock window for their recurring runs. But Render Free
+    # sleeps and cold-starts at an arbitrary time, so relying only on those
+    # gated jobs left /api/health showing readiness=UNTESTED and
+    # last_scan_at=null indefinitely whenever the process happened to boot
+    # outside those windows. Each is therefore also run ONCE, unconditionally,
+    # right here, in addition to (not instead of) the scheduled jobs.
     if cache.get("all_signals") is None:
-        await scheduled_refresh()
+        try:
+            await refresh_signals()
+        except Exception:
+            logger.exception("Startup signal refresh failed")
+    try:
+        await scheduled_self_test("pre_open")
+    except Exception:
+        logger.exception("Startup self-test failed")
+    try:
+        await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
+    except Exception:
+        logger.warning("Startup snapshot skipped", exc_info=True)
     _startup_state = "READY"
     _startup_ready_at_ist = now_ist().isoformat()
     logger.info("NSE OI Tracker startup READY scheduler=%s", _scheduler_started_at_ist)
