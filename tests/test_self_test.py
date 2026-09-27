@@ -116,3 +116,46 @@ def test_health_exposes_readiness_and_gap_fields():
     assert "readiness" in body and "self_test" in body["data_quality"] and "universe_missing_bars" in body["data_quality"]
     assert body["startup_state"] == "READY"
     assert body["startup_ready_at_ist"] and body["scheduler_started_at_ist"] and body["scheduler_heartbeat_at_ist"]
+
+
+def test_readiness_is_not_ready_when_no_scan_has_ever_completed():
+    """A cold start outside the self-test window (e.g. a free-tier spin-down
+    wake-up mid-day, or any boot with the market closed) must not report
+    "READY" on the strength of the process having booted alone.
+    scheduled_refresh() is a no-op when the market is closed, so
+    _startup_state flipping to "READY" is not evidence a scan ever ran.
+    """
+    import app.main as main
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        # Simulate: process finished booting (this really did happen), but
+        # nothing has ever produced a scan, and self_test has not run yet.
+        # main.repository is a process-wide singleton shared across the test
+        # session, so an earlier test's persisted snapshot must be excluded
+        # explicitly rather than relying on it being absent by chance.
+        main._startup_state = "READY"
+        main._last_refresh_at_ist = None
+        main._last_snapshot_id = None
+        main.self_test._latest.clear()
+        import unittest.mock as mock
+        with mock.patch.object(main.repository, "latest_snapshot_metadata", return_value=None):
+            body = client.get("/api/health").json()
+
+    assert body["startup_state"] == "READY"          # process is genuinely up
+    assert body["last_scan_at"] is None               # but nothing has scanned
+    assert body["readiness"] == "UNTESTED"             # so readiness must not lie
+
+
+def test_readiness_reports_ready_once_a_scan_has_actually_completed():
+    import app.main as main
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as client:
+        main._startup_state = "READY"
+        main._last_refresh_at_ist = "2026-09-24T09:20:00+05:30"
+        main.self_test._latest.clear()
+        body = client.get("/api/health").json()
+
+    assert body["last_scan_at"] == "2026-09-24T09:20:00+05:30"
+    assert body["readiness"] == "READY"

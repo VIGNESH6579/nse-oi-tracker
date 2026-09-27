@@ -247,6 +247,15 @@ def _refresh_signals() -> list[dict]:
                         "vwap_age_s": 0.0,
                     }
                     _vwap_cache[cache_key] = (time.monotonic(), dict(context))
+                elif qctx:
+                    # Candle call succeeded but returned nothing usable (no
+                    # exception raised) - the exchange VWAP quote still beats
+                    # the weaker observation VWAP. This mirrors the fallback
+                    # below for the exception case; qctx is labelled
+                    # data_frequency="scan", so it can never satisfy the
+                    # FIVE_MINUTE gate check and cannot make a signal
+                    # actionable on its own - display/context only.
+                    context = qctx
             except Exception as exc:
                 _data_quality["candle_fail"] += 1
                 stale = _vwap_cache.get((symbol.upper(), "FIVE_MINUTE"))
@@ -1049,7 +1058,19 @@ async def health():
             "gap_fill": {"running": _gap_fill["running"], "symbols": _gap_fill["symbols"], "result": _gap_fill["result"]},
             "universe_missing_bars": _universe_gap()[:40],
         },
-        "readiness": self_test.readiness() if self_test.readiness() != "UNTESTED" else _startup_state,
+        # self_test's own verdict is the strongest evidence and wins whenever
+        # it exists. Before self_test has ever run (e.g. any cold start
+        # outside the 09:05-09:35 IST self-test window - a free-tier
+        # spin-down wake-up mid-day is the common case), _startup_state alone
+        # is not proof anything works: the startup scan is a no-op when the
+        # market is closed, so _startup_state flips to "READY" the moment the
+        # process finishes booting even with zero scans ever completed.
+        # Only report "READY" here once a scan has actually produced data;
+        # otherwise report "UNTESTED" rather than a false-positive READY.
+        "readiness": (
+            self_test.readiness() if self_test.readiness() != "UNTESTED"
+            else (_startup_state if effective_last_scan_at else "UNTESTED")
+        ),
         "startup_state": _startup_state,
         "startup_ready_at_ist": _startup_ready_at_ist,
         "startup_error": _startup_error,

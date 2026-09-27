@@ -35,6 +35,26 @@ def test_angel_candles_are_preferred_over_quote_opening_range_proxy():
     assert 'if qctx and qctx["or_complete"]' not in MAIN
 
 
+def test_empty_candles_fall_back_to_exchange_vwap_same_as_the_exception_path():
+    # A 200 response with an unusable/empty candle list must not be treated
+    # differently from a failed call: both should fall back to the exchange
+    # VWAP quote (qctx) rather than silently keeping the weaker observation
+    # VWAP. Previously only the except-block did this.
+    assert "elif qctx:" in MAIN
+    empty_branch = MAIN.split("if summary.get(\"available\"):", 1)[1].split("except Exception as exc:", 1)[0]
+    assert "elif qctx:" in empty_branch
+    assert "context = qctx" in empty_branch
+    # The fallback must stay labelled as quote-based, never as real candles,
+    # so it can never satisfy the FIVE_MINUTE gate on its own (fail-closed).
+    assert '"data_frequency": "scan"' in (ROOT / "analytics" / "intraday_confirm.py").read_text(encoding="utf-8")
+
+
+def test_gate_only_accepts_genuine_five_minute_candles_as_actionable():
+    confirmation = (ROOT / "signal_engine" / "confirmation.py").read_text(encoding="utf-8")
+    assert 'intraday.get("data_frequency") == "FIVE_MINUTE"' in confirmation
+    assert 'int(intraday.get("candle_count") or 0) >= 3' in confirmation
+
+
 def test_fii_dii_cash_activity_is_not_advertised_as_signal_input():
     sources = (ROOT / "analytics" / "sources.py").read_text(encoding="utf-8")
     overview = (ROOT / "analytics" / "market_overview.py").read_text(encoding="utf-8")
