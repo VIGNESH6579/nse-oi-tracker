@@ -764,8 +764,10 @@ class SignalRepository:
                     )
                     continue
                 if payload.get("confirmation_gate") == "FAILED":
-                    if int(payload.get("confidence") or 0) >= CONFIDENCE_HIGH and self._inside_entry_window(captured_at):
-                        self._record_candidate(connection, snapshot_id, trade_date, captured_at, payload, plan, symbol, signal_name, direction)
+                    # Only signals that pass every rule (full confirmation gate PASSED) are
+                    # tracked at all. A high-confidence-but-gate-failed candidate is still a
+                    # signal that didn't pass every rule, so -- per explicit instruction -- it
+                    # gets no further process: not recorded, not monitored, not shown.
                     continue
                 if int(payload.get("confidence") or 0) < CONFIDENCE_HIGH:
                     # The event table is reserved for high-quality setups only.

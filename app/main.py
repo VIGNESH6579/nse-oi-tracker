@@ -1277,13 +1277,15 @@ async def today_history(
     """Return server-owned signal events visible for the current IST date."""
     trade_date = ist_trade_date()
     events, _total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
+    # Only signals that passed every rule (tier == TRADE) are tracked or shown at all --
+    # nothing else is ever recorded (see database/repository.py record_scan), so this is
+    # a defensive filter rather than one that normally excludes anything today.
     events = [
         event for event in events
-        if (event.get("tier") or "TRADE") in {"TRADE", "CANDIDATE"}
+        if (event.get("tier") or "TRADE") == "TRADE"
         and int(event.get("confidence") or 0) >= 75
     ]
     performance = await asyncio.to_thread(repository.performance_for_date, trade_date)
-    watch_performance = await asyncio.to_thread(repository.performance_for_date, trade_date, "WATCH")
     return {
         "trade_date": trade_date,
         "visible_history_scope": "today_ist",
@@ -1291,7 +1293,6 @@ async def today_history(
         "total_events": len(events),
         "events": events,
         "performance": performance,
-        "watch_performance": watch_performance,
         "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
 
@@ -1304,7 +1305,6 @@ async def today_analytics():
     return {
         "trade_date": trade_date,
         "metrics": await asyncio.to_thread(repository.performance_for_date, trade_date),
-        "watch_metrics": await asyncio.to_thread(repository.performance_for_date, trade_date, "WATCH"),
         "breakdowns": summarize_candidate_backtest(events),
         "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
