@@ -166,7 +166,7 @@
               :class="[s.cardClass, activeFilter === s.key ? 'ring-2 ' + s.ringClass : '']">
         <div class="flex items-center justify-between mb-1.5">
           <span class="text-xl" x-text="s.emoji"></span>
-          <span class="text-3xl font-bold mono" :class="s.tc" x-text="signalCounts[s.key] ?? 0"></span>
+          <span class="text-3xl font-bold mono" :class="s.tc" x-text="actionableCount(s.key)"></span>
         </div>
         <div class="text-xs font-bold" :class="s.tc" x-text="s.label"></div>
         <div class="text-[10px] text-gray-600 mt-0.5" x-text="s.hint"></div>
@@ -390,7 +390,12 @@
                 </div>
               </td></tr>
             </template>
-            <template x-if="!loading && filtered.length === 0 && signals.length > 0">
+            <template x-if="!loading && filtered.length === 0 && signals.length > 0 && !signals.some(r => r.actionable)">
+              <tr><td colspan="13" class="py-10 text-center text-gray-600 text-sm">
+                <span x-text="signals.length + ' candidate' + (signals.length === 1 ? '' : 's') + ' detected, none confirmed yet (still forming / did not pass the gate).'"></span>
+              </td></tr>
+            </template>
+            <template x-if="!loading && filtered.length === 0 && signals.length > 0 && signals.some(r => r.actionable)">
               <tr><td colspan="13" class="py-10 text-center text-gray-600 text-sm">
                 No match for current filter. 
                 <button @click="activeFilter=''; search=''" class="text-brand underline">Clear</button>
@@ -559,7 +564,9 @@ function scanner() {
 
     /* ?? computed ?? */
     get filtered() {
-      let list = [...this.signals];
+      // Only actionable (confirmed BUY/SELL) rows are shown by default -- rows the gate
+      // marked "OBSERVE · NO TRADE" (actionable === false) are noise for a signal list.
+      let list = this.signals.filter(r => r.actionable);
       if (this.activeFilter)     list = list.filter(r => r.signal === this.activeFilter);
       if (this.confidenceFilter) list = list.filter(r => r.confidence_tier === this.confidenceFilter);
       if (this.sectorFilter)     list = list.filter(r => (r.sector || 'Unclassified') === this.sectorFilter);
@@ -748,6 +755,10 @@ function scanner() {
 
     /* ?? helpers ?? */
     toggleFilter(key) { this.activeFilter = this.activeFilter === key ? '' : key; },
+    // Matches what the table actually shows by default (actionable rows only), so a
+    // summary card's count never disagrees with what clicking it reveals. signalCounts
+    // (server-side, includes non-actionable OBSERVE rows) intentionally not used here.
+    actionableCount(key) { return this.signals.filter(r => r.actionable && r.signal === key).length; },
 
     fmt2(v)  { return v ? Number(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'; },
 
