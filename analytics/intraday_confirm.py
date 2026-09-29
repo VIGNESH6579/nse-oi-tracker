@@ -84,7 +84,7 @@ def summarize_candles(candles: list[dict], *, now: datetime | None = None, max_a
     rows.sort(key=lambda c: candle_minute(c))
     age_s = candle_age_seconds(rows, now=now)
     if not rows:
-        return {"available": False, "invalid_candles": invalid_count, "candle_age_s": age_s, "candle_fresh": False}
+        return {"available": False}
     opening = [c for c in rows if SESSION_START_MIN <= candle_minute(c) < OR_END_MIN]
     last_minute = candle_minute(rows[-1])
     return {
