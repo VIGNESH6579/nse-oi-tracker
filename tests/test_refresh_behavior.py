@@ -67,9 +67,9 @@ def test_refreshes_have_a_minimum_interval_guard():
     assert "Skipping duplicate signal refresh inside" in MAIN
 
 
-def test_render_does_not_auto_deploy_during_market_hours():
+def test_render_auto_deploys_on_main_and_stays_free():
     render = (ROOT / "render.yaml").read_text(encoding="utf-8")
-    assert "autoDeployTrigger: off" in render
+    assert "autoDeployTrigger: commit" in render\n    assert "plan: free" in render
     assert 'value: "60"' in render
     for key in ("ANGEL_ONE_API_KEY", "ANGEL_ONE_CLIENT_CODE", "ANGEL_ONE_PASSWORD", "ANGEL_ONE_TOTP_SECRET"):
         assert f"key: {key}" in render
