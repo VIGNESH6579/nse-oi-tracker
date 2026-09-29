@@ -97,12 +97,12 @@
            :class="isStale ? 'bg-amber-950 border-amber-800 text-amber-300' : 'bg-gray-800 border-gray-700 text-gray-400'"
            x-text="(isStale ? 'Stale scan · ' : 'Updated · ') + lastRefreshAt"></div>
 
-      <!-- Trades badge -->
+      <!-- Paper-signal history badge -->
       <div x-show="trades.length > 0"
            class="bg-purple-950 border border-purple-800 px-2.5 py-1 rounded-full text-xs cursor-pointer"
            @click="activeTab = 'trades'">
         <span class="text-purple-300 font-bold" x-text="tradeEvents.length"></span>
-        <span class="text-purple-600"> trades</span>
+        <span class="text-purple-600"> paper signals</span>
       </div>
 
       <!-- Countdown / refresh -->
@@ -320,7 +320,7 @@
                             ? 'bg-orange-950 text-orange-300 border-orange-800'
                             : 'bg-gray-800 text-amber-300 border-gray-700'"
                         x-text="row.actionable
-                          ? (row.signal_direction==='BUY' ? '▲ BUY' : '▼ SELL')
+                          ? (row.signal_direction==='BUY' ? '▲ PAPER BUY SIGNAL' : '▼ PAPER SELL SIGNAL')
                           : 'OBSERVE · NO TRADE'"></span>
                 </td>
 
@@ -409,7 +409,7 @@
   </div><!-- end signals tab -->
 
   <!-- ??????????????????????????????????? TRADE HISTORY TAB ????????????????? -->
-  <div x-show="activeTab === 'focus'" x-transition>
+  <div x-show="false">
     <div class="space-y-5">
       <div>
         <h2 class="text-base font-bold text-white">🎯 Signal Focus</h2>

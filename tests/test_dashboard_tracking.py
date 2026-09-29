@@ -62,3 +62,8 @@ def test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
     index CMPs (and VIX) went stale immediately while everything else kept refreshing."""
     assert "Promise.all([this.fetchSignals(), this.fetchMarketOverview()]).then(() => this.startTimer())" in INDEX
     assert "marketOverviewFetchedAt" in INDEX and "(stale)" in INDEX
+
+
+def test_frontend_removes_unreachable_focus_panel_and_marks_paper_signals():
+    assert "activeTab === 'focus'" not in INDEX
+    assert "PAPER BUY SIGNAL" in INDEX
