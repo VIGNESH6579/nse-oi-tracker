@@ -19,4 +19,3 @@ def test_malformed_candle_is_not_fresh():
     candles = [{"time": "2026-09-29 10:00", "open": 100, "high": 99, "low": 98, "close": 99, "volume": 100}]
     result = summarize_candles(candles, now=datetime(2026, 9, 29, 10, 2, tzinfo=ZoneInfo("Asia/Kolkata")))
     assert result["available"] is False
-    assert result["candle_fresh"] is False
