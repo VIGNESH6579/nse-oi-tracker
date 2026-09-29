@@ -42,6 +42,9 @@ services:
         sync: false
       - key: ANGEL_ONE_TOTP_SECRET
         sync: false
+      # Optional read-only Smart Stream; keep off until explicitly validated.
+      - key: ANGEL_ONE_STREAM_ENABLED
+        value: "false"
 
 # Render Free web services have an ephemeral filesystem. The app remains
 # usable, but its local SQLite history resets on restart, redeploy, or idle
