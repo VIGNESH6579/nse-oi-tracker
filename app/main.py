@@ -1010,7 +1010,6 @@ async def lifespan(app: FastAPI):
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
     angel_stream.start()
-    angel_stream.start()
     if render_startup_backfill_enabled():
         # Network work at startup only on Render (never in tests/dev).
         asyncio.create_task(startup_universe_maintenance())
