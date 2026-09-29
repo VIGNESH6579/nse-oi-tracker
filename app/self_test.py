@@ -21,9 +21,12 @@ _latest: dict[str, dict[str, Any]] = {}
 SAMPLE = ["RELIANCE", "TCS", "INFY"]
 
 # A failing critical check means no trustworthy signal can be produced -> BLOCKED.
+# Live-quote and futures-OI checks belong in post_open: before 09:15 the day's open/high/low do not
+# exist yet, so the strict quote validator (correctly) rejects those quotes and a pre-open check
+# would report BLOCKED every single morning even though nothing is wrong.
 CRITICAL = {
-    "pre_open": {"angel_equity_quotes", "angel_session", "angel_futures_oi", "bars_coverage", "fno_universe"},
-    "post_open": {"oi_rows", "angel_intraday_candles"},
+    "pre_open": {"angel_session", "bars_coverage", "fno_universe"},
+    "post_open": {"oi_rows", "angel_intraday_candles", "angel_equity_quotes", "angel_futures_oi"},
 }
 
 
@@ -84,11 +87,11 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
         return len(candles) >= 3 and first == 555, f"{len(candles)} candles, first_minute={first} (expected 555)"
 
     if stage == "pre_open":
-        return {"angel_equity_quotes": equity_quotes, "angel_session": session, "angel_futures_oi": futures_oi,
-                "angel_daily_candles": daily_candles, "bars_coverage": bars_coverage, "fno_universe": universe_size,
-                "index_bars": index_bars, "ban_list": ban_list}
+        return {"angel_session": session, "angel_daily_candles": daily_candles, "bars_coverage": bars_coverage,
+                "fno_universe": universe_size, "index_bars": index_bars, "ban_list": ban_list}
     if stage == "post_open":
-        return {"oi_rows": oi_rows, "oi_window_depth": window_ok, "angel_intraday_candles": intraday_candles}
+        return {"oi_rows": oi_rows, "oi_window_depth": window_ok, "angel_intraday_candles": intraday_candles,
+                "angel_equity_quotes": equity_quotes, "angel_futures_oi": futures_oi}
     raise ValueError(f"unknown stage {stage!r}")
 
 

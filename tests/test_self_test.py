@@ -63,14 +63,24 @@ def test_pre_open_ready(tmp_path):
     assert result["verdict"] == "READY" and result["failed"] == [] and st.readiness() == "READY"
 
 
-def test_pre_open_blocked_when_angel_fails_and_shows_missing_symbols(tmp_path):
+def test_pre_open_does_not_check_live_quotes_and_shows_missing_symbols(tmp_path):
+    """Before 09:15 the day's open/high/low do not exist yet, so a live quote/futures-OI
+    check would (correctly) fail every single morning and report a false BLOCKED for
+    hours. Those checks now only run in post_open, once trading has actually started."""
     universe = [f"S{i}" for i in range(200)]
     repo = _repo(tmp_path, universe)
-    result = st.run_stage("pre_open", _probes("pre_open", FakeAngel(quotes_fail=True, state="breaker_open"), repo, universe), NOW)
-    assert result["verdict"] == "BLOCKED"
-    assert "angel_equity_quotes" in result["failed"] and "HTTP 403" in result["checks"]["angel_equity_quotes"]["detail"]
+    result = st.run_stage("pre_open", _probes("pre_open", FakeAngel(quotes_fail=True), repo, universe), NOW)
+    assert "angel_equity_quotes" not in result["checks"] and "angel_futures_oi" not in result["checks"]
+    assert result["verdict"] == "READY"
     assert result["checks"]["bars_coverage"]["ok"] is True            # 2 missing of 200 = 99% >= 90%
     assert "S198" in result["checks"]["bars_coverage"]["detail"]
+
+
+def test_post_open_blocked_when_angel_quotes_fail(tmp_path):
+    repo = _repo(tmp_path, ["A", "B", "C"])
+    result = st.run_stage("post_open", _probes("post_open", FakeAngel(quotes_fail=True, state="breaker_open"), repo, ["A"]), NOW)
+    assert result["verdict"] == "BLOCKED"
+    assert "angel_equity_quotes" in result["failed"] and "HTTP 403" in result["checks"]["angel_equity_quotes"]["detail"]
 
 
 def test_pre_open_degraded_when_only_noncritical_fails(tmp_path):

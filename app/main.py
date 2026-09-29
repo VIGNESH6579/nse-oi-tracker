@@ -201,7 +201,7 @@ def _refresh_signals() -> list[dict]:
     session_date = now_ist().date()
     enriched_intraday = []
     candle_calls = 0
-    vwap_deadline = time.monotonic() + 8.0
+    vwap_deadline = time.monotonic() + float(os.getenv("VWAP_DEADLINE_S", "14"))   # room for a 403 retry
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         context = observe_intraday(symbol, float(signal.get("ltp") or 0), float(signal.get("volume") or 0), session_date)
@@ -257,7 +257,9 @@ def _refresh_signals() -> list[dict]:
                     # actionable on its own - display/context only.
                     context = qctx
             except Exception as exc:
-                _data_quality["candle_fail"] += 1
+                # A cooldown skip is not a fresh Angel failure: counting it as one made a
+                # single HTTP 403 look like 8 failures and hid the real error rate.
+                _data_quality["candle_cooldown_skips" if type(exc).__name__ == "AngelUnavailable" else "candle_fail"] += 1
                 stale = _vwap_cache.get((symbol.upper(), "FIVE_MINUTE"))
                 if stale and time.monotonic() - stale[0] < float(os.getenv("VWAP_STALE_MAX_S", "900")):
                     context = {**stale[1], "vwap_age_s": round(time.monotonic() - stale[0], 2), "stale_candles": True}
@@ -600,7 +602,7 @@ async def _startup_backfill_then_retest() -> None:
     except Exception:
         logger.exception("Post-backfill signal refresh failed")
     try:
-        await scheduled_self_test("pre_open")
+        await scheduled_self_test(_startup_self_test_stage())
     except Exception:
         logger.exception("Post-backfill self-test failed")
 
@@ -695,7 +697,7 @@ def memory_watchdog() -> float | None:
     return rss
 
 
-_data_quality: dict[str, int] = {"candle_ok": 0, "candle_empty": 0, "candle_fail": 0, "quote_ctx": 0}
+_data_quality: dict[str, int] = {"candle_ok": 0, "candle_empty": 0, "candle_fail": 0, "candle_cooldown_skips": 0, "quote_ctx": 0}
 _gate_stats: dict = {"passed": 0, "failed": 0, "top_missing": {}, "at": None}
 _bias_cache: tuple[float, str] = (0.0, "UNKNOWN")
 
@@ -803,6 +805,17 @@ def _self_test_probes(stage: str):
         stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
         scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth,
     )
+
+
+def _startup_self_test_stage() -> str:
+    """Which self-test stage is meaningful at boot right now.
+
+    post_open needs a live session (real day OHLC, >= 3 five-minute candles); pre_open only needs
+    the session, universe, bars and ban list. Booting at 02:00 or 09:16 and running the wrong stage
+    reports a false BLOCKED for hours, so pick by the clock.
+    """
+    now = now_ist()
+    return "post_open" if is_market_open() and now.hour * 60 + now.minute >= 9 * 60 + 30 else "pre_open"
 
 
 async def scheduled_self_test(stage: str) -> None:
@@ -1007,7 +1020,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Startup signal refresh failed")
     try:
-        await scheduled_self_test("pre_open")
+        await scheduled_self_test(_startup_self_test_stage())
     except Exception:
         logger.exception("Startup self-test failed")
     try:
@@ -1278,13 +1291,12 @@ async def today_history(
     trade_date = ist_trade_date()
     events, _total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
     # Only signals that passed every rule (tier == TRADE) are tracked or shown at all --
-    # nothing else is ever recorded (see database/repository.py record_scan), so this is
-    # a defensive filter rather than one that normally excludes anything today.
-    events = [
-        event for event in events
-        if (event.get("tier") or "TRADE") == "TRADE"
-        and int(event.get("confidence") or 0) >= 75
-    ]
+    # nothing else is ever recorded (see database/repository.py record_scan). This list
+    # must use exactly the same basis as performance_for_date() below (tier == TRADE), or
+    # the header's signal count / R total and the visible rows disagree. There is no extra
+    # confidence cut-off here: admission already required it, and re-checking it against a
+    # later payload is what used to hide admitted trades.
+    events = [event for event in events if (event.get("tier") or "TRADE") == "TRADE"]
     performance = await asyncio.to_thread(repository.performance_for_date, trade_date)
     return {
         "trade_date": trade_date,

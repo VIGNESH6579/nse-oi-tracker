@@ -758,9 +758,15 @@ class SignalRepository:
                     (trade_date, symbol, direction),
                 ).fetchone()
                 if existing is not None:
+                    # Re-sighting an already-admitted trade: refresh only the live price and
+                    # last-seen time. The saved payload is deliberately FROZEN at admission --
+                    # overwriting it on every rescan let a live trade's confidence, gate result
+                    # and plan drift (a tracked trade could show "NO TRADE"/gate FAILED, or drop
+                    # below the history confidence cut-off and vanish from the list while still
+                    # counting in the P&L header).
                     connection.execute(
-                        "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ?, payload_json = ? WHERE id = ?",
-                        (float(payload.get("ltp") or 0), captured_at.isoformat(), json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), existing["id"]),
+                        "UPDATE signal_events SET current_price = ?, last_seen_at_ist = ? WHERE id = ?",
+                        (float(payload.get("ltp") or 0), captured_at.isoformat(), existing["id"]),
                     )
                     continue
                 if payload.get("confirmation_gate") == "FAILED":

@@ -72,6 +72,7 @@ class AngelOneMarketData:
         self._hist_lock = threading.Lock()
         self._last_hist_at = 0.0
         self._hist_block_until = 0.0
+        self._hist_consecutive_403 = 0
         self._breaker_seconds = 15 * 60
         self._last_error_code = ""
         self._lock = RLock()
@@ -244,7 +245,7 @@ class AngelOneMarketData:
             # Angel One documents a maximum of 50 symbols and 1 quote request
             # per second. Sleep only between batches so a single-batch scan is
             # not delayed.
-            elapsed = time.monotonic() - self._last_quote_at
+            elapsed = time.monotonic() - max(self._last_quote_at, self._last_hist_at)
             if elapsed < 1.0 and self._last_quote_at:
                 time.sleep(1.0 - elapsed)
             response = requests.post(
@@ -270,9 +271,17 @@ class AngelOneMarketData:
                     high = float(row.get("high") or 0)
                     low = float(row.get("low") or 0)
                     close = float(row.get("close") or 0)
-                    if (min(ltp, open_price, high, low, close) <= 0
-                            or high < max(ltp, open_price, low, close)
-                            or low > min(ltp, open_price, high, close)):
+                    # Validate TODAY's session range only. Angel's ``close`` is the PREVIOUS
+                    # session's close, so it can legitimately sit outside today's [low, high]
+                    # (a stock that gaps up and holds has low > prev close; a gap-down that
+                    # stays down has high < prev close). Including it in the range check
+                    # rejected exactly those strongest gap-and-go movers, and rejected the
+                    # NIFTY index quote on any gap day (market bias then read UNKNOWN).
+                    # Fail closed on genuinely bad data: no price, no session range yet
+                    # (pre-open), or an internally inconsistent high/low.
+                    if (min(ltp, open_price, high, low) <= 0
+                            or high < max(ltp, open_price, low)
+                            or low > min(ltp, open_price, high)):
                         logger.warning("Ignoring malformed Angel quote for %s: invalid OHLC range", symbol)
                         continue
                     output[symbol] = {
@@ -366,7 +375,13 @@ class AngelOneMarketData:
             now = time.monotonic()
             if now < self._hist_block_until:
                 raise AngelUnavailable(f"historical API cooling down for {self._hist_block_until - now:.0f}s after HTTP 403")
-            wait = self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "1.1")) - now
+            # Space candle calls from each other AND from the quote burst that precedes
+            # them in every scan: the first candle call right after the quotes was the one
+            # Angel kept answering with HTTP 403 "exceeding access rate".
+            wait = max(
+                self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "1.1")),
+                self._last_quote_at + float(os.getenv("ANGEL_HIST_QUOTE_GAP_S", "1.5")) if self._last_quote_at else 0.0,
+            ) - now
             if wait > 0:
                 time.sleep(wait)
             self._last_hist_at = time.monotonic()
@@ -389,22 +404,38 @@ class AngelOneMarketData:
                 start = end - timedelta(minutes=10)
         else:
             start = end - timedelta(days=max(1, days))
-        response = requests.post(
-            f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
-            headers=self._headers(),
-            json={
-                "exchange": exchange.upper(),
-                "symboltoken": instrument.token,
-                "interval": interval,
-                "fromdate": start.strftime("%Y-%m-%d %H:%M"),
-                "todate": end.strftime("%Y-%m-%d %H:%M"),
-            },
-            timeout=self.timeout,
-        )
-        if getattr(response, "status_code", 200) in (403, 429):
-            # Angel answers 403 when the historical-data rate limit is exceeded: cool down
-            # instead of hammering (logs showed ~55% of candle calls failing this way).
-            self._hist_block_until = time.monotonic() + float(os.getenv("ANGEL_HIST_COOLDOWN_S", "45"))
+        payload = {
+            "exchange": exchange.upper(),
+            "symboltoken": instrument.token,
+            "interval": interval,
+            "fromdate": start.strftime("%Y-%m-%d %H:%M"),
+            "todate": end.strftime("%Y-%m-%d %H:%M"),
+        }
+        # Angel answers 403/429 ("exceeding access rate") when a short rate window is
+        # exceeded. That window is about a second, so retry once after a brief pause
+        # instead of immediately blacking out every candle call for the rest of the scan.
+        # Only if the retry ALSO fails do we cool down, escalating on repeated failures.
+        retries = max(0, int(os.getenv("ANGEL_HIST_RETRIES", "1")))
+        for attempt in range(retries + 1):
+            if attempt:
+                time.sleep(float(os.getenv("ANGEL_HIST_RETRY_WAIT_S", "2.0")))
+                self._hist_wait()
+            response = requests.post(
+                f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
+                headers=self._headers(),
+                json=payload,
+                timeout=self.timeout,
+            )
+            if getattr(response, "status_code", 200) not in (403, 429):
+                self._hist_consecutive_403 = 0
+                break
+            if attempt < retries:
+                continue
+            self._hist_consecutive_403 += 1
+            base = float(os.getenv("ANGEL_HIST_COOLDOWN_S", "45"))
+            cap = float(os.getenv("ANGEL_HIST_COOLDOWN_MAX_S", "300"))
+            cooldown = min(cap, base * (2 ** (self._hist_consecutive_403 - 1)))
+            self._hist_block_until = time.monotonic() + cooldown
             snippet = " ".join(str(getattr(response, "text", "") or "").split())[:120]
             raise RuntimeError(f"HTTP {response.status_code} from Angel candle API: {snippet or 'empty body'}")
         response.raise_for_status()

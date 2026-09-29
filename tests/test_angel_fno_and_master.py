@@ -134,6 +134,16 @@ def test_full_quotes_covers_indices_and_keys_results_by_the_requested_symbol():
 
 
 def test_full_quotes_discards_impossible_ohlc_rows():
+    # NOTE: this used to test a POLICYBZR row with ltp=1282.3, open=high=1697.7, low=1282.3,
+    # close=1886.3 -- a large (-31.56%) gap-down that stayed down. That row is internally
+    # CONSISTENT for today's own session (ltp sits at the low, open sits at the high, nothing
+    # falls outside [low, high]); only the previous close sits outside today's range, which is
+    # just what a large gap looks like, not evidence of a bad print. Rejecting it also silently
+    # dropped the NIFTY index quote on any real gap day (market bias then read UNKNOWN) and
+    # rejected the market's strongest gap-and-go movers -- exactly the stocks a buildup scanner
+    # exists to find. See integrations/angel_one_market_data.py for the full reasoning. What's
+    # actually impossible is today's own session being internally inconsistent, e.g. the traded
+    # price sitting above the reported high.
     c = _client()
     c._instruments = {("NSE", "POLICYBZR"): AngelInstrument("POLICYBZR", "77", "NSE")}
 
@@ -142,7 +152,7 @@ def test_full_quotes_discards_impossible_ohlc_rows():
         def json(self):
             return {"status": True, "data": {"fetched": [{
                 "symbolToken": "77", "tradingSymbol": "POLICYBZR-EQ",
-                "ltp": 1282.3, "open": 1697.7, "high": 1697.7,
+                "ltp": 1750.0, "open": 1697.7, "high": 1697.7,        # ltp above the reported high: impossible
                 "low": 1282.3, "close": 1886.3, "tradeVolume": 1,
                 "percentChange": -31.56, "avgPrice": 1303.78,
             }]}}

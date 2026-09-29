@@ -151,11 +151,13 @@ def test_angel_historical_api_cools_down_after_403_instead_of_hammering(monkeypa
     calls = []
     monkeypatch.setattr(angel.requests, "post", lambda *a, **k: calls.append(1) or _Resp())
     monkeypatch.setenv("ANGEL_HIST_MIN_INTERVAL", "0")
+    monkeypatch.setenv("ANGEL_HIST_QUOTE_GAP_S", "0")
+    monkeypatch.setenv("ANGEL_HIST_RETRY_WAIT_S", "0")
     with pytest.raises(RuntimeError, match="exceeding access rate"):        # body snippet is surfaced for diagnosis
         client.intraday_candles("TCS")
     with pytest.raises(angel.AngelUnavailable):
         client.intraday_candles("TCS")
-    assert len(calls) == 1                                          # second call never left the process
+    assert len(calls) == 2                                          # one try + one retry; the second call never left the process
 
 
 # ---------------- quote-based intraday context (no candle API) ----------------
@@ -213,6 +215,27 @@ def _passed(symbol, direction="BUY", price=100.0):
 def _rows(repo, sql="SELECT symbol, tier, status FROM signal_events ORDER BY id"):
     with repo._connect() as c:
         return [tuple(r) for r in c.execute(sql).fetchall()]
+
+
+def test_admitted_trade_payload_is_frozen_not_overwritten_on_resighting(tmp_path):
+    """A trade already admitted to history must keep its admission-time confidence,
+    gate result and plan. Re-sighting it later with a degraded payload (confidence
+    dropped, gate now failing) must only refresh the live price -- overwriting the
+    whole payload on every rescan let a live trade intermittently show "gate FAILED"
+    / drop below the history confidence cut-off and vanish from the visible list
+    while still counting toward the P&L total, which is exactly what happened live."""
+    repo = SignalRepository(tmp_path / "freeze.sqlite3")
+    repo.record_scan([_passed("DRIFT")], AT)
+    with repo._connect() as c:
+        admitted = dict(c.execute("SELECT payload_json FROM signal_events WHERE symbol = ?", ("DRIFT",)).fetchone())
+    degraded = {**_failed("DRIFT", price=101.0), "confidence": 40}     # same symbol/day, now failing + lower confidence
+    repo.record_scan([degraded], AT + timedelta(minutes=5))
+    with repo._connect() as c:
+        row = dict(c.execute("SELECT payload_json, current_price FROM signal_events WHERE symbol = ?", ("DRIFT",)).fetchone())
+    assert row["payload_json"] == admitted["payload_json"]            # untouched: still the admitted, passing payload
+    assert row["current_price"] == 101.0                              # only the live price actually refreshed
+    events, total = repo.history_for_date("2026-09-21")
+    assert total == 1 and events[0]["symbol"] == "DRIFT" and events[0]["confirmation_gate"] == "PASSED"
 
 
 def test_gate_failed_signal_is_not_tracked_or_graded(tmp_path):
