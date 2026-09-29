@@ -318,6 +318,8 @@ class AngelOneMarketStream:
                 expiry = datetime.strptime(str(instrument.expiry), "%d%b%Y").date()
             except (TypeError, ValueError):
                 continue
+            if expiry < datetime.now(timezone.utc).astimezone().date():
+                continue
             item = nearest.get(underlying)
             if item is None or expiry < item[0]:
                 nearest[underlying] = (expiry, instrument)
