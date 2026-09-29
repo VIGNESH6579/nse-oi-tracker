@@ -7,8 +7,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /api/health
-    # Deploy manually or outside market hours; a restart wipes free-tier SQLite.
-    autoDeployTrigger: off
+    # Keep Git pushes automatically deployed; the service remains on Render Free.
+    autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
