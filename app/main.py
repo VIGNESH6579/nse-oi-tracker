@@ -73,6 +73,7 @@ from analytics.cas import confidence_analysis
 from analytics.traps import trap_risk
 from analytics.sources import public_source_inventory
 from integrations.angel_one_market_data import AngelOneMarketData
+from integrations.angel_one_stream import AngelOneMarketStream
 from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
@@ -81,6 +82,7 @@ APP_VERSION = "4.4.0"
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
 angel_market_data = AngelOneMarketData.from_environment()
+angel_stream = AngelOneMarketStream(angel_market_data)
 
 # Set this in Render's environment variables to lock down /api/debug in
 # production. Left unset, /api/debug stays open (dev convenience) but says
@@ -202,6 +204,13 @@ def _refresh_signals() -> list[dict]:
     session_date = now_ist().date()
     # Historical candles are scarce/rate-limited: spend the bounded budget on the fastest candidates first.
     signals = prioritize_candidates(signals)
+    if angel_stream.enabled:
+        try:
+            added = angel_stream.ensure_symbols([str(s.get("symbol") or "") for s in signals])
+            if added:
+                logger.info("Angel WebSocket subscriptions added=%s", added)
+        except Exception:
+            logger.exception("Angel WebSocket subscription update failed")
     enriched_intraday = []
     candle_calls = 0
     vwap_deadline = time.monotonic() + float(os.getenv("VWAP_DEADLINE_S", "14"))   # room for a 403 retry
@@ -998,6 +1007,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(restore_latest_backup, settings.database_path)
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
+    angel_stream.start()
     if render_startup_backfill_enabled():
         # Network work at startup only on Render (never in tests/dev).
         asyncio.create_task(startup_universe_maintenance())
@@ -1043,6 +1053,7 @@ async def lifespan(app: FastAPI):
     _startup_ready_at_ist = now_ist().isoformat()
     logger.info("NSE OI Tracker startup READY scheduler=%s", _scheduler_started_at_ist)
     yield
+    angel_stream.stop()
     _startup_state = "STOPPING"
     try:
         await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
@@ -1111,6 +1122,7 @@ async def health():
         "snapshot_age_s": last_snapshot_age_s(),
         "snapshot_backend": "github" if os.getenv("NSE_OI_BACKUP_GITHUB_REPO") and os.getenv("NSE_OI_BACKUP_GITHUB_TOKEN") else "url" if os.getenv("NSE_OI_BACKUP_URL") else "none",
         "angel":         angel_state,
+        "angel_stream":  angel_stream.health(),
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "memory_rss_peak_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
@@ -1202,6 +1214,7 @@ async def sources():
             "mode": "read_only_quotes_and_candles" if angel_market_data else "disabled",
             "order_execution": False,
             "health": angel_market_data.health() if angel_market_data else {"state": "disabled", "last_error_code": "", "retry_at": None},
+            "stream": angel_stream.health(),
         },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
     }
