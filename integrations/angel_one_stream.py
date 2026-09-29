@@ -19,6 +19,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 try:
@@ -318,7 +319,7 @@ class AngelOneMarketStream:
                 expiry = datetime.strptime(str(instrument.expiry), "%d%b%Y").date()
             except (TypeError, ValueError):
                 continue
-            if expiry < datetime.now(timezone.utc).astimezone().date():
+            if expiry < datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date():
                 continue
             item = nearest.get(underlying)
             if item is None or expiry < item[0]:
