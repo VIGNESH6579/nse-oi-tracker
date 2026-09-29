@@ -5,4 +5,4 @@ python-dotenv==1.0.1
 tzdata==2024.1
 pyotp==2.9.0
 apscheduler==3.10.4
-websocket-client==1.8.0\n
+websocket-client==1.8.0
