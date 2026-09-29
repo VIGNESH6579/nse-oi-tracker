@@ -1031,17 +1031,21 @@ async def lifespan(app: FastAPI):
             await refresh_signals()
         except Exception:
             logger.exception("Startup signal refresh failed")
+    startup_self_test_result = None
     try:
-        await scheduled_self_test(_startup_self_test_stage())
+        startup_self_test_result = await asyncio.to_thread(
+            self_test.run_stage, _startup_self_test_stage(), _self_test_probes(_startup_self_test_stage()), now_ist()
+        )
     except Exception:
         logger.exception("Startup self-test failed")
     try:
         await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
     except Exception:
         logger.warning("Startup snapshot skipped", exc_info=True)
-    _startup_state = "READY"
-    _startup_ready_at_ist = now_ist().isoformat()
-    logger.info("NSE OI Tracker startup READY scheduler=%s", _scheduler_started_at_ist)
+    startup_verdict = (startup_self_test_result or {}).get("verdict") or self_test.readiness()
+    _startup_state = "READY" if startup_verdict == "READY" else ("DEGRADED" if startup_verdict == "DEGRADED" else "BLOCKED")
+    _startup_ready_at_ist = now_ist().isoformat() if _startup_state == "READY" else None
+    logger.info("NSE OI Tracker startup state=%s self_test=%s scheduler=%s", _startup_state, startup_verdict, _scheduler_started_at_ist)
     yield
     _startup_state = "STOPPING"
     try:
