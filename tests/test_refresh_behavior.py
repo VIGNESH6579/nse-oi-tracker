@@ -69,7 +69,8 @@ def test_refreshes_have_a_minimum_interval_guard():
 
 def test_render_auto_deploys_on_main_and_stays_free():
     render = (ROOT / "render.yaml").read_text(encoding="utf-8")
-    assert "autoDeployTrigger: commit" in render\n    assert "plan: free" in render
+    assert "autoDeployTrigger: commit" in render
+    assert "plan: free" in render
     assert 'value: "60"' in render
     for key in ("ANGEL_ONE_API_KEY", "ANGEL_ONE_CLIENT_CODE", "ANGEL_ONE_PASSWORD", "ANGEL_ONE_TOTP_SECRET"):
         assert f"key: {key}" in render
