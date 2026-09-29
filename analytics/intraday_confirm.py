@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from analytics.intraday import candle_vwap
 
@@ -10,6 +12,39 @@ SESSION_START_MIN = 9 * 60 + 15          # 09:15 IST
 OR_END_MIN = 9 * 60 + 30                 # opening range = 09:15-09:30
 # Approximate cumulative share of the day's volume traded by N minutes after the
 # open (U-shaped NSE profile). It is a documented approximation, not exact data.
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _parse_candle_time(value: object) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                pass
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_IST)
+    return parsed.astimezone(_IST)
+
+
+def candle_age_seconds(candles: list[dict], now: datetime | None = None) -> float | None:
+    stamps = [_parse_candle_time(c.get("time")) for c in candles]
+    stamps = [stamp for stamp in stamps if stamp is not None]
+    if not stamps:
+        return None
+    observed = (now or datetime.now(_IST)).astimezone(_IST)
+    return round(max(0.0, (observed - max(stamps)).total_seconds()), 2)
+
+
 VOLUME_CURVE = [(0, 0.0), (15, 0.12), (30, 0.20), (60, 0.32), (120, 0.47), (180, 0.58),
                 (240, 0.70), (300, 0.82), (345, 0.92), (375, 1.0)]
 
@@ -31,11 +66,25 @@ def expected_volume_fraction(minutes_since_open: float) -> float:
     return 1.0
 
 
-def summarize_candles(candles: list[dict]) -> dict[str, Any]:
-    rows = [c for c in candles if candle_minute(c) is not None]
+def summarize_candles(candles: list[dict], *, now: datetime | None = None, max_age_s: float = 300.0) -> dict[str, Any]:
+    valid = []
+    invalid_count = 0
+    for candle in candles:
+        try:
+            op, hi, lo, close = (float(candle[k]) for k in ("open", "high", "low", "close"))
+            if min(op, hi, lo, close) <= 0 or hi < max(op, close, lo) or lo > min(op, close, hi):
+                invalid_count += 1
+                continue
+        except (KeyError, TypeError, ValueError):
+            invalid_count += 1
+            continue
+        if candle_minute(candle) is not None:
+            valid.append(candle)
+    rows = valid
     rows.sort(key=lambda c: candle_minute(c))
+    age_s = candle_age_seconds(rows, now=now)
     if not rows:
-        return {"available": False}
+        return {"available": False, "invalid_candles": invalid_count, "candle_age_s": age_s, "candle_fresh": False}
     opening = [c for c in rows if SESSION_START_MIN <= candle_minute(c) < OR_END_MIN]
     last_minute = candle_minute(rows[-1])
     return {
@@ -52,6 +101,9 @@ def summarize_candles(candles: list[dict]) -> dict[str, Any]:
         "or_complete": last_minute >= OR_END_MIN and len(opening) >= 2,
         "last_minute": last_minute,
         "candle_count": len(rows),
+        "invalid_candles": invalid_count,
+        "candle_age_s": age_s,
+        "candle_fresh": age_s is not None and age_s <= max_age_s and invalid_count == 0,
     }
 
 

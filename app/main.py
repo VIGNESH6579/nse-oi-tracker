@@ -52,6 +52,7 @@ from app.nse_fetcher import (
 from analytics.technical import technical_context
 from analytics.intraday import observe as observe_intraday
 from analytics.intraday import candle_vwap
+from analytics.candle_priority import prioritize_candidates
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
@@ -199,6 +200,8 @@ def _refresh_signals() -> list[dict]:
     # This is deliberately labelled observation-based; it is not fabricated
     # 5-minute OHLCV and never turns a candidate into an order recommendation.
     session_date = now_ist().date()
+    # Historical candles are scarce/rate-limited: spend the bounded budget on the fastest candidates first.
+    signals = prioritize_candidates(signals)
     enriched_intraday = []
     candle_calls = 0
     vwap_deadline = time.monotonic() + float(os.getenv("VWAP_DEADLINE_S", "14"))   # room for a 403 retry
@@ -231,9 +234,14 @@ def _refresh_signals() -> list[dict]:
                     _last_vwap_request_at = time.monotonic()
                 else:
                     candles = []
-                summary = summarize_candles(candles)
+                summary = summarize_candles(candles, now=now_ist())
                 broker_vwap = candle_vwap(candles)
-                _data_quality["candle_ok" if summary.get("available") else "candle_empty"] += 1
+                if summary.get("available") and summary.get("candle_fresh"):
+                    _data_quality["candle_ok"] += 1
+                elif summary.get("available"):
+                    _data_quality["candle_stale"] = _data_quality.get("candle_stale", 0) + 1
+                else:
+                    _data_quality["candle_empty"] += 1
                 if summary.get("available"):
                     # Indices have no volume: fall back to the time-weighted average (TWAP).
                     context = {
@@ -244,7 +252,11 @@ def _refresh_signals() -> list[dict]:
                         "source": "angel_one_5m_ohlcv",
                         "data_frequency": "FIVE_MINUTE",
                         "candle_count": len(candles),
-                        "vwap_age_s": 0.0,
+                        "candle_age_s": summary.get("candle_age_s"),
+                        "candle_fresh": bool(summary.get("candle_fresh")),
+                        "candle_source": "angel_one_5m_ohlcv",
+                        "invalid_candles": int(summary.get("invalid_candles") or 0),
+                        "vwap_age_s": summary.get("candle_age_s"),
                     }
                     _vwap_cache[cache_key] = (time.monotonic(), dict(context))
                 elif qctx:
@@ -697,7 +709,7 @@ def memory_watchdog() -> float | None:
     return rss
 
 
-_data_quality: dict[str, int] = {"candle_ok": 0, "candle_empty": 0, "candle_fail": 0, "candle_cooldown_skips": 0, "quote_ctx": 0}
+_data_quality: dict[str, int] = {"candle_ok": 0, "candle_stale": 0, "candle_empty": 0, "candle_fail": 0, "candle_cooldown_skips": 0, "quote_ctx": 0}
 _gate_stats: dict = {"passed": 0, "failed": 0, "top_missing": {}, "at": None}
 _bias_cache: tuple[float, str] = (0.0, "UNKNOWN")
 

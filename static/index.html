@@ -70,7 +70,7 @@
       </div>
       <div>
         <h1 class="text-base font-bold text-white leading-tight tracking-tight">NSE F&O OI Scanner</h1>
-        <p class="text-[10px] text-gray-500">Live NSE OI observations · ATR context · automatic paper tracking</p>
+        <p class="text-[10px] text-gray-500">Live NSE OI observations · validated signal layer · paper tracking only</p>
       </div>
     </div>
 
@@ -176,11 +176,11 @@
 
   <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['trades']" :key="tab">
+    <template x-for="tab in ['signals','trades']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{trades:'📋 Confirmed Signal History'}[tab]"></span>
+        <span x-text="{signals:'📡 Live Signals',trades:'📋 Paper Signal History'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -510,7 +510,7 @@
 <footer class="text-center text-xs text-gray-800 py-5 mt-4 border-t border-gray-900">
   NSE F&O OI Scanner · Educational use only · Not financial advice
   <a href="https://github.com/Sabari-2004/nse-oi-tracker" target="_blank"
-     class="hover:text-gray-500 underline">Sabari-2004 / nse-oi-tracker</a>
+     class="hover:text-gray-500 underline">VIGNESH6579 / nse-oi-tracker</a>
 </footer>
 
 <!-- ??????????????????????????????????? ALPINE APP ???????????????????????????? -->
@@ -536,7 +536,7 @@ function scanner() {
     loading: false,
     error: '', countdown: 60,
     clock: '', marketOpen: false, marketStatusLabel: '',
-    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'trades',
+    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'signals',
     search: '', sortBy: 'confidence', signalTypeFilter: 'ALL',
     signalTypeFilters: [
       {key:'ALL', label:'All confirmed'}, {key:'LONG_BUILDUP', label:'Long Buildup'},

@@ -30,6 +30,7 @@ class GateConfig:
     min_rel_volume: float = 1.2
     gap_atr: float = 1.0
     gap_min_rel_volume: float = 1.8
+    max_candle_age_s: float = 300.0
 
     @classmethod
     def from_env(cls) -> "GateConfig":
@@ -41,6 +42,7 @@ class GateConfig:
             min_rel_volume=_f("REL_VOLUME_MIN", 1.2),
             gap_atr=_f("GAP_ATR_MULT", 1.0),
             gap_min_rel_volume=_f("GAP_REL_VOLUME_MIN", 1.8),
+            max_candle_age_s=_f("MAX_CANDLE_AGE_S", 300),
         )
 
 
@@ -78,8 +80,13 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
     if require_real_intraday:
         real_candles = (intraday.get("source") == "angel_one_5m_ohlcv"
                         and intraday.get("data_frequency") == "FIVE_MINUTE"
-                        and int(intraday.get("candle_count") or 0) >= 3)
+                        and int(intraday.get("candle_count") or 0) >= 3
+                        and intraday.get("candle_fresh") is True
+                        and float(intraday.get("candle_age_s") or 1e9) <= cfg.max_candle_age_s
+                        and int(intraday.get("invalid_candles") or 0) == 0)
         need(real_candles, "real_5m_candles_unavailable")
+        need(intraday.get("candle_fresh") is True, "stale_5m_candles")
+        need(int(intraday.get("invalid_candles") or 0) == 0, "malformed_5m_candles")
     rel = None
     if need(have_intraday, "no_intraday_data") and direction:
         need((ltp > vwap) if direction == "BUY" else (ltp < vwap), "wrong_side_of_vwap")
