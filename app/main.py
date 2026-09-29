@@ -1014,11 +1014,19 @@ async def lifespan(app: FastAPI):
         # Network work at startup only on Render (never in tests/dev).
         asyncio.create_task(startup_universe_maintenance())
         asyncio.create_task(scheduled_ban_refresh())
-    # Render Free has an ephemeral filesystem; run one bounded backfill without
-    # blocking health/startup. The deployment setting controls whether it runs.
-    if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):
+    # Render Free has an ephemeral filesystem. If required Bhavcopy history is
+    # missing, complete the bounded startup backfill BEFORE the initial scan and
+    # self-test. This prevents a false bars_coverage failure while history is
+    # still downloading.
+    startup_backfill_needed = bhavcopy_backfill_required(repository.daily_equity_bar_summary())
+    if startup_backfill_needed:
         if settings.startup_backfill and render_startup_backfill_enabled():
-            asyncio.create_task(_startup_backfill_then_retest())
+            try:
+                await asyncio.wait_for(automatic_startup_backfill(), timeout=300)
+            except asyncio.TimeoutError:
+                logger.error("Startup Bhavcopy backfill timed out after 300s; readiness remains fail-closed.")
+            except Exception:
+                logger.exception("Startup Bhavcopy backfill failed; readiness remains fail-closed.")
         else:
             logger.warning("Daily bhavcopy history is empty or stale and automatic backfill is disabled.")
     if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
