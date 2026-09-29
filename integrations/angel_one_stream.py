@@ -16,6 +16,7 @@ import re
 import struct
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -132,6 +133,7 @@ class LocalFiveMinuteBuilder:
 
     def __init__(self) -> None:
         self._candles: dict[tuple[int, str], _Candle] = {}
+        self._history: dict[tuple[int, str], deque[_Candle]] = {}
         self._volume_valid: dict[tuple[int, str], bool] = {}
         self._lock = threading.RLock()
 
@@ -147,6 +149,8 @@ class LocalFiveMinuteBuilder:
         with self._lock:
             candle = self._candles.get(key)
             if candle is None or candle.bucket_ms != bucket:
+                if candle is not None:
+                    self._history.setdefault(key, deque(maxlen=78)).append(candle)
                 candle = _Candle(
                     bucket_ms=bucket,
                     open=tick.ltp,
@@ -164,7 +168,7 @@ class LocalFiveMinuteBuilder:
                     self._volume_valid[key] = False
                 # A new candle still needs the prior cumulative reading to
                 # calculate its first delta; carry it from the previous candle.
-                previous_candle = self._previous_candle(key, candle)
+                previous_candle = self._history.get(key, deque())[-1] if self._history.get(key) else None
                 prior_volume = previous_candle.last_volume if previous_candle else None
                 if candle.last_volume is None and prior_volume is not None and tick.volume >= prior_volume:
                     candle.volume += int(tick.volume - prior_volume)
@@ -177,11 +181,6 @@ class LocalFiveMinuteBuilder:
             candle.close = tick.ltp
             candle.ticks += 1
             return self._as_dict(candle, key=key, tick=tick)
-
-    def _previous_candle(self, key: tuple[int, str], current: _Candle) -> _Candle | None:
-        # The builder keeps only the current candle for bounded memory. Once a
-        # boundary is crossed, the cumulative-volume baseline is stored here.
-        return getattr(self, "_last_closed", {}).get(key)
 
     def _as_dict(self, candle: _Candle, *, key: tuple[int, str], tick: StreamTick) -> dict[str, Any]:
         return {
@@ -196,6 +195,12 @@ class LocalFiveMinuteBuilder:
             "volume_valid": self._volume_valid.get(key, True),
             "observed_at": tick.received_at,
         }
+
+    def recent(self, exchange_type: int, token: str, *, limit: int = 12) -> list[dict[str, Any]]:
+        key = (exchange_type, token)
+        with self._lock:
+            rows = list(self._history.get(key, ())) + ([self._candles[key]] if key in self._candles else [])
+            return [self._as_dict(c, key=key, tick=StreamTick(exchange_type, token, time.time(), c.bucket_ms, c.close)) for c in rows[-limit:]]
 
     def latest(self, exchange_type: int, token: str) -> dict[str, Any] | None:
         with self._lock:
@@ -338,6 +343,9 @@ class AngelOneMarketStream:
             "tick_age_s": round(time.time() - tick.received_at, 2),
             "exchange_timestamp_ms": tick.exchange_timestamp_ms,
         }
+
+    def recent_candles(self, exchange_type: int, token: str, *, limit: int = 12) -> list[dict[str, Any]]:
+        return self.candles.recent(exchange_type, token, limit=limit)
 
     def latest_candle(self, exchange_type: int, token: str, *, max_age_s: float = 360.0) -> dict[str, Any] | None:
         candle = self.candles.latest(exchange_type, token)
