@@ -234,7 +234,7 @@ def _refresh_signals() -> list[dict]:
                     for row in stream_rows
                 ]
                 stream_summary = summarize_candles(stream_rows, now=now_ist())
-                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3:
+                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3 and (symbol.upper() in INDEX_SYMBOLS):
                     stream_summary.update(
                         {
                             "vwap": candle_vwap(stream_rows),
