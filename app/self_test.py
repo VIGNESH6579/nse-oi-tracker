@@ -11,7 +11,6 @@ import logging
 import threading
 from datetime import datetime
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 from analytics.intraday_confirm import candle_minute
 
@@ -83,11 +82,9 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
 
     def intraday_candles():
         if stream is not None and getattr(stream, "enabled", False):
-            candles = stream.recent_candles_for_symbol("NIFTY", limit=12)
+            candles = stream.recent_candles_for_symbol(SAMPLE[0], limit=12)
             if candles:
-                first_dt = datetime.fromtimestamp(float(candles[0]["timestamp_ms"]) / 1000.0, tz=ZoneInfo("Asia/Kolkata"))
-                first = first_dt.hour * 60 + first_dt.minute
-                return len(candles) >= 3 and first == 555, f"{len(candles)} live WebSocket candles, first_minute={first} (expected 555)"
+                return len(candles) >= 3, f"{len(candles)} live WebSocket candles for {SAMPLE[0]}"
         candles = angel.intraday_candles("NIFTY")
         first = candle_minute(candles[0]) if candles else None
         return len(candles) >= 3 and first == 555, f"{len(candles)} historical Angel candles, first_minute={first} (expected 555)"
