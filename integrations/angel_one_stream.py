@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 STREAM_URL = "wss://smartapisocket.angelone.in/smart-stream"
 MAX_SUBSCRIPTIONS = 1000
 HEARTBEAT_INTERVAL_SECONDS = 10
+TEXT_HEARTBEAT_INTERVAL_SECONDS = 30
 NSE_CM = 1
 NSE_FO = 2
 QUOTE_MODE = 2
@@ -235,6 +236,8 @@ class AngelOneMarketStream:
         self._thread: threading.Thread | None = None
         self._ws: Any = None
         self._stop = threading.Event()
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
         self._connected = False
         self._last_tick_at = 0.0
         self._last_tick_symbol = ""
@@ -279,11 +282,13 @@ class AngelOneMarketStream:
             logger.info("Angel WebSocket remains disabled until Angel credentials are configured")
             return
         self._stop.clear()
+        self._heartbeat_stop.clear()
         self._thread = threading.Thread(target=self._run, name="angel-stream", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self._heartbeat_stop.set()
         ws = self._ws
         if ws is not None:
             try:
@@ -438,6 +443,9 @@ class AngelOneMarketStream:
             self._connected = True
             self._last_error = ""
         self._send_subscribe(sorted(self._subscriptions), ws=ws)
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(target=self._text_heartbeat_loop, args=(ws,), name="angel-stream-heartbeat", daemon=True)
+        self._heartbeat_thread.start()
 
     def _send_subscribe(self, tokens: list[tuple[int, str]], *, ws: Any | None = None) -> None:
         if not tokens:
@@ -486,7 +494,16 @@ class AngelOneMarketStream:
     def _on_error(self, _ws: Any, error: Any) -> None:
         self._record_error(type(error).__name__)
 
+    def _text_heartbeat_loop(self, ws: Any) -> None:
+        while not self._heartbeat_stop.wait(TEXT_HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                ws.send("ping")
+            except Exception as exc:
+                self._record_error(type(exc).__name__)
+                return
+
     def _on_close(self, _ws: Any, _status: Any, _message: Any) -> None:
+        self._heartbeat_stop.set()
         with self._lock:
             self._connected = False
 
