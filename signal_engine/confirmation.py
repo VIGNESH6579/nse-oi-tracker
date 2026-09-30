@@ -78,7 +78,7 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
     vwap = intraday.get("vwap")
     have_intraday = bool(intraday.get("available")) and vwap and ltp > 0
     if require_real_intraday:
-        real_candles = (intraday.get("source") == "angel_one_5m_ohlcv"
+        real_candles = (intraday.get("source") in {"angel_one_5m_ohlcv", "angel_one_websocket_v2"}
                         and intraday.get("data_frequency") == "FIVE_MINUTE"
                         and int(intraday.get("candle_count") or 0) >= 3
                         and intraday.get("candle_fresh") is True
