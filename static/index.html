@@ -708,6 +708,11 @@ function scanner() {
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';
         await this.loadServerHistory();
+        // History is server-owned and the backend trade monitor runs every 30s.
+        // Keep currentLTP/status synchronized without changing the saved entry.
+        if (!this._historyRefreshTimer) {
+          this._historyRefreshTimer = setInterval(() => this.loadServerHistory(), 30000);
+        }
       } catch(e) {
         this.error = e.name === 'AbortError'
           ? 'Live scan is taking longer than 45s; showing the last received data and retrying.'
