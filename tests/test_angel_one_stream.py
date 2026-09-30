@@ -1,6 +1,12 @@
 import struct
 
-from integrations.angel_one_stream import (\n    AngelOneMarketStream,\n    HEARTBEAT_INTERVAL_SECONDS,\n    LocalFiveMinuteBuilder,\n    parse_stream_packet,\n)
+from integrations.angel_one_stream import (
+    AngelOneMarketStream,
+    HEARTBEAT_INTERVAL_SECONDS,
+    LocalFiveMinuteBuilder,
+    TEXT_HEARTBEAT_INTERVAL_SECONDS,
+    parse_stream_packet,
+)
 
 
 def _packet(*, mode=3, token=b"11536", ts=1727000000000, ltp=12345, volume=1000, oi=250000):
@@ -97,18 +103,8 @@ def test_ensure_symbols_seeds_equity_and_nearest_futures():
     assert (2, "201") not in stream._subscriptions
 
 
-def test_stream_uses_official_protocol_heartbeat_interval(monkeypatch):
-    stream = AngelOneMarketStream(None, enabled=True)
-    captured = {}
-
-    class FakeWS:
-        def run_forever(self, **kwargs):
-            captured.update(kwargs)
-
-    stream._ws = FakeWS()
-    stream._ws.run_forever(ping_interval=HEARTBEAT_INTERVAL_SECONDS)
-
-    assert captured["ping_interval"] == 10
+def test_stream_uses_official_protocol_heartbeat_interval():
+    assert HEARTBEAT_INTERVAL_SECONDS == 10
 
 
 def test_subscription_payload_uses_ten_character_correlation_id():
