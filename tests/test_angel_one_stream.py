@@ -2,7 +2,7 @@ import struct
 
 from integrations.angel_one_stream import (
     AngelOneMarketStream,
-    HEARTBEAT_INTERVAL_SECONDS,
+    PROTOCOL_PING_INTERVAL_SECONDS,
     LocalFiveMinuteBuilder,
     TEXT_HEARTBEAT_INTERVAL_SECONDS,
     parse_stream_packet,
@@ -103,8 +103,8 @@ def test_ensure_symbols_seeds_equity_and_nearest_futures():
     assert (2, "201") not in stream._subscriptions
 
 
-def test_stream_uses_official_protocol_heartbeat_interval():
-    assert HEARTBEAT_INTERVAL_SECONDS == 10
+def test_stream_disables_library_protocol_ping():
+    assert PROTOCOL_PING_INTERVAL_SECONDS == 0
 
 
 def test_subscription_payload_uses_ten_character_correlation_id():
