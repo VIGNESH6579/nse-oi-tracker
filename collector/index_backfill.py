@@ -23,7 +23,7 @@ def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=N
     stored = 0
     sources = set()
 
-    for symbol in INDICES:
+    for symbol in INDEX_TYPES:
         rows = []
         source = "nse_index_history"
         try:
