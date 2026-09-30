@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 STREAM_URL = "wss://smartapisocket.angelone.in/smart-stream"
 MAX_SUBSCRIPTIONS = 1000
-HEARTBEAT_INTERVAL_SECONDS = 10
+PROTOCOL_PING_INTERVAL_SECONDS = 0
 TEXT_HEARTBEAT_INTERVAL_SECONDS = 30
 NSE_CM = 1
 NSE_FO = 2
@@ -424,7 +424,7 @@ class AngelOneMarketStream:
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
-                self._ws.run_forever(ping_interval=HEARTBEAT_INTERVAL_SECONDS)
+                self._ws.run_forever(ping_interval=PROTOCOL_PING_INTERVAL_SECONDS)
             except Exception as exc:
                 self._record_error(type(exc).__name__)
             finally:
