@@ -421,7 +421,7 @@ class SignalRepository:
         """Compact technical-data freshness diagnostics for /api/health."""
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) AS bars, COUNT(DISTINCT symbol) AS symbols, "
+                "SELECT (SELECT COUNT(*) FROM daily_equity_bars) AS bars, COUNT(*) AS symbols, "
                 "MAX(latest.latest_trade_date) AS latest_trade_date, "
                 "COALESCE(MIN(n), 0) AS min_bars, COALESCE(MAX(n), 0) AS max_bars "
                 "FROM (SELECT symbol, COUNT(*) AS n FROM daily_equity_bars GROUP BY symbol) AS counts, (SELECT MAX(trade_date) AS latest_trade_date FROM daily_equity_bars) AS latest"
