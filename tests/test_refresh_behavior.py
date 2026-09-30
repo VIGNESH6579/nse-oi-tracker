@@ -101,3 +101,9 @@ def test_data_source_labels_are_truthful():
     assert 'oi_engine._last_scan_stats.get("oi_source")' in MAIN
     assert "NSE public feed" not in INDEX and "Public NSE Data" not in INDEX
     assert "OI: " in INDEX and "Price: " in INDEX
+
+
+def test_stream_context_preserves_observed_opening_range():
+    assert '"or_high": qctx.get("or_high")' in MAIN
+    assert '"or_low": qctx.get("or_low")' in MAIN
+    assert '"or_complete": True' in MAIN
