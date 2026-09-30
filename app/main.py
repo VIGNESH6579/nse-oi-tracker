@@ -157,13 +157,18 @@ def expected_latest_bhavcopy_date(now: datetime | None = None) -> date:
     return recent_nse_trading_dates(candidate, 1)[0]
 
 
+DAILY_HISTORY_TARGET_BARS = 60
+
 def bhavcopy_backfill_required(
     summary: dict[str, object], now: datetime | None = None
 ) -> bool:
-    """Report stale or empty daily equity history as requiring backfill."""
+    """Require both a current published date and enough depth for technical validation."""
     bars = int(summary.get("bars") or 0)
+    min_bars = int(summary.get("min_bars") or 0)
     latest_trade_date = summary.get("latest_trade_date")
     if bars == 0 or not latest_trade_date:
+        return True
+    if min_bars < DAILY_HISTORY_TARGET_BARS:
         return True
     return str(latest_trade_date) < expected_latest_bhavcopy_date(now).isoformat()
 
@@ -1276,6 +1281,7 @@ async def health():
         "holiday_calendar": holiday_calendar_metadata(),
         "daily_equity_data": daily_equity_data,
         "bhavcopy_backfill_required": bhavcopy_backfill_required(daily_equity_data, now),
+        "daily_history_target_bars": DAILY_HISTORY_TARGET_BARS,
         "daily_index_data": daily_index_data,
         "index_backfill_required": daily_index_data.get("bars", 0) == 0,
     }
