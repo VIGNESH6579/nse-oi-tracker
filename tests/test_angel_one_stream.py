@@ -73,3 +73,25 @@ def test_subscription_cap_is_1000():
     added = stream.ensure_subscriptions([(1, str(i)) for i in range(1200)])
     assert added == 1000
     assert len(stream._subscriptions) == 1000
+
+
+def test_ensure_symbols_seeds_equity_and_nearest_futures():
+    class Instrument:
+        def __init__(self, token, expiry):
+            self.token = token
+            self.expiry = expiry
+
+    class MarketData:
+        def _get_instruments(self):
+            return {
+                ("NSE", "RELIANCE"): Instrument("100", "01JAN2099"),
+                ("NFO", "RELIANCE01OCT2099FUT"): Instrument("200", "01Oct2099"),
+                ("NFO", "RELIANCE01NOV2099FUT"): Instrument("201", "01Nov2099"),
+            }
+
+    stream = AngelOneMarketStream(MarketData(), enabled=True)
+    added = stream.ensure_symbols(["RELIANCE"])
+    assert added == 2
+    assert (1, "100") in stream._subscriptions
+    assert (2, "200") in stream._subscriptions
+    assert (2, "201") not in stream._subscriptions
