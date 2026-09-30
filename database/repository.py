@@ -428,7 +428,9 @@ class SignalRepository:
             ).fetchone()
         return dict(row)
 
-    ugh daily bars."""
+    def daily_history_coverage(self, *, atr_bars: int = 15, ready_bars: int = 60,
+                               symbols: Iterable[str] | None = None) -> dict[str, float | int]:
+        """Percentage of symbols (the F&O universe when given) with enough daily bars."""
         wanted = sorted({str(sym).upper() for sym in symbols or () if sym})
         if wanted:
             with self._connect() as connection:
