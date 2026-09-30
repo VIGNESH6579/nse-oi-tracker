@@ -240,6 +240,16 @@ def _refresh_signals() -> list[dict]:
                 ]
                 stream_summary = summarize_candles(stream_rows, now=now_ist())
                 if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3 :
+                    # A WebSocket subscription can start after 09:30, so its local
+                    # candle buffer may not contain the opening range. Preserve the
+                    # opening range observed independently by the OI scan loop.
+                    if not stream_summary.get("or_complete") and qctx.get("or_complete"):
+                        stream_summary.update({
+                            "or_high": qctx.get("or_high"),
+                            "or_low": qctx.get("or_low"),
+                            "or_complete": True,
+                            "or_source": qctx.get("or_source", "observed_scans"),
+                        })
                     stream_summary.update(
                         {
                             "vwap": qctx.get("vwap") if qctx.get("vwap") is not None else candle_vwap(stream_rows),
