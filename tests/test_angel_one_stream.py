@@ -109,3 +109,23 @@ def test_stream_uses_official_protocol_heartbeat_interval(monkeypatch):
     stream._ws.run_forever(ping_interval=HEARTBEAT_INTERVAL_SECONDS)
 
     assert captured["ping_interval"] == 10
+
+
+def test_subscription_payload_uses_ten_character_correlation_id():
+    stream = AngelOneMarketStream(None, enabled=True)
+
+    class FakeWS:
+        def __init__(self):
+            self.payload = None
+
+        def send(self, value):
+            self.payload = value
+
+    ws = FakeWS()
+    stream._send_subscribe([(1, "100")], ws=ws)
+    import json
+    payload = json.loads(ws.payload)
+    assert payload["correlationID"] == "nseoi00001"
+    assert len(payload["correlationID"]) == 10
+    assert payload["action"] == 1
+    assert payload["params"]["mode"] == 3
