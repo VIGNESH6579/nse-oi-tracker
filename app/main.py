@@ -648,13 +648,10 @@ async def _startup_backfill_then_retest() -> None:
     backfill task itself completes, closes that gap without ever blocking
     startup and without changing the backfill's own bounded behaviour.
     """
-    global _startup_state, _startup_error, _startup_ready_at_ist
     try:
         await automatic_startup_backfill()
     except Exception:
         logger.exception("Startup backfill wrapper failed")
-        _startup_state = "BLOCKED"
-        _startup_error = "startup Bhavcopy backfill failed"
         return
     try:
         await refresh_signals()
@@ -664,112 +661,102 @@ async def _startup_backfill_then_retest() -> None:
         await scheduled_self_test(_startup_self_test_stage())
     except Exception:
         logger.exception("Post-backfill self-test failed")
-    if startup_backfill_task is None:
-    final_readiness = self_test.readiness()
-        if final_readiness == "READY":
-            _startup_state = "READY"
-            _startup_error = None
-            _startup_ready_at_ist = now_ist().isoformat()
-        else:
-            _startup_state = final_readiness if final_readiness in {"DEGRADED", "BLOCKED"} else "UNTESTED"
-            _startup_error = f"background startup self-test verdict={final_readiness}"
-            _startup_ready_at_ist = None
 
 
 async def scheduled_durable_snapshot() -> None:
-        """Persist today's working database during market hours."""
-        memory_watchdog()
-        maybe_fill_feed_gaps()
-        current = now_ist()
-        minutes = current.hour * 60 + current.minute
-        if current.weekday() < 5 and 540 <= minutes <= 945:
-            await asyncio.to_thread(upload_database_snapshot, settings.database_path)
+    """Persist today's working database during market hours."""
+    memory_watchdog()
+    maybe_fill_feed_gaps()
+    current = now_ist()
+    minutes = current.hour * 60 + current.minute
+    if current.weekday() < 5 and 540 <= minutes <= 945:
+        await asyncio.to_thread(upload_database_snapshot, settings.database_path)
 
 
 async def startup_universe_maintenance() -> None:
-        """Load the real F&O universe, purge stale bars, and seed stream subscriptions."""
-        try:
-            symbols = await asyncio.to_thread(bundled_fno_symbols)
-            if not symbols:
-                logger.warning("Bar purge skipped: F&O universe unavailable")
-                return
-            result = await asyncio.to_thread(repository.purge_non_fno_bars, symbols)
-            logger.info("F&O universe applied source=%s symbols=%d purge=%s", universe_source(), len(symbols), result)
-            if angel_stream.enabled:
-                added = await asyncio.to_thread(angel_stream.ensure_symbols, sorted(symbols))
-                logger.info(
-                    "Angel WebSocket subscriptions seeded symbols=%d added=%d total=%d",
-                    len(symbols), added, angel_stream.health()["subscriptions"],
-                )
-        except Exception:
-            logger.exception("F&O universe maintenance failed")
+    """Load the real F&O universe, purge stale bars, and seed stream subscriptions."""
+    try:
+        symbols = await asyncio.to_thread(bundled_fno_symbols)
+        if not symbols:
+            logger.warning("Bar purge skipped: F&O universe unavailable")
+            return
+        result = await asyncio.to_thread(repository.purge_non_fno_bars, symbols)
+        logger.info("F&O universe applied source=%s symbols=%d purge=%s", universe_source(), len(symbols), result)
+        if angel_stream.enabled:
+            added = await asyncio.to_thread(angel_stream.ensure_symbols, sorted(symbols))
+            logger.info(
+                "Angel WebSocket subscriptions seeded symbols=%d added=%d total=%d",
+                len(symbols), added, angel_stream.health()["subscriptions"],
+            )
+    except Exception:
+        logger.exception("F&O universe maintenance failed")
 
 
 async def scheduled_backfill_topup() -> None:
-        """After the close: top up missing history to the full target (cheap when complete)."""
-        if not settings.startup_backfill:
-            return
-        try:
-            result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=settings.backfill_target_days)
-            logger.info("Post-close bhavcopy top-up finished: %s", result)
-        except Exception:
-            logger.exception("Post-close bhavcopy top-up failed")
+    """After the close: top up missing history to the full target (cheap when complete)."""
+    if not settings.startup_backfill:
+        return
+    try:
+        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=settings.backfill_target_days)
+        logger.info("Post-close bhavcopy top-up finished: %s", result)
+    except Exception:
+        logger.exception("Post-close bhavcopy top-up failed")
 
 
 _gap_fill: dict = {"running": False, "last_start": None, "symbols": [], "result": None, "gave_up": set()}
 
 
 def maybe_fill_feed_gaps() -> bool:
-        """Give bars to F&O names the OI feed reports but the Angel-derived universe lacks.
+    """Give bars to F&O names the OI feed reports but the Angel-derived universe lacks.
 
-        Renamed/demerged stocks (e.g. TMPV/TMCV) would otherwise fail the gate forever with
-        ``no_daily_bars``. Runs in a background thread, at most once per 20 minutes.
-        """
-        if not render_startup_backfill_enabled():
-            return False
-        last = _gap_fill["last_start"]
-        if _gap_fill["running"] or _backfill_lock.locked() or (last is not None and time.monotonic() - last < 1200):
-            return False
-        universe = cached_universe()
-        if not universe:
-            return False
-        extras = set(oi_engine._feed_symbols) - universe
-        missing = set(repository.symbols_missing_bars(universe | extras, 15)) - _gap_fill["gave_up"]
-        if not missing:
-            return False
-        _gap_fill.update(running=True, last_start=time.monotonic(), symbols=sorted(missing)[:20])
+    Renamed/demerged stocks (e.g. TMPV/TMCV) would otherwise fail the gate forever with
+    ``no_daily_bars``. Runs in a background thread, at most once per 20 minutes.
+    """
+    if not render_startup_backfill_enabled():
+        return False
+    last = _gap_fill["last_start"]
+    if _gap_fill["running"] or _backfill_lock.locked() or (last is not None and time.monotonic() - last < 1200):
+        return False
+    universe = cached_universe()
+    if not universe:
+        return False
+    extras = set(oi_engine._feed_symbols) - universe
+    missing = set(repository.symbols_missing_bars(universe | extras, 15)) - _gap_fill["gave_up"]
+    if not missing:
+        return False
+    _gap_fill.update(running=True, last_start=time.monotonic(), symbols=sorted(missing)[:20])
 
-        def worker() -> None:
-            try:
-                add_extra_symbols(extras)
-                _gap_fill["result"] = backfill_symbol_gaps(repository, missing, end_date=_backfill_end_date(), dates=20)
-                _gap_fill["gave_up"].update(repository.symbols_missing_bars(missing, 15))     # no bhavcopy rows exist: stop retrying
-                logger.info("Feed gap-fill finished symbols=%s result=%s gave_up=%s", sorted(missing)[:20], _gap_fill["result"], sorted(_gap_fill["gave_up"]))
-            except Exception:
-                logger.exception("Feed gap-fill failed")
-            finally:
-                _gap_fill["running"] = False
+    def worker() -> None:
+        try:
+            add_extra_symbols(extras)
+            _gap_fill["result"] = backfill_symbol_gaps(repository, missing, end_date=_backfill_end_date(), dates=20)
+            _gap_fill["gave_up"].update(repository.symbols_missing_bars(missing, 15))     # no bhavcopy rows exist: stop retrying
+            logger.info("Feed gap-fill finished symbols=%s result=%s gave_up=%s", sorted(missing)[:20], _gap_fill["result"], sorted(_gap_fill["gave_up"]))
+        except Exception:
+            logger.exception("Feed gap-fill failed")
+        finally:
+            _gap_fill["running"] = False
 
-        threading.Thread(target=worker, daemon=True, name="feed-gap-fill").start()
-        return True
+    threading.Thread(target=worker, daemon=True, name="feed-gap-fill").start()
+    return True
 
 
 def _current_rss_mb() -> float | None:
-        try:
-            with open("/proc/self/statm") as handle:
-                return round(int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1048576, 2)
-        except Exception:
-            return None
+    try:
+        with open("/proc/self/statm") as handle:
+            return round(int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1048576, 2)
+    except Exception:
+        return None
 
 
 def memory_watchdog() -> float | None:
-        """Warn (and collect garbage) when RSS nears Render Free's 512 MB limit."""
-        rss = _current_rss_mb()
-        limit = float(os.getenv("MEMORY_WARN_MB", "430"))
-        if rss is not None and rss > limit:
-            logger.warning("MEMORY_HIGH rss_mb=%.1f warn_mb=%.0f; running gc", rss, limit)
-            gc.collect()
-        return rss
+    """Warn (and collect garbage) when RSS nears Render Free's 512 MB limit."""
+    rss = _current_rss_mb()
+    limit = float(os.getenv("MEMORY_WARN_MB", "430"))
+    if rss is not None and rss > limit:
+        logger.warning("MEMORY_HIGH rss_mb=%.1f warn_mb=%.0f; running gc", rss, limit)
+        gc.collect()
+    return rss
 
 
 _data_quality: dict[str, int] = {"candle_ok": 0, "candle_stale": 0, "candle_empty": 0, "candle_fail": 0, "candle_cooldown_skips": 0, "quote_ctx": 0}
@@ -778,340 +765,341 @@ _bias_cache: tuple[float, str] = (0.0, "UNKNOWN")
 
 
 def _market_bias_cached() -> str:
-        """Nifty 5-minute regime (BULL/BEAR/NEUTRAL/UNKNOWN), cached 90 s; soft input only."""
-        global _bias_cache
-        if time.monotonic() - _bias_cache[0] < 90:
-            return _bias_cache[1]
-        bias = "UNKNOWN"
-        if angel_market_data is not None:
-            try:
-                quotes = angel_market_data.full_quotes(["NIFTY"])
-                bias = bias_from_quote(next(iter(quotes.values()))) if quotes else "UNKNOWN"
-            except Exception:
-                bias = "UNKNOWN"
-        if angel_market_data is not None and bias == "UNKNOWN":
-            try:
-                bias = bias_from_candles(angel_market_data.intraday_candles("NIFTY", interval="FIVE_MINUTE", exchange="NSE", days=1))
-            except Exception as exc:
-                logger.warning("Nifty regime unavailable; treating as UNKNOWN (%s)", str(exc)[:120])
-        _bias_cache = (time.monotonic(), bias)
-        return bias
+    """Nifty 5-minute regime (BULL/BEAR/NEUTRAL/UNKNOWN), cached 90 s; soft input only."""
+    global _bias_cache
+    if time.monotonic() - _bias_cache[0] < 90:
+        return _bias_cache[1]
+    bias = "UNKNOWN"
+    if angel_market_data is not None:
+        try:
+            quotes = angel_market_data.full_quotes(["NIFTY"])
+            bias = bias_from_quote(next(iter(quotes.values()))) if quotes else "UNKNOWN"
+        except Exception:
+            bias = "UNKNOWN"
+    if angel_market_data is not None and bias == "UNKNOWN":
+        try:
+            bias = bias_from_candles(angel_market_data.intraday_candles("NIFTY", interval="FIVE_MINUTE", exchange="NSE", days=1))
+        except Exception as exc:
+            logger.warning("Nifty regime unavailable; treating as UNKNOWN (%s)", str(exc)[:120])
+    _bias_cache = (time.monotonic(), bias)
+    return bias
 
 
 def _merge_bars(equity: dict, index: dict) -> dict:
-        """Combine equity and index bars WITHOUT letting empty index lists erase stock history.
+    """Combine equity and index bars WITHOUT letting empty index lists erase stock history.
 
-        daily_index_bars_for_symbols() returns ``{symbol: []}`` for every requested symbol, so a
-        plain dict.update() blanked every stock's bars (ATR/EMA/volume were never available).
-        """
-        merged = dict(equity)
-        for symbol, bars in index.items():
-            if bars:
-                merged[symbol] = bars
-            else:
-                merged.setdefault(symbol, [])
-        return merged
+    daily_index_bars_for_symbols() returns ``{symbol: []}`` for every requested symbol, so a
+    plain dict.update() blanked every stock's bars (ATR/EMA/volume were never available).
+    """
+    merged = dict(equity)
+    for symbol, bars in index.items():
+        if bars:
+            merged[symbol] = bars
+        else:
+            merged.setdefault(symbol, [])
+    return merged
 
 
 def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[dict]:
-        """Attach the transparent confirmation gate to every candidate (fail closed)."""
-        now = now_ist()
-        today = now.date().isoformat()
-        banned = banned_symbols()
-        bias = _market_bias_cached()
-        out, missing_counts, failed_symbols = [], {}, {}
-        for signal in signals:
-            symbol = str(signal.get("symbol") or "")
-            tech = signal.get("technical_context") or {}
-            bars = [bar for bar in bars_by_symbol.get(symbol, []) if str(bar.get("trade_date")) != today]
-            gate = evaluate_gate(
-                signal, oi_ctx=signal.get("oi_window") or {}, intraday=signal.get("intraday_context"),
-                atr14=tech.get("atr14"), avg_volume=average_daily_volume(bars),
-                prev_close=float(bars[-1]["close"]) if bars else None,
-                ema20=tech.get("ema20"), ema50=tech.get("ema50"),
-                banned=symbol.upper() in banned, market_bias=bias, now=now,
-                has_bars=bool(bars), daily_validation_ready=tech.get("validation_ready") is True,
-                require_real_intraday=True,
-                is_index=symbol.upper() in INDEX_SYMBOLS,
-            )
-            if gate["missing_confirmations"]:
-                failed_symbols[symbol] = gate["missing_confirmations"][:4]
-            for reason in gate["missing_confirmations"]:
-                missing_counts[reason] = missing_counts.get(reason, 0) + 1
-            merged = {**signal, **gate}
-            try:
-                # The exact entry/SL/targets that will be tracked, so the table and the tracked trade agree.
-                _payload, plan = repository._event_payload(merged, now)
-                merged["plan"] = {key: plan[key] for key in ("entry", "stop_loss", "target_1", "target_2", "risk_reward", "source")}
-            except Exception:
-                logger.debug("Could not attach trade plan to %s", symbol, exc_info=True)
-            out.append(merged)
-        passed = sum(1 for item in out if item.get("actionable"))
-        _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), failed_symbols=dict(list(failed_symbols.items())[:10]), at=now.isoformat(timespec="seconds"))
-        return out
+    """Attach the transparent confirmation gate to every candidate (fail closed)."""
+    now = now_ist()
+    today = now.date().isoformat()
+    banned = banned_symbols()
+    bias = _market_bias_cached()
+    out, missing_counts, failed_symbols = [], {}, {}
+    for signal in signals:
+        symbol = str(signal.get("symbol") or "")
+        tech = signal.get("technical_context") or {}
+        bars = [bar for bar in bars_by_symbol.get(symbol, []) if str(bar.get("trade_date")) != today]
+        gate = evaluate_gate(
+            signal, oi_ctx=signal.get("oi_window") or {}, intraday=signal.get("intraday_context"),
+            atr14=tech.get("atr14"), avg_volume=average_daily_volume(bars),
+            prev_close=float(bars[-1]["close"]) if bars else None,
+            ema20=tech.get("ema20"), ema50=tech.get("ema50"),
+            banned=symbol.upper() in banned, market_bias=bias, now=now,
+            has_bars=bool(bars), daily_validation_ready=tech.get("validation_ready") is True,
+            require_real_intraday=True,
+            is_index=symbol.upper() in INDEX_SYMBOLS,
+        )
+        if gate["missing_confirmations"]:
+            failed_symbols[symbol] = gate["missing_confirmations"][:4]
+        for reason in gate["missing_confirmations"]:
+            missing_counts[reason] = missing_counts.get(reason, 0) + 1
+        merged = {**signal, **gate}
+        try:
+            # The exact entry/SL/targets that will be tracked, so the table and the tracked trade agree.
+            _payload, plan = repository._event_payload(merged, now)
+            merged["plan"] = {key: plan[key] for key in ("entry", "stop_loss", "target_1", "target_2", "risk_reward", "source")}
+        except Exception:
+            logger.debug("Could not attach trade plan to %s", symbol, exc_info=True)
+        out.append(merged)
+    passed = sum(1 for item in out if item.get("actionable"))
+    _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), failed_symbols=dict(list(failed_symbols.items())[:10]), at=now.isoformat(timespec="seconds"))
+    return out
 
 
 async def scheduled_ban_refresh() -> None:
-        """Daily F&O ban list; hard 90 s cap so a hung fetch is always reported."""
-        try:
-            await asyncio.wait_for(asyncio.to_thread(refresh_ban_list), timeout=90)
-        except asyncio.TimeoutError:
-            logger.warning("FNO_BAN_LIST_UNAVAILABLE: refresh timed out after 90 s")
-        except Exception:
-            logger.exception("F&O ban list refresh failed")
+    """Daily F&O ban list; hard 90 s cap so a hung fetch is always reported."""
+    try:
+        await asyncio.wait_for(asyncio.to_thread(refresh_ban_list), timeout=90)
+    except asyncio.TimeoutError:
+        logger.warning("FNO_BAN_LIST_UNAVAILABLE: refresh timed out after 90 s")
+    except Exception:
+        logger.exception("F&O ban list refresh failed")
 
 
 _gap_cache: tuple[float, list[str]] = (0.0, [])
 
 
 def _universe_gap() -> list[str]:
-        """F&O symbols lacking enough daily bars (cached 5 min so /api/health stays fast)."""
-        global _gap_cache
-        if time.monotonic() - _gap_cache[0] < 60:
-            return _gap_cache[1]
-        universe = cached_universe()
-        missing = repository.symbols_missing_bars(universe, 15) if universe else []
-        _gap_cache = (time.monotonic(), missing)
-        return missing
+    """F&O symbols lacking enough daily bars (cached 5 min so /api/health stays fast)."""
+    global _gap_cache
+    if time.monotonic() - _gap_cache[0] < 60:
+        return _gap_cache[1]
+    universe = cached_universe()
+    missing = repository.symbols_missing_bars(universe, 15) if universe else []
+    _gap_cache = (time.monotonic(), missing)
+    return missing
 
 
 def _self_test_probes(stage: str):
-        return self_test.build_probes(
-            stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
-            scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth,
-        )
+    return self_test.build_probes(
+        stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
+        scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth,
+    )
 
 
 def _startup_self_test_stage() -> str:
-        """Which self-test stage is meaningful at boot right now.
+    """Which self-test stage is meaningful at boot right now.
 
-        post_open needs a live session (real day OHLC, >= 3 five-minute candles); pre_open only needs
-        the session, universe, bars and ban list. Booting at 02:00 or 09:16 and running the wrong stage
-        reports a false BLOCKED for hours, so pick by the clock.
-        """
-        now = now_ist()
-        return "post_open" if is_market_open() and now.hour * 60 + now.minute >= 9 * 60 + 30 else "pre_open"
+    post_open needs a live session (real day OHLC, >= 3 five-minute candles); pre_open only needs
+    the session, universe, bars and ban list. Booting at 02:00 or 09:16 and running the wrong stage
+    reports a false BLOCKED for hours, so pick by the clock.
+    """
+    now = now_ist()
+    return "post_open" if is_market_open() and now.hour * 60 + now.minute >= 9 * 60 + 30 else "pre_open"
 
 
 async def scheduled_self_test(stage: str) -> None:
-        """09:05 (pre-open) and 09:35 (post-open) IST: prove every data source works, loudly."""
-        if is_trading_holiday(now_ist().date()) is True:
-            return
-        if angel_market_data is None:
-            logger.warning("SELF_TEST stage=%s skipped: Angel One not configured", stage)
-            return
-        try:
-            await asyncio.to_thread(self_test.run_stage, stage, _self_test_probes(stage), now_ist())
-        except Exception:
-            logger.exception("Self-test crashed (stage=%s)", stage)
+    """09:05 (pre-open) and 09:35 (post-open) IST: prove every data source works, loudly."""
+    if is_trading_holiday(now_ist().date()) is True:
+        return
+    if angel_market_data is None:
+        logger.warning("SELF_TEST stage=%s skipped: Angel One not configured", stage)
+        return
+    try:
+        await asyncio.to_thread(self_test.run_stage, stage, _self_test_probes(stage), now_ist())
+    except Exception:
+        logger.exception("Self-test crashed (stage=%s)", stage)
 
 
 async def scheduled_trade_monitor() -> None:
-        """Every 30 s in market hours: check EVERY open paper trade against live prices.
+    """Every 30 s in market hours: check EVERY open paper trade against live prices.
 
-        Independent of the signal list and of dashboard visits, so target/stop/breakeven are
-        caught even after a symbol drops off the published signals.
-        """
-        global _scheduler_heartbeat_at_ist
-        now = now_ist()
-        _scheduler_heartbeat_at_ist = now.isoformat()
-        minutes = now.hour * 60 + now.minute
-        if now.weekday() >= 5 or not (9 * 60 + 15 <= minutes <= 15 * 60 + 15):
+    Independent of the signal list and of dashboard visits, so target/stop/breakeven are
+    caught even after a symbol drops off the published signals.
+    """
+    global _scheduler_heartbeat_at_ist
+    now = now_ist()
+    _scheduler_heartbeat_at_ist = now.isoformat()
+    minutes = now.hour * 60 + now.minute
+    if now.weekday() >= 5 or not (9 * 60 + 15 <= minutes <= 15 * 60 + 15):
+        return
+    try:
+        symbols = await asyncio.to_thread(repository.unresolved_event_symbols, now.date().isoformat())
+        if not symbols:
             return
-        try:
-            symbols = await asyncio.to_thread(repository.unresolved_event_symbols, now.date().isoformat())
-            if not symbols:
-                return
-            prices: dict[str, float] = {}
-            if angel_market_data is not None:
-                try:
-                    quotes = await asyncio.to_thread(angel_market_data.full_quotes, list(symbols))
-                    prices = {s: float(q.get("ltp") or 0) for s, q in quotes.items() if float(q.get("ltp") or 0) > 0}
-                except Exception as exc:
-                    logger.info("Trade monitor: Angel quotes unavailable (%s); using scan prices", str(exc)[:80])
-            for symbol in symbols:
-                if symbol not in prices:
-                    last = oi_engine.oi_window.last_price(symbol, now)
-                    if last:
-                        prices[symbol] = last
-            closed = await asyncio.to_thread(repository.update_open_events, [], now, prices)
-            if closed:
-                logger.info("Trade monitor closed %d paper trade(s)", closed)
-        except Exception:
-            logger.exception("Trade monitor failed")
+        prices: dict[str, float] = {}
+        if angel_market_data is not None:
+            try:
+                quotes = await asyncio.to_thread(angel_market_data.full_quotes, list(symbols))
+                prices = {s: float(q.get("ltp") or 0) for s, q in quotes.items() if float(q.get("ltp") or 0) > 0}
+            except Exception as exc:
+                logger.info("Trade monitor: Angel quotes unavailable (%s); using scan prices", str(exc)[:80])
+        for symbol in symbols:
+            if symbol not in prices:
+                last = oi_engine.oi_window.last_price(symbol, now)
+                if last:
+                    prices[symbol] = last
+        closed = await asyncio.to_thread(repository.update_open_events, [], now, prices)
+        if closed:
+            logger.info("Trade monitor closed %d paper trade(s)", closed)
+    except Exception:
+        logger.exception("Trade monitor failed")
 
 
 def render_startup_backfill_enabled() -> bool:
-        """Only run automatic backfill on Render; local/dev uses the HTTP trigger."""
-        return bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+    """Only run automatic backfill on Render; local/dev uses the HTTP trigger."""
+    return bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
 
 
 # ?? Background poller ?????????????????????????????????????????????????????????
 
 async def background_poller():
-        """Re-scan all F&O stocks every 60s during market hours."""
-        # First scan: wait 15s for session to fully initialise, then scan immediately
-        await asyncio.sleep(15)
+    """Re-scan all F&O stocks every 60s during market hours."""
+    # First scan: wait 15s for session to fully initialise, then scan immediately
+    await asyncio.sleep(15)
+    if is_market_open():
+        logger.info("Market open ? initial scan?")
+        try:
+            await asyncio.to_thread(_refresh_signals_and_release_memory)
+        except Exception as e:
+            logger.error(f"Initial scan error: {e}")
+
+    while True:
+        await asyncio.sleep(settings.poll_interval_seconds)
         if is_market_open():
-            logger.info("Market open ? initial scan?")
+            logger.info("Polling ? scanning F&O stocks?")
             try:
                 await asyncio.to_thread(_refresh_signals_and_release_memory)
             except Exception as e:
-                logger.error(f"Initial scan error: {e}")
-
-        while True:
-            await asyncio.sleep(settings.poll_interval_seconds)
-            if is_market_open():
-                logger.info("Polling ? scanning F&O stocks?")
-                try:
-                    await asyncio.to_thread(_refresh_signals_and_release_memory)
-                except Exception as e:
-                    logger.error(f"Poll scan error: {e}")
+                logger.error(f"Poll scan error: {e}")
 
 
 # ?? Lifecycle ?????????????????????????????????????????????????????????????????
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-        global _startup_state, _startup_ready_at_ist, _startup_error
-        global _scheduler_started_at_ist, _scheduler_heartbeat_at_ist
-        logger.info(f"NSE OI Tracker v{APP_VERSION} starting")
-        _startup_state = "STARTING"
-        _startup_error = None
-        scheduler = AsyncIOScheduler(timezone=IST)
+    global _startup_state, _startup_ready_at_ist, _startup_error
+    global _scheduler_started_at_ist, _scheduler_heartbeat_at_ist
+    logger.info(f"NSE OI Tracker v{APP_VERSION} starting")
+    _startup_state = "STARTING"
+    _startup_error = None
+    scheduler = AsyncIOScheduler(timezone=IST)
+    scheduler.add_job(
+        scheduled_refresh,
+        IntervalTrigger(seconds=settings.poll_interval_seconds, timezone=IST),
+        id="nse-signal-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_history_rollover,
+        CronTrigger(hour=0, minute=5, timezone=IST),
+        id="daily-history-rollover",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        scheduled_market_close,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=15, timezone=IST),
+        id="market-close-expiry",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        scheduled_holiday_calendar_refresh,
+        CronTrigger(day_of_week="sun", hour=7, minute=0, timezone=IST),
+        id="nse-holiday-calendar-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_bhavcopy_ingestion,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=10, timezone=IST),
+        id="nse-daily-bhavcopy-ingestion",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_durable_snapshot,
+        IntervalTrigger(minutes=settings.snapshot_every_min, timezone=IST),
+        id="durable-database-snapshot",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    for _stage, _hour, _minute in (("pre_open", 9, 5), ("post_open", 9, 35)):
         scheduler.add_job(
-            scheduled_refresh,
-            IntervalTrigger(seconds=settings.poll_interval_seconds, timezone=IST),
-            id="nse-signal-refresh",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
+            scheduled_self_test, CronTrigger(day_of_week="mon-fri", hour=_hour, minute=_minute, timezone=IST),
+            args=[_stage], id=f"self-test-{_stage}", replace_existing=True, max_instances=1, coalesce=True,
         )
-        scheduler.add_job(
-            scheduled_history_rollover,
-            CronTrigger(hour=0, minute=5, timezone=IST),
-            id="daily-history-rollover",
-            replace_existing=True,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            scheduled_market_close,
-            CronTrigger(day_of_week="mon-fri", hour=15, minute=15, timezone=IST),
-            id="market-close-expiry",
-            replace_existing=True,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            scheduled_holiday_calendar_refresh,
-            CronTrigger(day_of_week="sun", hour=7, minute=0, timezone=IST),
-            id="nse-holiday-calendar-refresh",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        scheduler.add_job(
-            scheduled_bhavcopy_ingestion,
-            CronTrigger(day_of_week="mon-fri", hour=18, minute=10, timezone=IST),
-            id="nse-daily-bhavcopy-ingestion",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        scheduler.add_job(
-            scheduled_durable_snapshot,
-            IntervalTrigger(minutes=settings.snapshot_every_min, timezone=IST),
-            id="durable-database-snapshot",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        for _stage, _hour, _minute in (("pre_open", 9, 5), ("post_open", 9, 35)):
-            scheduler.add_job(
-                scheduled_self_test, CronTrigger(day_of_week="mon-fri", hour=_hour, minute=_minute, timezone=IST),
-                args=[_stage], id=f"self-test-{_stage}", replace_existing=True, max_instances=1, coalesce=True,
-            )
-        scheduler.add_job(
-            scheduled_trade_monitor, IntervalTrigger(seconds=30, timezone=IST), id="trade-monitor",
-            replace_existing=True, max_instances=1, coalesce=True,
-        )
-        scheduler.add_job(
-            scheduled_ban_refresh,
-            CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone=IST),
-            id="fno-ban-refresh",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        scheduler.add_job(
-            scheduled_backfill_topup,
-            CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=IST),
-            id="post-close-bhavcopy-topup",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        scheduler.start()
-        app.state.scheduler = scheduler
-        _scheduler_started_at_ist = now_ist().isoformat()
-        _scheduler_heartbeat_at_ist = _scheduler_started_at_ist
-        gc.freeze()
-        # Restore analytics before any market-data backfill; the restore is optional
-        # and bounded, so an unavailable bucket never blocks application startup.
-        if repository.daily_equity_bar_summary().get("bars", 0) == 0:
-            await asyncio.to_thread(restore_latest_backup, settings.database_path)
-        if repository.daily_equity_bar_summary().get("bars", 0) == 0:
-            await asyncio.to_thread(restore_bundled_seed, settings.database_path)
-        angel_stream.start()
-        if render_startup_backfill_enabled():
-            # Network work at startup only on Render (never in tests/dev).
-            asyncio.create_task(startup_universe_maintenance())
-            asyncio.create_task(scheduled_ban_refresh())
-        # Render Free has an ephemeral filesystem. If required Bhavcopy history is
-        # missing, complete the bounded startup backfill BEFORE the initial scan and
-        # self-test. This prevents a false bars_coverage failure while history is
-        # still downloading.
-        startup_backfill_needed = bhavcopy_backfill_required(repository.daily_equity_bar_summary())
-        startup_backfill_task = None
-        if startup_backfill_needed and settings.startup_backfill and render_startup_backfill_enabled():
-            _startup_state = "BLOCKED"
-            _startup_error = "waiting for bounded Bhavcopy backfill and startup self-test"
-            startup_backfill_task = asyncio.create_task(_startup_backfill_then_retest())
-            logger.warning("Startup readiness BLOCKED until background Bhavcopy backfill/self-test completes")
-        elif startup_backfill_needed:
-            _startup_state = "BLOCKED"
-            _startup_error = "daily Bhavcopy history is empty or stale and automatic backfill is disabled"
-            logger.warning("Startup readiness BLOCKED: automatic Bhavcopy backfill is disabled")
-        if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
-            asyncio.create_task(asyncio.to_thread(backfill_index_bars, repository, days=60, max_downloads=60, angel_client=angel_market_data))
-        # A newly deployed year is unknown until NSE's public calendar loads.
-        # Await only in that case: normal startup stays local and fast.
-        if not has_holiday_calendar_for_year(now_ist().year):
-            await scheduled_holiday_calendar_refresh()
-        # Preserve an already-populated cache (important for warm restarts and
-        # deterministic API tests); production still performs the initial refresh
-        # whenever no current signal snapshot exists.
-        #
-        # scheduled_refresh()/scheduled_self_test() are correctly gated on market
-        # hours / a fixed clock window for their recurring runs. But Render Free
-        # sleeps and cold-starts at an arbitrary time, so relying only on those
-        # gated jobs left /api/health showing readiness=UNTESTED and
-        # last_scan_at=null indefinitely whenever the process happened to boot
-        # outside those windows. Each is therefore also run ONCE, unconditionally,
-        # right here, in addition to (not instead of) the scheduled jobs.
-        if startup_backfill_task is None:
-            if cache.get("all_signals") is None:
-                try:
-                    await refresh_signals()
-                except Exception:
-                    logger.exception("Startup signal refresh failed")
+    scheduler.add_job(
+        scheduled_trade_monitor, IntervalTrigger(seconds=30, timezone=IST), id="trade-monitor",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_ban_refresh,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone=IST),
+        id="fno-ban-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_backfill_topup,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=IST),
+        id="post-close-bhavcopy-topup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    app.state.scheduler = scheduler
+    _scheduler_started_at_ist = now_ist().isoformat()
+    _scheduler_heartbeat_at_ist = _scheduler_started_at_ist
+    gc.freeze()
+    # Restore analytics before any market-data backfill; the restore is optional
+    # and bounded, so an unavailable bucket never blocks application startup.
+    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+        await asyncio.to_thread(restore_latest_backup, settings.database_path)
+    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+        await asyncio.to_thread(restore_bundled_seed, settings.database_path)
+    angel_stream.start()
+    if render_startup_backfill_enabled():
+        # Network work at startup only on Render (never in tests/dev).
+        asyncio.create_task(startup_universe_maintenance())
+        asyncio.create_task(scheduled_ban_refresh())
+    # Render Free has an ephemeral filesystem. If required Bhavcopy history is
+    # missing, complete the bounded startup backfill BEFORE the initial scan and
+    # self-test. This prevents a false bars_coverage failure while history is
+    # still downloading.
+    startup_backfill_needed = bhavcopy_backfill_required(repository.daily_equity_bar_summary())
+    startup_backfill_task = None
+    if startup_backfill_needed and settings.startup_backfill and render_startup_backfill_enabled():
+        _startup_state = "BLOCKED"
+        _startup_error = "waiting for bounded Bhavcopy backfill and startup self-test"
+        startup_backfill_task = asyncio.create_task(_startup_backfill_then_retest())
+        logger.warning("Startup readiness BLOCKED until background Bhavcopy backfill/self-test completes")
+    elif startup_backfill_needed:
+        _startup_state = "BLOCKED"
+        _startup_error = "daily Bhavcopy history is empty or stale and automatic backfill is disabled"
+        logger.warning("Startup readiness BLOCKED: automatic Bhavcopy backfill is disabled")
+    if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
+        asyncio.create_task(asyncio.to_thread(backfill_index_bars, repository, days=60, max_downloads=60, angel_client=angel_market_data))
+    # A newly deployed year is unknown until NSE's public calendar loads.
+    # Await only in that case: normal startup stays local and fast.
+    if not has_holiday_calendar_for_year(now_ist().year):
+        await scheduled_holiday_calendar_refresh()
+    # Preserve an already-populated cache (important for warm restarts and
+    # deterministic API tests); production still performs the initial refresh
+    # whenever no current signal snapshot exists.
+    #
+    # scheduled_refresh()/scheduled_self_test() are correctly gated on market
+    # hours / a fixed clock window for their recurring runs. But Render Free
+    # sleeps and cold-starts at an arbitrary time, so relying only on those
+    # gated jobs left /api/health showing readiness=UNTESTED and
+    # last_scan_at=null indefinitely whenever the process happened to boot
+    # outside those windows. Each is therefore also run ONCE, unconditionally,
+    # right here, in addition to (not instead of) the scheduled jobs.
+    if startup_backfill_task is None:
+        if cache.get("all_signals") is None:
             try:
-                await scheduled_self_test(_startup_self_test_stage())
+                await refresh_signals()
             except Exception:
-                logger.exception("Startup self-test failed")
+                logger.exception("Startup signal refresh failed")
         try:
-            await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
+            await scheduled_self_test(_startup_self_test_stage())
         except Exception:
-            logger.warning("Startup snapshot skipped", exc_info=True)
+            logger.exception("Startup self-test failed")
+    try:
+        await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
+    except Exception:
+        logger.warning("Startup snapshot skipped", exc_info=True)
+    if startup_backfill_task is None:
         final_readiness = self_test.readiness()
         if final_readiness == "READY":
             _startup_state = "READY"
@@ -1136,6 +1124,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Shutdown snapshot skipped", exc_info=True)
     scheduler.shutdown(wait=False)
+
+
 
 
 # ?? FastAPI app ???????????????????????????????????????????????????????????????
