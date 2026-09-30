@@ -649,9 +649,16 @@ async def _startup_backfill_then_retest() -> None:
     startup and without changing the backfill's own bounded behaviour.
     """
     try:
-        await automatic_startup_backfill()
+        await asyncio.wait_for(automatic_startup_backfill(), timeout=300)
+    except asyncio.TimeoutError:
+        logger.error("Startup Bhavcopy backfill timed out after 300s; readiness remains fail-closed")
+        _startup_state = "BLOCKED"
+        _startup_error = "startup Bhavcopy backfill timed out"
+        return
     except Exception:
         logger.exception("Startup backfill wrapper failed")
+        _startup_state = "BLOCKED"
+        _startup_error = "startup Bhavcopy backfill failed"
         return
     try:
         await refresh_signals()
