@@ -888,7 +888,7 @@ def _universe_gap() -> list[str]:
 def _self_test_probes(stage: str):
     return self_test.build_probes(
         stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
-        scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth,
+        scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth, stream=angel_stream,
     )
 
 
