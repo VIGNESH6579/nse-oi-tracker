@@ -221,6 +221,41 @@ def _refresh_signals() -> list[dict]:
         # context remains a fallback only; the budget bounds historical calls.
         _now = now_ist()
         qctx = quote_context(signal.get("angel_quote") or {}, oi_engine.oi_window.opening_range(symbol), _now.hour * 60 + _now.minute)
+        if angel_stream.enabled and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
+            try:
+                stream_rows = angel_stream.recent_candles_for_symbol(symbol, limit=12)
+                stream_rows = [
+                    {
+                        **row,
+                        "time": datetime.fromtimestamp(
+                            float(row["timestamp_ms"]) / 1000.0, tz=timezone.utc
+                        ).astimezone(IST).isoformat(),
+                    }
+                    for row in stream_rows
+                ]
+                stream_summary = summarize_candles(stream_rows, now=now_ist())
+                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3:
+                    stream_summary.update(
+                        {
+                            "vwap": candle_vwap(stream_rows),
+                            "vwap_kind": "vwap",
+                            "source": "angel_one_websocket_v2",
+                            "data_frequency": "FIVE_MINUTE",
+                            "candle_source": "angel_one_websocket_v2",
+                            "candle_count": len(stream_rows),
+                            "vwap_age_s": stream_summary.get("candle_age_s"),
+                            # Streamed cumulative volume is observation-only until
+                            # independently validated, so it cannot satisfy the
+                            # stock volume-actionable gate.
+                            "volume_actionable": False,
+                        }
+                    )
+                    context = stream_summary
+                    enriched_intraday.append({**signal, "intraday_context": context})
+                    continue
+            except Exception:
+                logger.exception("Angel WebSocket candle context failed for %s", symbol)
+
         if angel_market_data is not None and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
             try:
                 global _last_vwap_request_at
