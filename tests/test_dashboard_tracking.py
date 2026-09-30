@@ -67,3 +67,11 @@ def test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
 def test_frontend_removes_unreachable_focus_panel_and_marks_paper_signals():
     assert "activeTab === 'focus'" not in INDEX
     assert "PAPER BUY SIGNAL" in INDEX
+
+
+def test_signal_table_keeps_detected_patterns_when_confirmation_gate_blocks_trade():
+    """Live OI patterns must remain visible as OBSERVE · NO TRADE when the safety gate fails."""
+    assert "let list = this.signals.slice();" in INDEX
+    assert "signalCount(key)" in INDEX
+    assert "get actionableTotal()" in INDEX
+    assert "OBSERVE · NO TRADE" in INDEX
