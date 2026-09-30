@@ -23,7 +23,7 @@ def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=N
     stored = 0
     sources = set()
 
-    for symbol in INDICES:
+    for symbol in INDEX_TYPES:
         rows = []
         source = "nse_index_history"
         try:
@@ -40,6 +40,8 @@ def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=N
                             "low": candle["low"],
                             "close": candle["close"],
                         })
+            else:
+                rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
         except Exception as exc:
             # Angel historical data is rate-limited independently of the live
             # stream. Do not retry it here; immediately use the public NSE
@@ -50,10 +52,11 @@ def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=N
                 type(exc).__name__,
             )
             source = "nse_index_history"
-            try:
-                rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
-            except Exception:
-                logger.exception("NSE index history fallback failed for %s", symbol)
+            if angel_client is not None:
+                try:
+                    rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
+                except Exception:
+                    logger.exception("NSE index history fallback failed for %s", symbol)
 
         sources.add(source)
         stored += repository.upsert_daily_index_bars(

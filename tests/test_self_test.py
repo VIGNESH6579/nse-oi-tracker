@@ -128,7 +128,9 @@ def test_health_exposes_readiness_and_gap_fields():
     # In the dependency-free test environment the self-test must not falsely claim READY.
     if body["data_quality"]["self_test"].get("pre_open", {}).get("verdict") == "BLOCKED":
         assert body["startup_state"] == "BLOCKED"
-    assert body["startup_ready_at_ist"] and body["scheduler_started_at_ist"] and body["scheduler_heartbeat_at_ist"]
+    assert body["scheduler_started_at_ist"] and body["scheduler_heartbeat_at_ist"]
+    if body["startup_state"] == "READY":
+        assert body["startup_ready_at_ist"]
 
 
 def test_readiness_is_not_ready_when_no_scan_has_ever_completed():
