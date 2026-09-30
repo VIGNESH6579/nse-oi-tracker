@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 STREAM_URL = "wss://smartapisocket.angelone.in/smart-stream"
 MAX_SUBSCRIPTIONS = 1000
+HEARTBEAT_INTERVAL_SECONDS = 10
 NSE_CM = 1
 NSE_FO = 2
 QUOTE_MODE = 2
@@ -167,8 +168,6 @@ class LocalFiveMinuteBuilder:
             if tick.volume is not None and tick.volume >= 0:
                 if candle.last_volume is not None and tick.volume < candle.last_volume:
                     self._volume_valid[key] = False
-                # A new candle still needs the prior cumulative reading to
-                # calculate its first delta; carry it from the previous candle.
                 previous_candle = self._history.get(key, deque())[-1] if self._history.get(key) else None
                 prior_volume = previous_candle.last_volume if previous_candle else None
                 if candle.last_volume is None and prior_volume is not None and tick.volume >= prior_volume:
@@ -225,8 +224,6 @@ class AngelOneMarketStream:
             os.getenv("ANGEL_ONE_STREAM_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         )
         self._thread: threading.Thread | None = None
-        self._heartbeat_thread: threading.Thread | None = None
-        self._heartbeat_stop = threading.Event()
         self._ws: Any = None
         self._stop = threading.Event()
         self._connected = False
@@ -249,8 +246,6 @@ class AngelOneMarketStream:
                 "reconnects": self._reconnects,
                 "last_error": self._last_error,
                 "candle_source": "angel_one_websocket_v2",
-                # Angel's streamed cumulative volume has not been validated
-                # sufficiently for this app's actionable volume gate.
                 "volume_actionable": False,
                 "order_execution": False,
             }
@@ -267,13 +262,11 @@ class AngelOneMarketStream:
             logger.info("Angel WebSocket remains disabled until Angel credentials are configured")
             return
         self._stop.clear()
-        self._heartbeat_stop.clear()
         self._thread = threading.Thread(target=self._run, name="angel-stream", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        self._heartbeat_stop.set()
         ws = self._ws
         if ws is not None:
             try:
@@ -391,10 +384,7 @@ class AngelOneMarketStream:
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
-                # Angel Smart Stream expects a text "ping" heartbeat, not a
-                # WebSocket protocol ping frame. The official SDK sends the
-                # application heartbeat every 10 seconds.
-                self._ws.run_forever(ping_interval=0)
+                self._ws.run_forever(ping_interval=HEARTBEAT_INTERVAL_SECONDS)
             except Exception as exc:
                 self._record_error(type(exc).__name__)
             finally:
@@ -412,21 +402,7 @@ class AngelOneMarketStream:
         with self._lock:
             self._connected = True
             self._last_error = ""
-        self._heartbeat_stop.set()
-        self._heartbeat_stop.clear()
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop, args=(ws,), name="angel-stream-heartbeat", daemon=True
-        )
-        self._heartbeat_thread.start()
         self._send_subscribe(sorted(self._subscriptions), ws=ws)
-
-    def _heartbeat_loop(self, ws: Any) -> None:
-        while not self._stop.is_set() and not self._heartbeat_stop.wait(10.0):
-            try:
-                ws.send("ping")
-            except Exception as exc:
-                self._record_error(type(exc).__name__)
-                break
 
     def _send_subscribe(self, tokens: list[tuple[int, str]], *, ws: Any | None = None) -> None:
         if not tokens:
@@ -468,7 +444,6 @@ class AngelOneMarketStream:
         self._record_error(type(error).__name__)
 
     def _on_close(self, _ws: Any, _status: Any, _message: Any) -> None:
-        self._heartbeat_stop.set()
         with self._lock:
             self._connected = False
 
