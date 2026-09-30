@@ -74,7 +74,6 @@ from analytics.traps import trap_risk
 from analytics.sources import public_source_inventory
 from integrations.angel_one_market_data import AngelOneMarketData
 from integrations.angel_one_stream import AngelOneMarketStream
-from integrations.angel_one_stream import AngelOneMarketStream
 from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
@@ -83,7 +82,6 @@ APP_VERSION = "4.4.0"
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
 angel_market_data = AngelOneMarketData.from_environment()
-angel_stream = AngelOneMarketStream(angel_market_data)
 angel_stream = AngelOneMarketStream(angel_market_data)
 
 # Set this in Render's environment variables to lock down /api/debug in
@@ -1065,9 +1063,22 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(asyncio.to_thread(upload_database_snapshot, settings.database_path), timeout=10)
     except Exception:
         logger.warning("Startup snapshot skipped", exc_info=True)
-    _startup_state = "READY"
-    _startup_ready_at_ist = now_ist().isoformat()
-    logger.info("NSE OI Tracker startup READY scheduler=%s", _scheduler_started_at_ist)
+    final_readiness = self_test.readiness()
+    if final_readiness == "READY":
+        _startup_state = "READY"
+        _startup_error = None
+        _startup_ready_at_ist = now_ist().isoformat()
+        logger.info("NSE OI Tracker startup READY scheduler=%s", _scheduler_started_at_ist)
+    elif final_readiness in {"DEGRADED", "BLOCKED"}:
+        _startup_state = final_readiness
+        _startup_error = f"startup self-test verdict={final_readiness}"
+        _startup_ready_at_ist = None
+        logger.warning("NSE OI Tracker startup %s scheduler=%s", final_readiness, _scheduler_started_at_ist)
+    else:
+        _startup_state = "UNTESTED"
+        _startup_error = "startup self-test did not produce a verdict"
+        _startup_ready_at_ist = None
+        logger.warning("NSE OI Tracker startup UNTESTED scheduler=%s", _scheduler_started_at_ist)
     yield
     angel_stream.stop()
     _startup_state = "STOPPING"
@@ -1138,7 +1149,6 @@ async def health():
         "snapshot_age_s": last_snapshot_age_s(),
         "snapshot_backend": "github" if os.getenv("NSE_OI_BACKUP_GITHUB_REPO") and os.getenv("NSE_OI_BACKUP_GITHUB_TOKEN") else "url" if os.getenv("NSE_OI_BACKUP_URL") else "none",
         "angel":         angel_state,
-        "angel_stream":  angel_stream.health(),
         "angel_stream":  angel_stream.health(),
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
