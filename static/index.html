@@ -166,10 +166,10 @@
               :class="[s.cardClass, activeFilter === s.key ? 'ring-2 ' + s.ringClass : '']">
         <div class="flex items-center justify-between mb-1.5">
           <span class="text-xl" x-text="s.emoji"></span>
-          <span class="text-3xl font-bold mono" :class="s.tc" x-text="actionableCount(s.key)"></span>
+          <span class="text-3xl font-bold mono" :class="s.tc" x-text="signalCount(s.key)"></span>
         </div>
         <div class="text-xs font-bold" :class="s.tc" x-text="s.label"></div>
-        <div class="text-[10px] text-gray-600 mt-0.5" x-text="s.hint"></div>
+        <div class="text-[10px] text-gray-600 mt-0.5" x-text="s.hint + ' · pattern count'"></div>
       </button>
     </template>
   </div>
@@ -197,7 +197,10 @@
       <div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-800">
         <div class="text-xs text-gray-500 mr-1">
           <span class="text-white font-semibold" x-text="filtered.length"></span>
-          / <span x-text="totalActive"></span> F&O stocks with active signals
+          / <span x-text="totalActive"></span> F&O stocks with detected patterns
+          <span class="text-gray-700">·</span>
+          <span class="text-amber-300 font-semibold" x-text="actionableTotal"></span>
+          trade-allowed
         </div>
         <div class="flex-1"></div>
 
@@ -564,9 +567,11 @@ function scanner() {
 
     /* ?? computed ?? */
     get filtered() {
-      // Only actionable (confirmed BUY/SELL) rows are shown by default -- rows the gate
-      // marked "OBSERVE · NO TRADE" (actionable === false) are noise for a signal list.
-      let list = this.signals.filter(r => r.actionable);
+      // Show every detected OI pattern. The backend confirmation gate decides whether
+      // a pattern is trade-allowed; the table renders that boundary explicitly as
+      // PAPER BUY/SELL SIGNAL or OBSERVE · NO TRADE. Hiding non-actionable patterns
+      // made valid live OI signals disappear when the safety gate correctly blocked trades.
+      let list = this.signals.slice();
       if (this.activeFilter)     list = list.filter(r => r.signal === this.activeFilter);
       if (this.confidenceFilter) list = list.filter(r => r.confidence_tier === this.confidenceFilter);
       if (this.sectorFilter)     list = list.filter(r => (r.sector || 'Unclassified') === this.sectorFilter);
@@ -755,10 +760,11 @@ function scanner() {
 
     /* ?? helpers ?? */
     toggleFilter(key) { this.activeFilter = this.activeFilter === key ? '' : key; },
-    // Matches what the table actually shows by default (actionable rows only), so a
-    // summary card's count never disagrees with what clicking it reveals. signalCounts
-    // (server-side, includes non-actionable OBSERVE rows) intentionally not used here.
-    actionableCount(key) { return this.signals.filter(r => r.actionable && r.signal === key).length; },
+    // Summary cards count detected patterns, including OBSERVE · NO TRADE rows.
+    // The table shows the same set, while actionableTotal separately exposes the
+    // confirmation-gated subset that is allowed to become a paper signal.
+    signalCount(key) { return this.signals.filter(r => r.signal === key).length; },
+    get actionableTotal() { return this.signals.filter(r => r.actionable).length; },
 
     fmt2(v)  { return v ? Number(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'; },
 
