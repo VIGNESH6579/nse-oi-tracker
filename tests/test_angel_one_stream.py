@@ -97,7 +97,7 @@ def test_ensure_symbols_seeds_equity_and_nearest_futures():
     assert (2, "201") not in stream._subscriptions
 
 
-def test_stream_uses_application_heartbeat_not_protocol_ping(monkeypatch):
+def test_stream_sends_text_heartbeat():
     import integrations.angel_one_stream as module
 
     class FakeWS:
@@ -106,16 +106,17 @@ def test_stream_uses_application_heartbeat_not_protocol_ping(monkeypatch):
         def send(self, value):
             self.calls.append(value)
 
-    class FakeApp:
-        def __init__(self, *args, **kwargs):
-            self.calls = kwargs
-        def run_forever(self, **kwargs):
-            assert kwargs["ping_interval"] == 0
+    class FakeEvent:
+        def __init__(self, waits):
+            self.waits = iter(waits)
+        def wait(self, _timeout):
+            return next(self.waits)
+        def is_set(self):
+            return False
 
-    monkeypatch.setattr(module.websocket, "WebSocketApp", FakeApp)
     stream = module.AngelOneMarketStream(object(), enabled=False)
-    stream._ws = FakeWS()
-    stream._heartbeat_stop.set()
-    stream._heartbeat_stop.clear()
-    stream._heartbeat_stop.set()
-    assert stream.health()["order_execution"] is False
+    stream._stop = FakeEvent([False])
+    stream._heartbeat_stop = FakeEvent([False, True])
+    ws = FakeWS()
+    stream._heartbeat_loop(ws)
+    assert ws.calls == ["ping"]
