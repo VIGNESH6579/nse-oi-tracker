@@ -661,6 +661,22 @@ async def _startup_backfill_then_retest() -> None:
         await scheduled_self_test(_startup_self_test_stage())
     except Exception:
         logger.exception("Post-backfill self-test failed")
+    final_readiness = self_test.readiness()
+    if final_readiness == "READY":
+        _startup_state = "READY"
+        _startup_error = None
+        _startup_ready_at_ist = now_ist().isoformat()
+        logger.info("Background startup backfill/self-test completed READY")
+    elif final_readiness in {"DEGRADED", "BLOCKED"}:
+        _startup_state = final_readiness
+        _startup_error = f"background startup self-test verdict={final_readiness}"
+        _startup_ready_at_ist = None
+        logger.warning("Background startup backfill/self-test completed %s", final_readiness)
+    else:
+        _startup_state = "UNTESTED"
+        _startup_error = "background startup self-test did not produce a verdict"
+        _startup_ready_at_ist = None
+        logger.warning("Background startup backfill/self-test completed UNTESTED")
 
 
 async def scheduled_durable_snapshot() -> None:
