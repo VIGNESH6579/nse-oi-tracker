@@ -129,3 +129,7 @@ def test_subscription_payload_uses_ten_character_correlation_id():
     assert len(payload["correlationID"]) == 10
     assert payload["action"] == 1
     assert payload["params"]["mode"] == 3
+
+
+def test_text_heartbeat_interval_is_thirty_seconds():
+    assert TEXT_HEARTBEAT_INTERVAL_SECONDS == 30
