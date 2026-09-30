@@ -479,9 +479,11 @@
               </div>
               <span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span>
             </div>
-            <div class="grid grid-cols-4 gap-px bg-gray-800 text-center">
+            <div class="grid grid-cols-5 gap-px bg-gray-800 text-center">
               <div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600 uppercase tracking-wider">Entry</div>
                 <div class="mono text-xs font-bold lv-entry" x-text="'₹' + fmt2(t.entry)"></div></div>
+              <div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600 uppercase tracking-wider">Current LTP</div>
+                <div class="mono text-xs font-bold" :class="pnlClass(t)" x-text="'₹' + fmt2(t.currentLTP)"></div></div>
               <div class="bg-gray-900 px-2 py-2.5" :class="Number(t.max_target_hit) >= 1 ? 'bg-green-950/30' : ''">
                 <div class="text-[9px] text-gray-600 uppercase tracking-wider">TG 1 <span x-show="Number(t.max_target_hit) >= 1" class="text-green-500">✓</span></div>
                 <div class="mono text-xs lv-tg1 font-semibold" x-text="'₹' + fmt2(t.tg1)"></div>
