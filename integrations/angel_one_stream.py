@@ -217,6 +217,15 @@ class LocalFiveMinuteBuilder:
 class AngelOneMarketStream:
     """Optional stream client with bounded reconnects and thread-safe state."""
 
+    _INDEX_ALIASES = {
+        "NIFTY": "NIFTY 50",
+        "BANKNIFTY": "NIFTY BANK",
+        "FINNIFTY": "NIFTY FIN SERVICE",
+        "MIDCPNIFTY": "NIFTY MID SELECT",
+        "VIX": "INDIA VIX",
+        "INDIAVIX": "INDIA VIX",
+    }
+
     def __init__(self, market_data: Any, *, enabled: bool | None = None) -> None:
         self.market_data = market_data
         self.enabled = (
@@ -305,13 +314,17 @@ class AngelOneMarketStream:
         except Exception as exc:
             self._record_error(type(exc).__name__)
             return 0
-        wanted = {str(s).upper().strip() for s in symbols if str(s).strip()}
+        requested = {str(s).upper().strip() for s in symbols if str(s).strip()}
+        wanted = {self._INDEX_ALIASES.get(s, s) for s in requested}
         tokens: set[tuple[int, str]] = set()
         for (exchange, symbol), instrument in instruments.items():
             if exchange == "NSE" and symbol in wanted:
                 token = str(instrument.token)
                 tokens.add((NSE_CM, token))
                 self._symbol_tokens[symbol] = (NSE_CM, token)
+                for requested_symbol in requested:
+                    if self._INDEX_ALIASES.get(requested_symbol, requested_symbol) == symbol:
+                        self._symbol_tokens[requested_symbol] = (NSE_CM, token)
         nearest: dict[str, tuple[Any, Any]] = {}
         for (exchange, symbol), instrument in instruments.items():
             if exchange != "NFO":
