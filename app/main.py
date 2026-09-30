@@ -234,20 +234,18 @@ def _refresh_signals() -> list[dict]:
                     for row in stream_rows
                 ]
                 stream_summary = summarize_candles(stream_rows, now=now_ist())
-                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3 and (symbol.upper() in INDEX_SYMBOLS):
+                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3 :
                     stream_summary.update(
                         {
-                            "vwap": candle_vwap(stream_rows),
-                            "vwap_kind": "vwap",
+                            "vwap": qctx.get("vwap") if qctx.get("vwap") is not None else candle_vwap(stream_rows),
+                            "vwap_kind": "exchange_avg_price" if qctx.get("vwap") is not None else "vwap",
                             "source": "angel_one_websocket_v2",
                             "data_frequency": "FIVE_MINUTE",
                             "candle_source": "angel_one_websocket_v2",
                             "candle_count": len(stream_rows),
-                            "vwap_age_s": stream_summary.get("candle_age_s"),
-                            # Streamed cumulative volume is observation-only until
-                            # independently validated, so it cannot satisfy the
-                            # stock volume-actionable gate.
-                            "volume_actionable": False,
+                            "vwap_age_s": qctx.get("vwap_age_s", 0.0) if qctx.get("vwap") is not None else stream_summary.get("candle_age_s"),
+                            "session_volume": qctx.get("session_volume", stream_summary.get("session_volume")),
+                            "volume_actionable": qctx.get("session_volume") is not None,
                         }
                     )
                     context = stream_summary
@@ -716,11 +714,15 @@ async def startup_universe_maintenance() -> None:
 
 
 async def scheduled_backfill_topup() -> None:
-    """After the close: top up missing history to the full target (cheap when complete)."""
+    """Top up missing NSE daily history in bounded chunks; full target after close."""
     if not settings.startup_backfill:
         return
     try:
-        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=settings.backfill_target_days)
+        current = now_ist()
+        minutes = current.hour * 60 + current.minute
+        in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
+        limit = min(12, settings.backfill_target_days) if in_market_hours else settings.backfill_target_days
+        result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
         logger.info("Post-close bhavcopy top-up finished: %s", result)
     except Exception:
         logger.exception("Post-close bhavcopy top-up failed")
@@ -1059,6 +1061,14 @@ async def lifespan(app: FastAPI):
         scheduled_ban_refresh,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone=IST),
         id="fno-ban-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_backfill_topup,
+        IntervalTrigger(minutes=15, timezone=IST),
+        id="daytime-bhavcopy-topup",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
