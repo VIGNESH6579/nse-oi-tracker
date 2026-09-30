@@ -231,6 +231,7 @@ class AngelOneMarketStream:
         self._last_tick_symbol = ""
         self._ticks_received = 0
         self._candles_built = 0
+        self._last_stream_health_log_at = 0.0
         self._last_error = ""
         self._reconnects = 0
         self._subscriptions: set[tuple[int, str]] = set()
@@ -459,6 +460,10 @@ class AngelOneMarketStream:
                 self._last_tick_at = time.time()
                 self._last_tick_symbol = tick.token
                 self._ticks_received += 1
+                now = time.time()
+                if self._ticks_received == 1 or now - self._last_stream_health_log_at >= 60:
+                    self._last_stream_health_log_at = now
+                    logger.info("Angel WebSocket live ticks=%d last_token=%s candles=%d", self._ticks_received, tick.token, self._candles_built)
             if self.candles.add(tick) is not None:
                 with self._lock:
                     self._candles_built += 1
