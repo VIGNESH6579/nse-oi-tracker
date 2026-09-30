@@ -81,3 +81,8 @@ def test_history_shows_exact_entry_seconds_and_refreshes_with_live_monitor():
     assert "second:'2-digit'" in INDEX
     assert " + ' IST'" in INDEX
     assert "setInterval(() => this.loadServerHistory(), 30000)" in INDEX
+
+
+def test_history_shows_server_tracked_current_ltp_separately_from_entry():
+    assert "Current LTP" in INDEX
+    assert "t.currentLTP" in INDEX
