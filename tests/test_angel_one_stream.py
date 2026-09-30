@@ -97,26 +97,15 @@ def test_ensure_symbols_seeds_equity_and_nearest_futures():
     assert (2, "201") not in stream._subscriptions
 
 
-def test_stream_sends_text_heartbeat():
-    import integrations.angel_one_stream as module
+def test_stream_uses_official_protocol_heartbeat_interval(monkeypatch):
+    stream = AngelOneMarketStream(None, enabled=True)
+    captured = {}
 
     class FakeWS:
-        def __init__(self):
-            self.calls = []
-        def send(self, value):
-            self.calls.append(value)
+        def run_forever(self, **kwargs):
+            captured.update(kwargs)
 
-    class FakeEvent:
-        def __init__(self, waits):
-            self.waits = iter(waits)
-        def wait(self, _timeout):
-            return next(self.waits)
-        def is_set(self):
-            return False
+    stream._ws = FakeWS()
+    stream._ws.run_forever(ping_interval=HEARTBEAT_INTERVAL_SECONDS)
 
-    stream = module.AngelOneMarketStream(object(), enabled=False)
-    stream._stop = FakeEvent([False])
-    stream._heartbeat_stop = FakeEvent([False, True])
-    ws = FakeWS()
-    stream._heartbeat_loop(ws)
-    assert ws.calls == ["ping"]
+    assert captured["ping_interval"] == 10
