@@ -228,9 +228,13 @@ class AngelOneMarketStream:
         self._stop = threading.Event()
         self._connected = False
         self._last_tick_at = 0.0
+        self._last_tick_symbol = ""
+        self._ticks_received = 0
+        self._candles_built = 0
         self._last_error = ""
         self._reconnects = 0
         self._subscriptions: set[tuple[int, str]] = set()
+        self._symbol_tokens: dict[str, tuple[int, str]] = {}
         self._latest: dict[tuple[int, str], StreamTick] = {}
         self._lock = threading.RLock()
         self.candles = LocalFiveMinuteBuilder()
@@ -242,6 +246,9 @@ class AngelOneMarketStream:
                 "enabled": self.enabled,
                 "state": "connected" if self._connected else ("stopped" if self._stop.is_set() else "disconnected"),
                 "last_tick_age_s": round(age, 2) if age is not None else None,
+                "last_tick_symbol": self._last_tick_symbol or None,
+                "ticks_received": self._ticks_received,
+                "candles_built": self._candles_built,
                 "subscriptions": len(self._subscriptions),
                 "reconnects": self._reconnects,
                 "last_error": self._last_error,
@@ -301,7 +308,9 @@ class AngelOneMarketStream:
         tokens: set[tuple[int, str]] = set()
         for (exchange, symbol), instrument in instruments.items():
             if exchange == "NSE" and symbol in wanted:
-                tokens.add((NSE_CM, instrument.token))
+                token = str(instrument.token)
+                tokens.add((NSE_CM, token))
+                self._symbol_tokens[symbol] = (NSE_CM, token)
         nearest: dict[str, tuple[Any, Any]] = {}
         for (exchange, symbol), instrument in instruments.items():
             if exchange != "NFO":
@@ -355,6 +364,18 @@ class AngelOneMarketStream:
         if age > max_age_s:
             return None
         return {**candle, "candle_age_s": round(age, 2), "candle_fresh": True}
+
+    def recent_candles_for_symbol(self, symbol: str, *, limit: int = 12) -> list[dict[str, Any]]:
+        key = self._symbol_tokens.get(str(symbol).upper().strip())
+        if key is None:
+            return []
+        return self.recent_candles(key[0], key[1], limit=limit)
+
+    def latest_candle_for_symbol(self, symbol: str, *, max_age_s: float = 360.0) -> dict[str, Any] | None:
+        key = self._symbol_tokens.get(str(symbol).upper().strip())
+        if key is None:
+            return None
+        return self.latest_candle(key[0], key[1], max_age_s=max_age_s)
 
     def _credentials(self) -> tuple[str, str, str, str]:
         self.market_data._login()
@@ -436,7 +457,11 @@ class AngelOneMarketStream:
             with self._lock:
                 self._latest[(tick.exchange_type, tick.token)] = tick
                 self._last_tick_at = time.time()
-            self.candles.add(tick)
+                self._last_tick_symbol = tick.token
+                self._ticks_received += 1
+            if self.candles.add(tick) is not None:
+                with self._lock:
+                    self._candles_built += 1
         except (TypeError, ValueError, struct.error) as exc:
             self._record_error(type(exc).__name__)
 
