@@ -916,6 +916,13 @@ async def scheduled_self_test(stage: str) -> None:
         logger.exception("Self-test crashed (stage=%s)", stage)
 
 
+async def scheduled_readiness_recheck() -> None:
+    """Re-run critical post-open readiness checks while the market is active."""
+    if not is_market_open() or is_trading_holiday(now_ist().date()) is True:
+        return
+    await scheduled_self_test("post_open")
+
+
 async def scheduled_trade_monitor() -> None:
     """Every 30 s in market hours: check EVERY open paper trade against live prices.
 
@@ -1040,6 +1047,10 @@ async def lifespan(app: FastAPI):
             scheduled_self_test, CronTrigger(day_of_week="mon-fri", hour=_hour, minute=_minute, timezone=IST),
             args=[_stage], id=f"self-test-{_stage}", replace_existing=True, max_instances=1, coalesce=True,
         )
+    scheduler.add_job(
+        scheduled_readiness_recheck, IntervalTrigger(minutes=5, timezone=IST), id="readiness-recheck",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     scheduler.add_job(
         scheduled_trade_monitor, IntervalTrigger(seconds=30, timezone=IST), id="trade-monitor",
         replace_existing=True, max_instances=1, coalesce=True,
