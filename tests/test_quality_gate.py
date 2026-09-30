@@ -202,3 +202,24 @@ def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
     with repo._connect() as c:
         tiers = dict(c.execute("SELECT symbol, tier FROM signal_events").fetchall())
     assert tiers == {"OKAY": "TRADE"}
+
+
+def test_websocket_five_minute_candles_are_real_intraday_for_gate():
+    from signal_engine.confirmation import evaluate_gate
+
+    signal = {"signal": "LONG_BUILDUP", "signal_direction": "BUY", "ltp": 105.0, "stale_price": False}
+    intraday = {
+        "available": True, "vwap": 102.0, "or_high": 104.0, "or_low": 99.0, "or_complete": True,
+        "day_open": 100.0, "session_volume": 60000, "last_minute": 11 * 60,
+        "source": "angel_one_websocket_v2", "data_frequency": "FIVE_MINUTE",
+        "candle_count": 12, "candle_fresh": True, "candle_age_s": 60, "invalid_candles": 0,
+    }
+    result = evaluate_gate(
+        signal, oi_ctx={"history_minutes": 30, "window_signal": "LONG_BUILDUP", "streak": 5,
+                        "h15": {"oi_pct": 1.0}},
+        intraday=intraday, atr14=5.0, avg_volume=50000, prev_close=99.0,
+        ema20=101.0, ema50=99.0, banned=False, market_bias="BULL",
+        now=__import__("datetime").datetime(2026, 9, 30, 11, 0),
+        has_bars=True, daily_validation_ready=True, require_real_intraday=True,
+    )
+    assert "real_5m_candles_unavailable" not in result["missing_confirmations"]
