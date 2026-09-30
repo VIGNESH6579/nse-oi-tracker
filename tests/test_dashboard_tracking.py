@@ -75,3 +75,9 @@ def test_signal_table_keeps_detected_patterns_when_confirmation_gate_blocks_trad
     assert "signalCount(key)" in INDEX
     assert "get actionableTotal()" in INDEX
     assert "OBSERVE · NO TRADE" in INDEX
+
+
+def test_history_shows_exact_entry_seconds_and_refreshes_with_live_monitor():
+    assert "second:'2-digit'" in INDEX
+    assert " + ' IST'" in INDEX
+    assert "setInterval(() => this.loadServerHistory(), 30000)" in INDEX
