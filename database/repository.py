@@ -424,7 +424,7 @@ class SignalRepository:
                 "SELECT COUNT(*) AS bars, COUNT(DISTINCT symbol) AS symbols, "
                 "MAX(trade_date) AS latest_trade_date, "
                 "COALESCE(MIN(n), 0) AS min_bars, COALESCE(MAX(n), 0) AS max_bars "
-                "FROM (SELECT symbol, COUNT(*) AS n FROM daily_equity_bars GROUP BY symbol)"
+                "FROM (SELECT symbol, COUNT(*) AS n FROM daily_equity_bars GROUP BY symbol) AS counts, (SELECT MAX(trade_date) AS latest_trade_date FROM daily_equity_bars) AS latest"
             ).fetchone()
         return dict(row)
 
