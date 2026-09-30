@@ -641,7 +641,7 @@ async def scheduled_durable_snapshot() -> None:
 
 
 async def startup_universe_maintenance() -> None:
-    """Load the real F&O universe and drop non-F&O bars (fail-closed, background)."""
+    """Load the real F&O universe, purge stale bars, and seed stream subscriptions."""
     try:
         symbols = await asyncio.to_thread(bundled_fno_symbols)
         if not symbols:
@@ -649,6 +649,12 @@ async def startup_universe_maintenance() -> None:
             return
         result = await asyncio.to_thread(repository.purge_non_fno_bars, symbols)
         logger.info("F&O universe applied source=%s symbols=%d purge=%s", universe_source(), len(symbols), result)
+        if angel_stream.enabled:
+            added = await asyncio.to_thread(angel_stream.ensure_symbols, sorted(symbols))
+            logger.info(
+                "Angel WebSocket subscriptions seeded symbols=%d added=%d total=%d",
+                len(symbols), added, angel_stream.health()["subscriptions"],
+            )
     except Exception:
         logger.exception("F&O universe maintenance failed")
 
