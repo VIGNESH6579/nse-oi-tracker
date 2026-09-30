@@ -706,7 +706,7 @@ async def startup_universe_maintenance() -> None:
         result = await asyncio.to_thread(repository.purge_non_fno_bars, symbols)
         logger.info("F&O universe applied source=%s symbols=%d purge=%s", universe_source(), len(symbols), result)
         if angel_stream.enabled:
-            added = await asyncio.to_thread(angel_stream.ensure_symbols, sorted(symbols))
+            added = await asyncio.to_thread(angel_stream.ensure_symbols, sorted(symbols) + ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "VIX"])
             logger.info(
                 "Angel WebSocket subscriptions seeded symbols=%d added=%d total=%d",
                 len(symbols), added, angel_stream.health()["subscriptions"],
