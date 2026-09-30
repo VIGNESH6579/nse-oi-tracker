@@ -15,7 +15,7 @@ try:
     import resource
 except ImportError:
     resource = None
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
 
