@@ -225,6 +225,8 @@ class AngelOneMarketStream:
             os.getenv("ANGEL_ONE_STREAM_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         )
         self._thread: threading.Thread | None = None
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_stop = threading.Event()
         self._ws: Any = None
         self._stop = threading.Event()
         self._connected = False
@@ -265,11 +267,13 @@ class AngelOneMarketStream:
             logger.info("Angel WebSocket remains disabled until Angel credentials are configured")
             return
         self._stop.clear()
+        self._heartbeat_stop.clear()
         self._thread = threading.Thread(target=self._run, name="angel-stream", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self._heartbeat_stop.set()
         ws = self._ws
         if ws is not None:
             try:
@@ -387,7 +391,10 @@ class AngelOneMarketStream:
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
-                self._ws.run_forever(ping_interval=10, ping_timeout=5)
+                # Angel Smart Stream expects a text "ping" heartbeat, not a
+                # WebSocket protocol ping frame. The official SDK sends the
+                # application heartbeat every 10 seconds.
+                self._ws.run_forever(ping_interval=0)
             except Exception as exc:
                 self._record_error(type(exc).__name__)
             finally:
@@ -405,7 +412,21 @@ class AngelOneMarketStream:
         with self._lock:
             self._connected = True
             self._last_error = ""
+        self._heartbeat_stop.set()
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, args=(ws,), name="angel-stream-heartbeat", daemon=True
+        )
+        self._heartbeat_thread.start()
         self._send_subscribe(sorted(self._subscriptions), ws=ws)
+
+    def _heartbeat_loop(self, ws: Any) -> None:
+        while not self._stop.is_set() and not self._heartbeat_stop.wait(10.0):
+            try:
+                ws.send("ping")
+            except Exception as exc:
+                self._record_error(type(exc).__name__)
+                break
 
     def _send_subscribe(self, tokens: list[tuple[int, str]], *, ws: Any | None = None) -> None:
         if not tokens:
@@ -431,6 +452,8 @@ class AngelOneMarketStream:
 
     def _on_message(self, _ws: Any, message: Any) -> None:
         if isinstance(message, str):
+            if message.strip().lower() == "pong":
+                logger.debug("Angel WebSocket heartbeat pong received")
             return
         try:
             tick = parse_stream_packet(message)
@@ -445,6 +468,7 @@ class AngelOneMarketStream:
         self._record_error(type(error).__name__)
 
     def _on_close(self, _ws: Any, _status: Any, _message: Any) -> None:
+        self._heartbeat_stop.set()
         with self._lock:
             self._connected = False
 
