@@ -225,7 +225,7 @@ def _refresh_signals() -> list[dict]:
         # Prefer candles for the gate (VWAP, opening range, volume pace). Quote
         # context remains a fallback only; the budget bounds historical calls.
         _now = now_ist()
-        qctx = quote_context(signal.get("angel_quote") or {}, oi_engine.oi_window.opening_range(symbol), _now.hour * 60 + _now.minute)
+        qctx = quote_context(signal.get("angel_quote") or {}, oi_engine.oi_window.opening_range(symbol), _now.hour * 60 + _now.minute) or {}
         if angel_stream.enabled and str(signal.get("signal") or "NEUTRAL") in ENTRY_SIGNALS:
             try:
                 stream_rows = angel_stream.recent_candles_for_symbol(symbol, limit=12)
