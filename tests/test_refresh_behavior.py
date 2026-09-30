@@ -76,8 +76,8 @@ def test_render_auto_deploys_on_main_and_stays_free():
         assert f"key: {key}" in render
 
 
-def test_startup_warns_when_bhavcopy_history_is_empty():
-    assert "Daily bhavcopy history is empty" in MAIN
+def test_startup_blocks_until_bounded_bhavcopy_backfill_and_self_test():
+    assert "Startup readiness BLOCKED until background Bhavcopy backfill/self-test completes" in MAIN
     assert "automatic bounded backfill" in MAIN
     assert "backfill_recent_bhavcopies" in MAIN
 
