@@ -40,6 +40,8 @@ def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=N
                             "low": candle["low"],
                             "close": candle["close"],
                         })
+            else:
+                rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
         except Exception as exc:
             # Angel historical data is rate-limited independently of the live
             # stream. Do not retry it here; immediately use the public NSE
