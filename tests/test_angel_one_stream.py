@@ -1,6 +1,6 @@
 import struct
 
-from integrations.angel_one_stream import AngelOneMarketStream, LocalFiveMinuteBuilder, parse_stream_packet
+from integrations.angel_one_stream import (\n    AngelOneMarketStream,\n    HEARTBEAT_INTERVAL_SECONDS,\n    LocalFiveMinuteBuilder,\n    parse_stream_packet,\n)
 
 
 def _packet(*, mode=3, token=b"11536", ts=1727000000000, ltp=12345, volume=1000, oi=250000):
