@@ -31,7 +31,7 @@ CRITICAL = {
 
 
 def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[str]], ban_info: Callable[[], dict],
-                 scan_stats: Callable[[], dict], window_depth: Callable[[], dict], min_bars: int = 15) -> dict[str, Probe]:
+                 scan_stats: Callable[[], dict], window_depth: Callable[[], dict], stream=None, min_bars: int = 15) -> dict[str, Probe]:
     def equity_quotes():
         quotes = angel.full_quotes(SAMPLE)
         good = [s for s in SAMPLE if float((quotes.get(s) or {}).get("ltp") or 0) > 0]
@@ -81,10 +81,14 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
         return float(depth.get("median_minutes") or 0) >= 10, f"symbols={depth.get('symbols')} median_minutes={depth.get('median_minutes')}"
 
     def intraday_candles():
+        if stream is not None and getattr(stream, "enabled", False):
+            candles = stream.recent_candles_for_symbol("NIFTY", limit=12)
+            if candles:
+                first = datetime.fromtimestamp(float(candles[0]["timestamp_ms"]) / 1000.0).astimezone().hour * 60 + datetime.fromtimestamp(float(candles[0]["timestamp_ms"]) / 1000.0).astimezone().minute
+                return len(candles) >= 3 and first == 555, f"{len(candles)} live WebSocket candles, first_minute={first} (expected 555)"
         candles = angel.intraday_candles("NIFTY")
         first = candle_minute(candles[0]) if candles else None
-        # 09:15 IST == minute 555: proves the session window is IST and starts at the open.
-        return len(candles) >= 3 and first == 555, f"{len(candles)} candles, first_minute={first} (expected 555)"
+        return len(candles) >= 3 and first == 555, f"{len(candles)} historical Angel candles, first_minute={first} (expected 555)"
 
     if stage == "pre_open":
         return {"angel_session": session, "angel_daily_candles": daily_candles, "bars_coverage": bars_coverage,
