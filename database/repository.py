@@ -341,6 +341,47 @@ class SignalRepository:
             rows = connection.execute("SELECT DISTINCT trade_date FROM daily_equity_bars").fetchall()
         return {str(row["trade_date"]) for row in rows}
 
+    def daily_equity_missing_dates_for_symbols(self, symbols: Iterable[str], dates: Iterable[date | str]) -> list[str]:
+        """Return candidate dates missing for at least one requested symbol."""
+        names = sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
+        candidates = sorted({str(value)[:10] for value in dates if value})
+        if not names or not candidates:
+            return []
+        placeholders_symbols = ",".join("?" for _ in names)
+        placeholders_dates = ",".join("?" for _ in candidates)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT d.trade_date
+                FROM (
+                    SELECT DISTINCT trade_date
+                    FROM daily_equity_bars
+                    WHERE symbol IN ({placeholders_symbols})
+                      AND trade_date IN ({placeholders_dates})
+                ) AS d
+                LEFT JOIN (
+                    SELECT trade_date, COUNT(DISTINCT symbol) AS symbol_count
+                    FROM daily_equity_bars
+                    WHERE symbol IN ({placeholders_symbols})
+                      AND trade_date IN ({placeholders_dates})
+                    GROUP BY trade_date
+                ) AS counts ON counts.trade_date = d.trade_date
+                WHERE COALESCE(counts.symbol_count, 0) < ?
+                ORDER BY d.trade_date
+                """,
+                (*names, *candidates, *names, *candidates, len(names)),
+            ).fetchall()
+            present = {str(row["trade_date"]) for row in rows}
+            # Dates absent entirely from the table are also missing.
+            all_dates = set(candidates)
+            existing_dates = {
+                str(row[0]) for row in connection.execute(
+                    f"SELECT DISTINCT trade_date FROM daily_equity_bars WHERE trade_date IN ({placeholders_dates})",
+                    candidates,
+                ).fetchall()
+            }
+        return sorted(present | (all_dates - existing_dates))
+
     def daily_equity_bars_for_symbols(self, symbols: Iterable[str], *, limit_per_symbol: int = 90) -> dict[str, list[dict[str, Any]]]:
         """Return chronological daily bars for multiple symbols in one query."""
         normalized = sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
