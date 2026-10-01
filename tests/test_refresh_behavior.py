@@ -107,3 +107,9 @@ def test_stream_context_preserves_observed_opening_range():
     assert '"or_high": qctx.get("or_high")' in MAIN
     assert '"or_low": qctx.get("or_low")' in MAIN
     assert '"or_complete": True' in MAIN
+
+
+def test_end_of_day_confirmed_signal_cleanup_is_scheduled():
+    assert "scheduled_confirmed_signal_cleanup" in MAIN
+    assert 'CronTrigger(hour=23, minute=59, timezone=IST)' in MAIN
+    assert 'id="daily-confirmed-signal-cleanup"' in MAIN
