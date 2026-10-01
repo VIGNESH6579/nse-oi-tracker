@@ -134,3 +134,14 @@ def test_daily_equity_bars_are_upserted_and_returned_chronologically(tmp_path):
 
 
 
+
+
+def test_delete_confirmed_signals_for_date_only_removes_trade_tier(tmp_path):
+    repository = SignalRepository(tmp_path / "cleanup.sqlite3")
+    at = datetime(2026, 9, 30, 14, 0, tzinfo=IST)
+    repository.record_scan([_signal("CONFIRMED", 100.0)], at)
+    repository.record_scan([{**_signal("CANDIDATE", 101.0), "tier": "CANDIDATE"}], at)
+    deleted = repository.delete_confirmed_signals_for_date("2026-09-30")
+    assert deleted == 2
+    events, total = repository.history_for_date("2026-09-30")
+    assert total == 0

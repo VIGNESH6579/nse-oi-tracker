@@ -1255,6 +1255,18 @@ class SignalRepository:
             connection.execute("DELETE FROM scan_snapshots WHERE trade_date < ?", (cutoff,))
             return archived
 
+    def delete_confirmed_signals_for_date(self, trade_date: str) -> int:
+        """Delete confirmed paper-signal events for one IST day after the UI history window closes."""
+        with self._connect() as connection:
+            deleted = connection.execute(
+                "DELETE FROM signal_events WHERE trade_date = ? AND tier = 'TRADE'",
+                (trade_date,),
+            ).rowcount
+        if deleted:
+            with self._connect() as connection:
+                connection.execute("PRAGMA incremental_vacuum")
+        return deleted
+
     def vacuum(self) -> None:
         """Compact the local SQLite file during an explicit maintenance action."""
         with self._connect() as connection:
