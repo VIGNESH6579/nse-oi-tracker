@@ -1228,8 +1228,17 @@ async def health():
     scan_age = max(0.0, time.monotonic() - _last_refresh_completed_monotonic) if _last_refresh_completed_monotonic else None
     coverage = repository.daily_history_coverage(symbols=cached_universe() or None)
     angel_state = angel_market_data.health() if angel_market_data is not None else {"state": "disabled", "last_error_code": "", "retry_at": None}
+    health_readiness = self_test.readiness()
+    if health_readiness == "UNTESTED":
+        health_status = "unready"
+    elif health_readiness == "BLOCKED":
+        health_status = "blocked"
+    elif health_readiness == "DEGRADED":
+        health_status = "degraded"
+    else:
+        health_status = "ok"
     return {
-        "status":        "ok",
+        "status":        health_status,
         "time_ist":      now.strftime("%Y-%m-%d %H:%M:%S IST"),
         "market_open":   status == MARKET_STATUS_OPEN,
         "market_status": status,
