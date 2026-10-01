@@ -13,6 +13,16 @@ class FakeRepository:
     def daily_equity_trade_dates(self):
         return self.existing
 
+    def daily_equity_missing_dates_for_symbols(self, symbols, dates):
+        wanted = {str(symbol).upper() for symbol in symbols}
+        return [
+            str(day)[:10] for day in dates
+            if not all(
+                any(row["symbol"].upper() == symbol and row["trade_date"] == str(day)[:10] for row in self.saved)
+                for symbol in wanted
+            )
+        ]
+
     def upsert_daily_equity_bars(self, bars):
         bars = list(bars)
         self.saved.extend(bars)
@@ -54,3 +64,31 @@ def test_backfill_respects_existing_dates_and_download_limit(monkeypatch):
 
     assert result == {"requested": 3, "downloaded": 1, "stored": 1, "skipped": 1, "failed": 0}
     assert requested == [date(2026, 1, 23)]
+
+
+def test_backfill_fills_a_new_symbol_even_when_dates_already_exist(monkeypatch):
+    repository = FakeRepository()
+    dates = recent_nse_trading_dates(date(2026, 1, 27), 3)
+    repository.saved = [
+        {"symbol": "OLD", "trade_date": day.isoformat()}
+        for day in dates
+    ]
+    repository.existing.update(day.isoformat() for day in dates)
+    requested: list[date] = []
+
+    def collect(day):
+        requested.append(day)
+        return [{
+            "symbol": "NEW", "trade_date": day.isoformat(), "open": 1,
+            "high": 2, "low": 1, "close": 1.5, "volume": 10,
+        }]
+
+    monkeypatch.setattr("collector.backfill.collect_equity_bhavcopy", collect)
+    result = backfill_recent_bhavcopies(
+        repository, end_date=date(2026, 1, 27), required_days=3,
+        max_downloads=3, delay_seconds=0, symbols={"OLD", "NEW"},
+    )
+
+    assert result["downloaded"] == 3
+    assert requested == dates
+    assert sum(1 for row in repository.saved if row["symbol"] == "NEW") == 3
