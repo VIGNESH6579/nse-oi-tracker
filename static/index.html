@@ -102,7 +102,7 @@
            class="bg-purple-950 border border-purple-800 px-2.5 py-1 rounded-full text-xs cursor-pointer"
            @click="activeTab = 'trades'">
         <span class="text-purple-300 font-bold" x-text="tradeEvents.length"></span>
-        <span class="text-purple-600"> paper signals</span>
+        <span class="text-purple-600"> confirmed signals</span>
       </div>
 
       <!-- Countdown / refresh -->
@@ -180,7 +180,7 @@
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{signals:'📡 Live Signals',trades:'📋 Paper Signal History'}[tab]"></span>
+        <span x-text="{signals:'📡 Live Signals',trades:'📋 Confirmed Signal History'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -583,7 +583,7 @@ function scanner() {
       return list;
     },
 
-    get tradeEvents() { return this.trades.filter(t => ['TRADE', 'CANDIDATE'].includes(t.tier || 'TRADE') && Number(t.confidence || 0) >= 75); },
+    get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE' && Number(t.confidence || 0) >= 75); },
     get confirmedTradeEvents() { return this.tradeEvents.filter(t => (t.tier || 'TRADE') === 'TRADE'); },
     get highQualityTradeEvents() {
       return this.tradeEvents.filter(t => this.signalTypeFilter === 'ALL' || t.signal === this.signalTypeFilter);
