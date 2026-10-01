@@ -1120,6 +1120,13 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
+    # Free Render instances may sleep through 23:59 IST. Catch up the prior
+    # day's confirmed-signal purge whenever the service starts on a new day.
+    try:
+        previous_trade_date = (now_ist().date() - timedelta(days=1)).isoformat()
+        await asyncio.to_thread(repository.delete_confirmed_signals_for_date, previous_trade_date)
+    except Exception:
+        logger.exception("Startup catch-up for confirmed signal cleanup failed")
     _scheduler_started_at_ist = now_ist().isoformat()
     _scheduler_heartbeat_at_ist = _scheduler_started_at_ist
     gc.freeze()
