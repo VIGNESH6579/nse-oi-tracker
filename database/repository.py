@@ -352,35 +352,19 @@ class SignalRepository:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT d.trade_date
-                FROM (
-                    SELECT DISTINCT trade_date
-                    FROM daily_equity_bars
-                    WHERE symbol IN ({placeholders_symbols})
-                      AND trade_date IN ({placeholders_dates})
-                ) AS d
-                LEFT JOIN (
-                    SELECT trade_date, COUNT(DISTINCT symbol) AS symbol_count
-                    FROM daily_equity_bars
-                    WHERE symbol IN ({placeholders_symbols})
-                      AND trade_date IN ({placeholders_dates})
-                    GROUP BY trade_date
-                ) AS counts ON counts.trade_date = d.trade_date
-                WHERE COALESCE(counts.symbol_count, 0) < ?
-                ORDER BY d.trade_date
+                SELECT trade_date, COUNT(DISTINCT symbol) AS symbol_count
+                FROM daily_equity_bars
+                WHERE symbol IN ({placeholders_symbols})
+                  AND trade_date IN ({placeholders_dates})
+                GROUP BY trade_date
                 """,
-                (*names, *candidates, *names, *candidates, len(names)),
+                (*names, *candidates),
             ).fetchall()
-            present = {str(row["trade_date"]) for row in rows}
-            # Dates absent entirely from the table are also missing.
-            all_dates = set(candidates)
-            existing_dates = {
-                str(row[0]) for row in connection.execute(
-                    f"SELECT DISTINCT trade_date FROM daily_equity_bars WHERE trade_date IN ({placeholders_dates})",
-                    candidates,
-                ).fetchall()
-            }
-        return sorted(present | (all_dates - existing_dates))
+        complete_dates = {
+            str(row["trade_date"]) for row in rows
+            if int(row["symbol_count"] or 0) >= len(names)
+        }
+        return [candidate for candidate in candidates if candidate not in complete_dates]
 
     def daily_equity_bars_for_symbols(self, symbols: Iterable[str], *, limit_per_symbol: int = 90) -> dict[str, list[dict[str, Any]]]:
         """Return chronological daily bars for multiple symbols in one query."""
