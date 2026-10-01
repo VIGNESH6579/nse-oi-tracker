@@ -1262,8 +1262,10 @@ class SignalRepository:
                 "DELETE FROM signal_events WHERE trade_date = ? AND tier = 'TRADE'",
                 (trade_date,),
             ).rowcount
-            connection.execute("VACUUM")
-            return deleted
+        if deleted:
+            with self._connect() as connection:
+                connection.execute("PRAGMA incremental_vacuum")
+        return deleted
 
     def vacuum(self) -> None:
         """Compact the local SQLite file during an explicit maintenance action."""
