@@ -160,12 +160,17 @@ def expected_latest_bhavcopy_date(now: datetime | None = None) -> date:
 DAILY_HISTORY_TARGET_BARS = 60
 
 def bhavcopy_backfill_required(
-    summary: dict[str, object], now: datetime | None = None
+    summary: dict[str, object],
+    now: datetime | None = None,
+    *,
+    history_ready_pct: float | None = None,
 ) -> bool:
     """Require both a current published date and enough depth for technical validation."""
     bars = int(summary.get("bars") or 0)
     min_bars = int(summary.get("min_bars") or 0)
     latest_trade_date = summary.get("latest_trade_date")
+    if history_ready_pct is not None and history_ready_pct < 100.0:
+        return True
     if bars == 0 or not latest_trade_date:
         return True
     if min_bars < DAILY_HISTORY_TARGET_BARS:
@@ -635,9 +640,7 @@ async def automatic_startup_backfill() -> None:
     if not settings.startup_backfill:
         return
     summary = repository.daily_equity_bar_summary()
-    if not bhavcopy_backfill_required(summary):
-        return
-    logger.info("Daily bhavcopy is missing recent dates; automatic bounded backfill is starting. Monitor /api/health.")
+    logger.info("Checking per-symbol daily Bhavcopy depth target=%d before bounded backfill.", DAILY_HISTORY_TARGET_BARS)
     current = now_ist()
     minutes = current.hour * 60 + current.minute
     in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
@@ -1116,7 +1119,7 @@ async def lifespan(app: FastAPI):
     # missing, complete the bounded startup backfill BEFORE the initial scan and
     # self-test. This prevents a false bars_coverage failure while history is
     # still downloading.
-    startup_backfill_needed = bhavcopy_backfill_required(repository.daily_equity_bar_summary())
+    startup_backfill_needed = True if settings.startup_backfill and render_startup_backfill_enabled() else bhavcopy_backfill_required(repository.daily_equity_bar_summary())
     startup_backfill_task = None
     if startup_backfill_needed and settings.startup_backfill and render_startup_backfill_enabled():
         _startup_state = "BLOCKED"
@@ -1299,7 +1302,9 @@ async def health():
         "last_snapshot_id": effective_snapshot_id,
         "holiday_calendar": holiday_calendar_metadata(),
         "daily_equity_data": daily_equity_data,
-        "bhavcopy_backfill_required": bhavcopy_backfill_required(daily_equity_data, now),
+        "bhavcopy_backfill_required": bhavcopy_backfill_required(
+            daily_equity_data, now, history_ready_pct=float(coverage["history_ready_pct"])
+        ),
         "daily_history_target_bars": DAILY_HISTORY_TARGET_BARS,
         "daily_index_data": daily_index_data,
         "index_backfill_required": daily_index_data.get("bars", 0) == 0,
