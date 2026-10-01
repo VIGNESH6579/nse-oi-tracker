@@ -113,3 +113,9 @@ def test_end_of_day_confirmed_signal_cleanup_is_scheduled():
     assert "scheduled_confirmed_signal_cleanup" in MAIN
     assert 'CronTrigger(hour=23, minute=59, timezone=IST)' in MAIN
     assert 'id="daily-confirmed-signal-cleanup"' in MAIN
+
+
+def test_startup_catches_up_previous_day_confirmed_signal_cleanup():
+    assert "Free Render instances may sleep through 23:59 IST" in MAIN
+    assert "previous_trade_date = (now_ist().date() - timedelta(days=1)).isoformat()" in MAIN
+    assert "repository.delete_confirmed_signals_for_date" in MAIN
