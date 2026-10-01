@@ -13,6 +13,11 @@ def test_history_is_server_only_no_browser_log_and_no_manual_marking():
     assert "this.trades = data.events || []" in INDEX
 
 
+def test_signal_history_excludes_candidate_rows():
+    assert "get tradeEvents() { return this.trades.filter(t => (t.tier || 'TRADE') === 'TRADE'" in INDEX
+    assert "['TRADE', 'CANDIDATE']" not in INDEX
+
+
 def test_signal_history_shows_confirmed_trades_only_no_rejected_watchlist():
     # Signal History must show only setups that passed the confirmation
     # gate. A separate "Watchlist" listing of rejected candidates belongs
