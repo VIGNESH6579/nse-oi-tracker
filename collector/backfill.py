@@ -61,8 +61,12 @@ def backfill_recent_bhavcopies(
     if required_days <= 0 or max_downloads <= 0:
         return {"requested": 0, "downloaded": 0, "stored": 0, "skipped": 0, "failed": 0}
     candidates = recent_nse_trading_dates(end_date, required_days)
-    existing = repository.daily_equity_trade_dates()
-    missing = [candidate for candidate in candidates if candidate.isoformat() not in existing]
+    if symbols and hasattr(repository, "daily_equity_missing_dates_for_symbols"):
+        missing_dates = repository.daily_equity_missing_dates_for_symbols(symbols, candidates)
+        missing = [candidate for candidate in candidates if candidate.isoformat() in set(missing_dates)]
+    else:
+        existing = repository.daily_equity_trade_dates()
+        missing = [candidate for candidate in candidates if candidate.isoformat() not in existing]
     if delay_seconds is None:
         delay_seconds = 60.0 / get_settings().backfill_max_per_min
     downloaded = stored = failed = 0
