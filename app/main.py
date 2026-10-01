@@ -1537,6 +1537,44 @@ async def market_overview(refresh: bool = Query(False)):
         return {"cached": True, **cached}
     indices = await asyncio.to_thread(fetch_market_indices)
     result = normalize_market_overview(indices, [])
+    # NSE's allIndices endpoint can transiently return 403 even while the authenticated
+    # Angel read-only quote path is healthy. Keep the dashboard populated from the same
+    # official read-only broker feed instead of rendering missing index values as '?'.
+    if angel_market_data is not None and not any(
+        (result.get("indices", {}).get(key) or {}).get("last") is not None
+        for key in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "INDIA_VIX")
+    ):
+        try:
+            names = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "INDIA_VIX"]
+            quotes = await asyncio.to_thread(angel_market_data.full_quotes, names)
+            angel_names = {
+                "NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK",
+                "FINNIFTY": "NIFTY FINANCIAL SERVICES", "MIDCPNIFTY": "NIFTY MIDCAP SELECT",
+                "INDIA_VIX": "INDIA VIX",
+            }
+            for key, name in angel_names.items():
+                quote = quotes.get(key) or {}
+                if float(quote.get("ltp") or 0) <= 0:
+                    continue
+                result["indices"][key] = {
+                    "name": name,
+                    "last": quote.get("ltp"),
+                    "change": quote.get("change"),
+                    "change_pct": quote.get("change_pct"),
+                    "open": quote.get("open"),
+                    "high": quote.get("high"),
+                    "low": quote.get("low"),
+                    "previous_close": quote.get("close"),
+                    "source": "angel_one_read_only",
+                }
+            if any((result["indices"].get(key) or {}).get("last") is not None for key in angel_names):
+                result["source"] = "Angel One read-only fallback"
+                result["data_caveat"] = (
+                    "NSE allIndices was unavailable; index values use Angel One read-only quotes. "
+                    "Breadth remains unavailable unless supplied by NSE."
+                )
+        except Exception as exc:
+            logger.warning("Angel index fallback unavailable: %s", str(exc)[:120])
     cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
     return {"cached": False, **result}
 
