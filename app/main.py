@@ -484,6 +484,18 @@ async def scheduled_refresh() -> None:
         logger.exception("Scheduled signal refresh failed")
 
 
+async def scheduled_confirmed_signal_cleanup() -> None:
+    """Delete the current IST day's confirmed paper-signal events after the trading day."""
+    trade_date = ist_trade_date(now_ist())
+    try:
+        deleted = await asyncio.to_thread(
+            repository.delete_confirmed_signals_for_date,
+            trade_date,
+        )
+        logger.info("End-of-day confirmed signal cleanup deleted %s event(s) for %s", deleted, trade_date)
+    except Exception:
+        logger.exception("End-of-day confirmed signal cleanup failed")
+
 async def scheduled_history_rollover() -> None:
     """Archive prior-day UI history at 00:05 IST and retain a local archive."""
     now = now_ist()
@@ -1025,6 +1037,13 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
     scheduler.add_job(
+        scheduled_confirmed_signal_cleanup,
+        CronTrigger(hour=23, minute=59, timezone=IST),
+        id="daily-confirmed-signal-cleanup",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
         scheduled_history_rollover,
         CronTrigger(hour=0, minute=5, timezone=IST),
         id="daily-history-rollover",
@@ -1467,7 +1486,7 @@ async def today_history(
     return {
         "trade_date": trade_date,
         "visible_history_scope": "today_ist",
-        "reset_policy": "Previous-day events are archived at 00:05 IST.",
+        "reset_policy": "Confirmed paper-signal events are deleted at 23:59 IST; the next day starts with an empty confirmed-signal history.",
         "total_events": len(events),
         "events": events,
         "performance": performance,
