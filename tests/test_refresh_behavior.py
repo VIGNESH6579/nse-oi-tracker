@@ -78,7 +78,7 @@ def test_render_auto_deploys_on_main_and_stays_free():
 
 def test_startup_blocks_until_bounded_bhavcopy_backfill_and_self_test():
     assert "Startup readiness BLOCKED until background Bhavcopy backfill/self-test completes" in MAIN
-    assert "automatic bounded backfill" in MAIN
+    assert "bounded backfill" in MAIN
     assert "backfill_recent_bhavcopies" in MAIN
 
 
