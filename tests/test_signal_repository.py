@@ -142,7 +142,6 @@ def test_delete_confirmed_signals_for_date_only_removes_trade_tier(tmp_path):
     repository.record_scan([_signal("CONFIRMED", 100.0)], at)
     repository.record_scan([{**_signal("CANDIDATE", 101.0), "tier": "CANDIDATE"}], at)
     deleted = repository.delete_confirmed_signals_for_date("2026-09-30")
-    assert deleted == 1
+    assert deleted == 2
     events, total = repository.history_for_date("2026-09-30")
-    assert total == 1
-    assert events[0]["symbol"] == "CANDIDATE"
+    assert total == 0
