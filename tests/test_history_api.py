@@ -69,6 +69,30 @@ def test_market_overview_endpoint_returns_indices_only(monkeypatch):
     assert response.json()["indices"]["NIFTY"]["last"] == 100.0
 
 
+def test_market_overview_falls_back_to_angel_read_only_indices(monkeypatch):
+    main.cache.delete("market-overview")
+    monkeypatch.setattr(main, "fetch_market_indices", lambda: None)
+
+    class FakeAngel:
+        def full_quotes(self, symbols):
+            return {
+                "NIFTY": {"ltp": 25000, "change": 100, "change_pct": 0.4, "open": 24900, "high": 25100, "low": 24850, "close": 24900},
+                "BANKNIFTY": {"ltp": 56000, "change": 200, "change_pct": 0.36, "open": 55800, "high": 56200, "low": 55700, "close": 55800},
+            }
+
+    monkeypatch.setattr(main, "angel_market_data", FakeAngel())
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/market-overview?refresh=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["indices"]["NIFTY"]["last"] == 25000
+    assert body["indices"]["NIFTY"]["source"] == "angel_one_read_only"
+    assert body["indices"]["BANKNIFTY"]["last"] == 56000
+    assert body["market_breadth"]["advances"] is None
+
+
 def test_signal_api_exposes_sector_metadata_and_filters_cached_rows(monkeypatch):
     main.cache.set("all_signals", [{
         "symbol": "RELIANCE", "signal": "LONG_BUILDUP", "confidence_tier": "HIGH",
