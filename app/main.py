@@ -35,6 +35,7 @@ from app.market_calendar import (
     holiday_calendar_metadata,
     refresh_holiday_calendar,
     MARKET_STATUS_OPEN,
+    MARKET_STATUS_CLOSED_HOLIDAY,
     MARKET_STATUS_LABELS,
 )
 from app.cache import cache
