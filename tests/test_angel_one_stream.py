@@ -81,6 +81,25 @@ def test_subscription_cap_is_1000():
     assert len(stream._subscriptions) == 1000
 
 
+def test_ensure_symbols_accepts_two_digit_futures_expiry():
+    class Instrument:
+        def __init__(self, token, expiry):
+            self.token = token
+            self.expiry = expiry
+
+    class MarketData:
+        def _get_instruments(self):
+            return {
+                ("NSE", "RELIANCE"): Instrument("100", "01JAN2099"),
+                ("NFO", "RELIANCE01OCT26FUT"): Instrument("200", "01Oct2026"),
+            }
+
+    stream = AngelOneMarketStream(MarketData(), enabled=True)
+    added = stream.ensure_symbols(["RELIANCE"])
+    assert added == 2
+    assert (2, "200") in stream._subscriptions
+
+
 def test_ensure_symbols_seeds_equity_and_nearest_futures():
     class Instrument:
         def __init__(self, token, expiry):
