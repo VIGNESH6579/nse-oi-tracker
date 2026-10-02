@@ -62,7 +62,7 @@ def test_market_overview_reads_are_null_safe_before_data_arrives():
     assert unguarded == []
 
 
-def test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
+\n\ndef test_market_context_refresh_button_has_timeout_loading_and_visible_error_state():\n    assert "marketOverviewLoading: false" in INDEX\n    assert ":disabled=" + "\"marketOverviewLoading\"" in INDEX\n    assert "Refreshing…" in INDEX\n    assert "marketOverviewError" in INDEX\n    assert "new AbortController()" in INDEX\n    assert "AbortError" in INDEX\n    assert "timeout, 20000" in INDEX\n\ndef test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
     """Previously fetchMarketOverview() ran only at page load and on manual click, so the four
     index CMPs (and VIX) went stale immediately while everything else kept refreshing."""
     assert "Promise.all([this.fetchSignals(), this.fetchMarketOverview()]).then(() => this.startTimer())" in INDEX
