@@ -62,6 +62,17 @@ def test_market_overview_reads_are_null_safe_before_data_arrives():
     assert unguarded == []
 
 
+
+def test_market_context_refresh_button_has_timeout_loading_and_visible_error_state():
+    assert "marketOverviewLoading: false" in INDEX
+    assert 'marketOverviewLoading' in INDEX
+    assert "Refreshing…" in INDEX
+    assert "marketOverviewError" in INDEX
+    assert "new AbortController()" in INDEX
+    assert "AbortError" in INDEX
+    assert "20000" in INDEX
+
+
 def test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
     """Previously fetchMarketOverview() ran only at page load and on manual click, so the four
     index CMPs (and VIX) went stale immediately while everything else kept refreshing."""

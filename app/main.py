@@ -677,9 +677,9 @@ async def _startup_backfill_then_retest() -> None:
     startup and without changing the backfill's own bounded behaviour.
     """
     try:
-        await asyncio.wait_for(automatic_startup_backfill(), timeout=300)
+        await asyncio.wait_for(automatic_startup_backfill(), timeout=450)
     except asyncio.TimeoutError:
-        logger.error("Startup Bhavcopy backfill timed out after 300s; readiness remains fail-closed")
+        logger.error("Startup Bhavcopy backfill timed out after 450s; readiness remains fail-closed")
         _startup_state = "BLOCKED"
         _startup_error = "startup Bhavcopy backfill timed out"
         return
@@ -1144,8 +1144,9 @@ async def lifespan(app: FastAPI):
     # Render Free has an ephemeral filesystem. If required Bhavcopy history is
     # missing, complete the bounded startup backfill BEFORE the initial scan and
     # self-test. This prevents a false bars_coverage failure while history is
-    # still downloading.
-    startup_backfill_needed = True if settings.startup_backfill and render_startup_backfill_enabled() else bhavcopy_backfill_required(repository.daily_equity_bar_summary())
+    # still downloading, while avoiding an unnecessary full backfill on every
+    # restart when all per-symbol history is already complete.
+    startup_backfill_needed = bhavcopy_backfill_required(repository.daily_equity_bar_summary())
     startup_backfill_task = None
     if startup_backfill_needed and settings.startup_backfill and render_startup_backfill_enabled():
         _startup_state = "BLOCKED"

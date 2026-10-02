@@ -136,7 +136,12 @@
       <span class="text-[10px] text-gray-600 mono" x-text="(marketOverview?.nse_timestamp ? 'NSE ' + marketOverview.nse_timestamp : 'NSE timestamp unavailable') + (marketOverviewFetchedAt && (Date.now() - marketOverviewFetchedAt) > 90000 ? ' (stale)' : '')"></span>
       <span class="text-[10px] text-amber-400">Context only — not a trade signal</span>
       <div class="flex-1"></div>
-      <button @click="fetchMarketOverview(true)" class="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800">Refresh context</button>
+      <button @click="fetchMarketOverview(true)" :disabled="marketOverviewLoading"
+              class="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-40">
+        <span x-show="!marketOverviewLoading">Refresh context</span>
+        <span x-show="marketOverviewLoading">Refreshing…</span>
+      </button>
+      <span x-show="marketOverviewError" class="text-[10px] text-red-400" x-text="marketOverviewError"></span>
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
       <template x-for="key in ['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY','INDIA_VIX']" :key="key">
@@ -534,7 +539,7 @@ function scanner() {
     /* ?? state ?? */
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
     marketDataSource: '', oiSource: '', dataStatus: 'NOT_RUN', lastRefreshAt: '', isStale: false,
-    marketOverview: null, marketOverviewError: '', marketOverviewFetchedAt: 0,
+    marketOverview: null, marketOverviewError: '', marketOverviewFetchedAt: 0, marketOverviewLoading: false,
 
 
 
@@ -673,13 +678,21 @@ function scanner() {
 
     async fetchMarketOverview(force=false) {
       this.marketOverviewError = '';
+      this.marketOverviewLoading = true;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
       try {
-        const r = await fetch('/api/market-overview' + (force ? '?refresh=true' : ''));
+        const r = await fetch('/api/market-overview' + (force ? '?refresh=true' : ''), {signal: controller.signal});
         if (!r.ok) throw new Error('HTTP ' + r.status);
         this.marketOverview = await r.json();
-      this.marketOverviewFetchedAt = Date.now();
+        this.marketOverviewFetchedAt = Date.now();
       } catch (e) {
-        this.marketOverviewError = 'NSE market context unavailable: ' + e.message;
+        this.marketOverviewError = e.name === 'AbortError'
+          ? 'NSE market context timed out; keeping the last received context.'
+          : 'NSE market context unavailable: ' + e.message;
+      } finally {
+        clearTimeout(timeout);
+        this.marketOverviewLoading = false;
       }
     },
 
