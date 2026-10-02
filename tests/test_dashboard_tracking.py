@@ -62,7 +62,7 @@ def test_market_overview_reads_are_null_safe_before_data_arrives():
     assert unguarded == []
 
 
-\n\ndef test_market_context_refresh_button_has_timeout_loading_and_visible_error_state():\n    assert "marketOverviewLoading: false" in INDEX\n    assert ":disabled=" + "\"marketOverviewLoading\"" in INDEX\n    assert "Refreshing…" in INDEX\n    assert "marketOverviewError" in INDEX\n    assert "new AbortController()" in INDEX\n    assert "AbortError" in INDEX\n    assert "timeout, 20000" in INDEX\n\n
+
 def test_market_context_refresh_button_has_timeout_loading_and_visible_error_state():
     assert "marketOverviewLoading: false" in INDEX
     assert 'marketOverviewLoading' in INDEX
