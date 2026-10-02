@@ -118,6 +118,18 @@ def test_probe_exception_never_crashes_and_unknown_stage_rejected(tmp_path):
         st.build_probes("nope", angel=None, repository=None, universe=set, ban_info=dict, scan_stats=dict, window_depth=dict)
 
 
+def test_holiday_health_is_service_healthy_even_without_trading_self_test():
+    from fastapi.testclient import TestClient
+    import app.main as main
+    from unittest import mock
+    with TestClient(main.app) as client:
+        with mock.patch.object(main, "get_market_status", return_value=main.MARKET_STATUS_CLOSED_HOLIDAY), \
+             mock.patch.object(main.repository, "daily_equity_bar_summary", return_value={"bars": 60, "symbols": 213, "latest_trade_date": "2026-10-01", "min_bars": 60, "max_bars": 60}), \
+             mock.patch.object(main.self_test, "readiness", return_value="UNTESTED"):
+            body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+
+
 def test_health_exposes_readiness_and_gap_fields():
     from fastapi.testclient import TestClient
     import app.main as main
