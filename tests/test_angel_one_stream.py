@@ -91,7 +91,7 @@ def test_ensure_symbols_accepts_two_digit_futures_expiry():
         def _get_instruments(self):
             return {
                 ("NSE", "RELIANCE"): Instrument("100", "01JAN2099"),
-                ("NFO", "RELIANCE01OCT26FUT"): Instrument("200", "01Oct2026"),
+                ("NFO", "RELIANCE01NOV26FUT"): Instrument("200", "01Nov2026"),
             }
 
     stream = AngelOneMarketStream(MarketData(), enabled=True)
