@@ -35,6 +35,8 @@ from app.market_calendar import (
     holiday_calendar_metadata,
     refresh_holiday_calendar,
     MARKET_STATUS_OPEN,
+    MARKET_STATUS_CLOSED_HOLIDAY,
+    MARKET_STATUS_CLOSED_BEFORE_OPEN,
     MARKET_STATUS_LABELS,
 )
 from app.cache import cache
@@ -1259,7 +1261,11 @@ async def health():
     coverage = repository.daily_history_coverage(symbols=cached_universe() or None)
     angel_state = angel_market_data.health() if angel_market_data is not None else {"state": "disabled", "last_error_code": "", "retry_at": None}
     health_readiness = self_test.readiness()
-    if health_readiness == "UNTESTED":
+    if status == MARKET_STATUS_CLOSED_HOLIDAY and health_readiness in {"UNTESTED", "BLOCKED"}:
+        # The service can be operational on an NSE holiday even though trading self-tests
+        # are intentionally skipped. Keep trading readiness separate from service health.
+        health_status = "ok"
+    elif health_readiness == "UNTESTED":
         health_status = "unready"
     elif health_readiness == "BLOCKED":
         health_status = "blocked"
