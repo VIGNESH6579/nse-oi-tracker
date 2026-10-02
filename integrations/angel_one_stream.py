@@ -37,7 +37,7 @@ NSE_CM = 1
 NSE_FO = 2
 QUOTE_MODE = 2
 SNAP_QUOTE_MODE = 3
-_FUTURE_RE = re.compile(r"^(.+?)\d{2}[A-Z]{3}\d{4}FUT$")
+_FUTURE_RE = re.compile(r"^(.+?)\d{2}[A-Z]{3}(?:\d{2}|\d{4})FUT$")
 
 
 @dataclass(frozen=True, slots=True)
