@@ -72,7 +72,9 @@ def backfill_recent_bhavcopies(
         delay_seconds = 60.0 / get_settings().backfill_max_per_min
     downloaded = stored = failed = 0
     consecutive_empty = 0
-    for index, candidate in enumerate(missing[:max_downloads], start=1):
+    batch = missing[:max_downloads]
+    logger.info("Bhavcopy refill queue missing_dates=%d batch=%d target=%d", len(missing), len(batch), required_days)
+    for index, candidate in enumerate(batch, start=1):
         try:
             bars = collect_equity_bhavcopy(candidate)
             if not bars:
@@ -80,7 +82,7 @@ def backfill_recent_bhavcopies(
                 consecutive_empty += 1
                 logger.warning("Bhavcopy returned no usable rows date=%s", candidate)
                 if consecutive_empty >= 3:
-                    logger.warning("Bhavcopy bulk archive circuit breaker opened after %d consecutive empty dates", consecutive_empty)
+                    logger.warning("Bhavcopy bulk archive circuit breaker opened after %d consecutive empty dates; next scheduled run will resume", consecutive_empty)
                     break
             else:
                 consecutive_empty = 0
