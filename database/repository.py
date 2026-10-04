@@ -126,6 +126,19 @@ class SignalRepository:
                 CREATE INDEX IF NOT EXISTS idx_event_open_symbol
                     ON signal_events(trade_date, status, symbol);
 
+                CREATE TABLE IF NOT EXISTS signal_first_seen (
+                    id INTEGER PRIMARY KEY,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    signal TEXT NOT NULL,
+                    first_seen_at_ist TEXT NOT NULL,
+                    UNIQUE(trade_date, symbol, direction, signal)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_signal_first_seen_date
+                    ON signal_first_seen(trade_date, first_seen_at_ist ASC);
+
                 CREATE TABLE IF NOT EXISTS daily_equity_bars (
                     trade_date TEXT NOT NULL,
                     symbol TEXT NOT NULL,
