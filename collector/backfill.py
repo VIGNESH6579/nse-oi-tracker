@@ -118,7 +118,12 @@ def backfill_symbol_history(
     calendar_days: int = 100,
     delay_seconds: float | None = None,
 ) -> dict[str, int]:
-    """Fill the deepest history gaps through NSE's per-security history API."""
+    """Fill deepest history gaps using Angel ONE first, with NSE as a fallback.
+
+    Angel historical calls are internally serialized/rate-limited. The outer
+    backfill delay is retained only for the NSE fallback so the working Angel
+    path is not artificially throttled by the old 10/minute NSE pacing.
+    """
     wanted = sorted({str(s).upper() for s in symbols if s})[:max_symbols]
     if not wanted:
         return {"requested": 0, "downloaded": 0, "stored": 0, "failed": 0}
@@ -181,7 +186,11 @@ def backfill_symbol_history(
         except Exception:
             failed += 1
             logger.warning("Daily history failed symbol=%s", symbol, exc_info=True)
-        if delay_seconds > 0 and index < len(wanted):
+        # Angel ONE already enforces its own historical-call interval and 403
+        # cooldown inside AngelOneMarketData. Do not add the old global
+        # 10/minute delay on top of that path. Keep the slower pacing for NSE
+        # fallback requests because that path is shared with archive traffic.
+        if source != "angel_one_daily" and delay_seconds > 0 and index < len(wanted):
             time.sleep(delay_seconds)
     return {"requested": len(wanted), "downloaded": downloaded, "stored": stored, "failed": failed}
 
