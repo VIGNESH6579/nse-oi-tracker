@@ -11,7 +11,6 @@ from collector.bhavcopy import collect_equity_bhavcopy
 from database.repository import SignalRepository
 from app.market_calendar import is_trading_holiday
 from app.nse_fetcher import fetch_equity_history
-from integrations.nse_bhavcopy_mcp import fetch_symbol_history_batch
 from config.settings import get_settings
 from utils.time import now_ist
 
@@ -116,31 +115,15 @@ def backfill_symbol_history(
     calendar_days: int = 100,
     delay_seconds: float | None = None,
 ) -> dict[str, int]:
-    """Fill daily history through official NSE Bhavcopy MCP, with REST fallback."""
+    """Fill the deepest history gaps through NSE's per-security history API."""
     wanted = sorted({str(s).upper() for s in symbols if s})[:max_symbols]
     if not wanted:
         return {"requested": 0, "downloaded": 0, "stored": 0, "failed": 0}
     if delay_seconds is None:
         delay_seconds = 60.0 / get_settings().backfill_max_per_min
-    downloaded = stored = failed = 0
-
-    try:
-        batch = fetch_symbol_history_batch(wanted, end_date, delay_seconds=delay_seconds)
-    except Exception as exc:
-        batch = {}
-        logger.warning("NSE Bhavcopy MCP unavailable; using historical REST fallback: %s", str(exc)[:160])
-
-    unresolved: list[str] = []
-    for symbol in wanted:
-        rows = batch.get(symbol, [])
-        if rows:
-            stored += repository.upsert_daily_equity_bars(rows)
-            downloaded += 1
-        else:
-            unresolved.append(symbol)
-
     start_date = end_date - timedelta(days=calendar_days)
-    for index, symbol in enumerate(unresolved):
+    downloaded = stored = failed = 0
+    for index, symbol in enumerate(wanted, start=1):
         try:
             rows = fetch_equity_history(symbol, start_date, end_date)
             if not rows:
@@ -152,9 +135,10 @@ def backfill_symbol_history(
         except Exception:
             failed += 1
             logger.warning("NSE per-security history failed symbol=%s", symbol, exc_info=True)
-        if delay_seconds > 0 and index + 1 < len(unresolved):
+        if delay_seconds > 0 and index < len(wanted):
             time.sleep(delay_seconds)
     return {"requested": len(wanted), "downloaded": downloaded, "stored": stored, "failed": failed}
+
 
 def backfill_symbol_gaps(
     repository: SignalRepository,
