@@ -783,6 +783,23 @@ class SignalRepository:
                 return SnapshotWrite(snapshot_id=int(row["id"]), created=False, signal_count=int(row["signal_count"]))
 
             snapshot_id = int(cursor.lastrowid)
+            # Keep the first time a detected pattern entered the Live Signals list.
+            # This is independent of later rescans so the UI can show how long the
+            # symbol has remained under observation.
+            for signal in signals:
+                payload, _plan = self._event_payload(signal, captured_at)
+                symbol = str(payload.get("symbol") or "").upper()
+                signal_name = str(payload.get("signal") or "NEUTRAL")
+                direction = str(payload.get("direction") or "")
+                if symbol and direction:
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO signal_first_seen
+                            (trade_date, symbol, direction, signal, first_seen_at_ist)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (trade_date, symbol, direction, signal_name, captured_at.isoformat()),
+                    )
             for signal in signals:
                 payload, plan = self._event_payload(signal, captured_at)
                 symbol = str(payload.get("symbol") or "").upper()
