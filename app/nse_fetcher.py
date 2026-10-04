@@ -557,27 +557,65 @@ def fetch_fno_holiday_calendar() -> dict[int, set]:
 
 
 def fetch_equity_bhavcopy(trade_date: date) -> str | None:
-    """Fetch NSE equity Bhavcopy, preferring current UDiFF and falling back to legacy CSV."""
-    ymd = trade_date.strftime("%Y%m%d")
-    udiff_url = (
-        "https://nsearchives.nseindia.com/content/cm/"
-        f"BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip"
-    )
-    archive = _nse.get_archive_bytes(udiff_url, referer=f"{NSE_BASE}/all-reports")
-    if archive:
-        try:
-            with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
-                csv_names = [name for name in bundle.namelist() if name.lower().endswith(".csv")]
-                if csv_names:
-                    with bundle.open(csv_names[0]) as handle:
-                        return handle.read().decode("utf-8-sig")
-        except (OSError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
-            logger.warning("Invalid UDiFF Bhavcopy archive date=%s: %s", trade_date, exc)
+
+    """Fetch an equity Bhavcopy using the Render-proven legacy archive path.
+    
+
+
+    The legacy CSV archive successfully rebuilt 60 trading days on Render.
+    
+    UDiFF remains a fallback, but must not replace the proven path because
+    
+    NSE can return a non-empty unsupported response for UDiFF.
+    
+    """
+    
     filename = f"sec_bhavdata_full_{trade_date.strftime('%d%m%Y')}.csv"
-    return _nse.get_archive_text(
-        f"https://nsearchives.nseindia.com/products/content/{filename}",
-        referer=f"{NSE_BASE}/all-reports",
+    
+    legacy_url = f"https://nsearchives.nseindia.com/products/content/{filename}"
+    
+    legacy_referer = "https://www.nseindia.com/market-data/all-upcoming-issues-ipo"
+    
+    legacy = _nse.get_archive_text(legacy_url, referer=legacy_referer)
+    
+    if legacy:
+    
+        return legacy
+        
+
+
+    ymd = trade_date.strftime("%Y%m%d")
+    
+    udiff_url = (
+    
+        "https://nsearchives.nseindia.com/content/cm/"
+        
+        f"BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip"
+        
     )
+    
+    archive = _nse.get_archive_bytes(udiff_url, referer=f"{NSE_BASE}/all-reports")
+    
+    if archive:
+    
+        try:
+        
+            with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            
+                csv_names = [name for name in bundle.namelist() if name.lower().endswith(".csv")]
+                
+                if csv_names:
+                
+                    with bundle.open(csv_names[0]) as handle:
+                    
+                        return handle.read().decode("utf-8-sig")
+                        
+        except (OSError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
+        
+            logger.warning("Invalid UDiFF Bhavcopy archive date=%s: %s", trade_date, exc)
+            
+    return None
+    
 
 def fetch_nse_archive_text(url: str, referer: str | None = None) -> str | None:
     """Generic NSE archive download through the working session/TLS-impersonating client."""
