@@ -692,7 +692,7 @@ async def automatic_startup_backfill() -> None:
     in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
     # During market hours fetch only the newest 16 dates (enough for ATR14);
     # the rest is topped up after the close to protect the 512 MB instance.
-    limit = min(16, settings.backfill_target_days) if in_market_hours else settings.backfill_target_days
+    limit = min(10, settings.backfill_target_days)
     try:
         result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
         logger.info("Automatic bhavcopy backfill finished (market_hours=%s cap=%d): %s", in_market_hours, limit, result)
@@ -711,9 +711,9 @@ async def _startup_backfill_then_retest() -> None:
     startup and without changing the backfill's own bounded behaviour.
     """
     try:
-        await asyncio.wait_for(automatic_startup_backfill(), timeout=450)
+        await asyncio.wait_for(automatic_startup_backfill(), timeout=180)
     except asyncio.TimeoutError:
-        logger.error("Startup Bhavcopy backfill timed out after 450s; readiness remains fail-closed")
+        logger.error("Startup Bhavcopy backfill timed out after 180s; readiness remains fail-closed")
         _startup_state = "BLOCKED"
         _startup_error = "startup Bhavcopy backfill timed out"
         return
@@ -785,7 +785,7 @@ async def scheduled_backfill_topup() -> None:
         current = now_ist()
         minutes = current.hour * 60 + current.minute
         in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
-        limit = min(12, settings.backfill_target_days) if in_market_hours else settings.backfill_target_days
+        limit = min(10, settings.backfill_target_days)
         result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
         logger.info("Post-close bhavcopy top-up finished: %s", result)
     except Exception:
