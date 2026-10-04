@@ -1,0 +1,192 @@
+name: Apply Bhavcopy reliability fix
+
+
+
+on:
+
+  workflow_dispatch:
+  
+
+
+permissions:
+
+  contents: write
+  
+
+
+jobs:
+
+  patch:
+  
+    runs-on: ubuntu-latest
+    
+    steps:
+    
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+      
+        with:
+        
+          python-version: '3.11'
+          
+      - run: pip install -r requirements.txt pytest
+      
+      - name: Restore Render-proven legacy archive path
+      
+        run: |
+        
+          python - <<'PY'
+          
+          from pathlib import Path
+          
+          p = Path('app/nse_fetcher.py')
+          
+          s = p.read_text()
+          
+          start = s.index('def fetch_equity_bhavcopy')
+          
+          end = s.index('\ndef fetch_nse_archive_text', start)
+          
+          new = '''def fetch_equity_bhavcopy(trade_date: date) -> str | None:
+          
+              """Fetch an equity Bhavcopy using the Render-proven legacy archive path.
+              
+
+
+              The legacy CSV archive successfully rebuilt 60 trading days on Render.
+              
+              UDiFF remains a fallback, but must not replace the proven path because
+              
+              NSE can return a non-empty unsupported response for UDiFF.
+              
+              """
+              
+              filename = f"sec_bhavdata_full_{trade_date.strftime('%d%m%Y')}.csv"
+              
+              legacy_url = f"https://nsearchives.nseindia.com/products/content/{filename}"
+              
+              legacy_referer = "https://www.nseindia.com/market-data/all-upcoming-issues-ipo"
+              
+              legacy = _nse.get_archive_text(legacy_url, referer=legacy_referer)
+              
+              if legacy:
+              
+                  return legacy
+                  
+
+
+              ymd = trade_date.strftime("%Y%m%d")
+              
+              udiff_url = (
+              
+                  "https://nsearchives.nseindia.com/content/cm/"
+                  
+                  f"BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip"
+                  
+              )
+              
+              archive = _nse.get_archive_bytes(udiff_url, referer=f"{NSE_BASE}/all-reports")
+              
+              if archive:
+              
+                  try:
+                  
+                      with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+                      
+                          csv_names = [name for name in bundle.namelist() if name.lower().endswith(".csv")]
+                          
+                          if csv_names:
+                          
+                              with bundle.open(csv_names[0]) as handle:
+                              
+                                  return handle.read().decode("utf-8-sig")
+                                  
+                  except (OSError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
+                  
+                      logger.warning("Invalid UDiFF Bhavcopy archive date=%s: %s", trade_date, exc)
+                      
+              return None
+              
+          '''
+          
+          p.write_text(s[:start] + new + s[end:])
+          
+          PY
+          
+      - name: Verify
+      
+        run: pytest -q
+        
+      - name: Commit patch
+      
+        run: |
+        
+          git config user.name 'github-actions[bot]'
+          
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          
+          git add app/nse_fetcher.py
+          
+          git commit -m 'fix: restore reliable legacy Bhavcopy archive path' || exit 0
+          
+          git push origin HEAD:main
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
