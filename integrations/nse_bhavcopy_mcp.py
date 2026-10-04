@@ -29,12 +29,17 @@ def _date_arg(properties: dict[str, Any], names: tuple[str, ...], value: date) -
 
 def _rows_from_result(result: Any, symbol: str) -> list[dict]:
     texts = [item.text for item in getattr(result, "content", []) if getattr(item, "text", None)]
-    rows: list[dict] = []
+    payloads: list[Any] = []
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        payloads.append(structured)
     for text in texts:
         try:
-            payload = json.loads(text)
+            payloads.append(json.loads(text))
         except (TypeError, json.JSONDecodeError):
             continue
+    rows: list[dict] = []
+    for payload in payloads:
         candidates = payload.get("data") if isinstance(payload, dict) else payload
         if isinstance(payload, dict) and isinstance(candidates, dict):
             candidates = candidates.get("data") or candidates.get("rows") or candidates.get("history")
@@ -60,11 +65,11 @@ def _rows_from_result(result: Any, symbol: str) -> list[dict]:
                 continue
             try:
                 values = [
-                    float(pick("open", "Open", "OpnPric")),
-                    float(pick("high", "High", "HghPric")),
-                    float(pick("low", "Low", "LwPric")),
-                    float(pick("close", "Close", "ClsPric")),
-                    float(pick("volume", "Volume", "TtlTradgVol") or 0),
+                    float(pick("open", "Open", "openPrice", "OpnPric")),
+                    float(pick("high", "High", "highPrice", "HghPric")),
+                    float(pick("low", "Low", "lowPrice", "LwPric")),
+                    float(pick("close", "Close", "closePrice", "ClsPric")),
+                    float(pick("volume", "Volume", "tradedVolume", "totalVolume", "TtlTradgVol") or 0),
                 ]
             except (TypeError, ValueError):
                 continue
