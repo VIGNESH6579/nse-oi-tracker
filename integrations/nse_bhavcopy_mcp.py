@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from mcp import ClientSession
@@ -117,34 +117,56 @@ async def _fetch_worker(
     delay_seconds: float,
     worker_id: int,
 ) -> dict[str, list[dict]]:
+    """Fetch symbols independently so an MCP stream timeout cannot discard prior rows."""
     output: dict[str, list[dict]] = {}
-    async with streamablehttp_client(NSE_BHAVCOPY_MCP_URL) as (read_stream, write_stream, _session_id):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            stock_tool = next((tool for tool in tools.tools if tool.name == "get_stock_history"), None)
-            if stock_tool is None:
-                raise RuntimeError("NSE Bhavcopy MCP does not expose get_stock_history")
-            schema = getattr(stock_tool, "inputSchema", {}) or {}
-            properties = schema.get("properties", {})
-            for index, symbol in enumerate(symbols):
-                args: dict[str, Any] = {}
-                if "symbol" in properties:
-                    args["symbol"] = symbol
-                else:
-                    raise RuntimeError("NSE Bhavcopy MCP get_stock_history has no symbol parameter")
-                start = _date_arg(properties, ("startDate", "start_date", "fromDate", "from_date"), end_date)
-                finish = _date_arg(properties, ("endDate", "end_date", "toDate", "to_date"), end_date)
-                if start:
-                    args[start[0]] = (end_date.fromordinal(end_date.toordinal() - 100)).strftime("%Y-%m-%d")
-                if finish:
-                    args[finish[0]] = finish[1]
-                result = await session.call_tool("get_stock_history", arguments=args)
-                output[symbol] = _rows_from_result(result, symbol)
-                if delay_seconds > 0 and index + 1 < len(symbols):
-                    await asyncio.sleep(delay_seconds)
-    LOGGER.info("NSE Bhavcopy MCP worker=%d completed symbols=%d rows=%d",
-                worker_id, len(symbols), sum(len(rows) for rows in output.values()))
+    for index, symbol in enumerate(symbols):
+        try:
+            # NSE's streamable HTTP endpoint can terminate the event stream with
+            # a 504 after several calls.  Use one short-lived session per symbol:
+            # successful symbols remain durable even if the next session drops.
+            async with streamablehttp_client(NSE_BHAVCOPY_MCP_URL) as (read_stream, write_stream, _session_id):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    tools = await session.list_tools()
+                    stock_tool = next((tool for tool in tools.tools if tool.name == "get_stock_history"), None)
+                    if stock_tool is None:
+                        raise RuntimeError("NSE Bhavcopy MCP does not expose get_stock_history")
+                    schema = getattr(stock_tool, "inputSchema", {}) or {}
+                    properties = schema.get("properties", {})
+                    if "symbol" not in properties:
+                        raise RuntimeError("NSE Bhavcopy MCP get_stock_history has no symbol parameter")
+                    args: dict[str, Any] = {"symbol": symbol}
+                    start_arg = _date_arg(
+                        properties, ("startDate", "start_date", "fromDate", "from_date"), end_date
+                    )
+                    finish_arg = _date_arg(
+                        properties, ("endDate", "end_date", "toDate", "to_date"), end_date
+                    )
+                    if start_arg:
+                        args[start_arg[0]] = (end_date - timedelta(days=100)).strftime("%Y-%m-%d")
+                    if finish_arg:
+                        args[finish_arg[0]] = finish_arg[1]
+                    result = await session.call_tool("get_stock_history", arguments=args)
+                    rows = _rows_from_result(result, symbol)
+                    output[symbol] = rows
+                    LOGGER.info(
+                        "NSE Bhavcopy MCP symbol=%s rows=%d worker=%d",
+                        symbol, len(rows), worker_id,
+                    )
+        except Exception as exc:
+            LOGGER.warning(
+                "NSE Bhavcopy MCP symbol fetch failed symbol=%s worker=%d: %s",
+                symbol, worker_id, str(exc)[:180],
+            )
+            # Do not erase already completed symbols. REST fallback will handle
+            # only unresolved symbols after the batch returns.
+            output.setdefault(symbol, [])
+        if delay_seconds > 0 and index + 1 < len(symbols):
+            await asyncio.sleep(delay_seconds)
+    LOGGER.info(
+        "NSE Bhavcopy MCP worker=%d completed symbols=%d rows=%d",
+        worker_id, len(symbols), sum(len(rows) for rows in output.values()),
+    )
     return output
 
 
