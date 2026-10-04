@@ -186,6 +186,7 @@ def _refresh_signals() -> list[dict]:
     """Fetch, persist, and cache one signal scan in a worker thread."""
     global _last_good_signals, _last_good_signals_at
     global _last_refresh_at_ist, _last_refresh_was_stale, _last_snapshot_id
+    global _signal_first_seen, _signal_active_symbols
     signals = scan_all_fno_realtime()
     if signals and angel_market_data is not None:
         try:
