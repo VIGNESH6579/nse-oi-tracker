@@ -11,6 +11,7 @@ from collector.bhavcopy import collect_equity_bhavcopy
 from database.repository import SignalRepository
 from app.market_calendar import is_trading_holiday
 from app.nse_fetcher import fetch_equity_history
+from integrations.angel_one_market_data import AngelOneMarketData
 from config.settings import get_settings
 from utils.time import now_ist
 
@@ -125,18 +126,52 @@ def backfill_symbol_history(
         delay_seconds = 60.0 / get_settings().backfill_max_per_min
     start_date = end_date - timedelta(days=calendar_days)
     downloaded = stored = failed = 0
+    angel = AngelOneMarketData.from_environment()
     for index, symbol in enumerate(wanted, start=1):
         try:
             rows = fetch_equity_history(symbol, start_date, end_date)
+            source = "nse"
+            if not rows and angel is not None and angel.configured:
+                # Render's NSE egress can be blocked even when Angel read-only
+                # market data is healthy. SmartAPI provides free ONE_DAY candles,
+                # so use it only as a read-only history fallback.
+                try:
+                    angel_rows = angel.daily_candles(symbol, days=calendar_days, exchange="NSE")
+                    rows = []
+                    for row in angel_rows or []:
+                        raw_time = str(row.get("time") or "")[:10]
+                        if not raw_time or len(raw_time) != 10:
+                            continue
+                        try:
+                            parsed = date.fromisoformat(raw_time)
+                        except ValueError:
+                            continue
+                        close = float(row.get("close") or 0)
+                        if close <= 0:
+                            continue
+                        rows.append({
+                            "symbol": symbol,
+                            "trade_date": parsed.isoformat(),
+                            "open": float(row.get("open") or 0),
+                            "high": float(row.get("high") or 0),
+                            "low": float(row.get("low") or 0),
+                            "close": close,
+                            "volume": float(row.get("volume") or 0),
+                        })
+                    if rows:
+                        source = "angel_one_daily"
+                except Exception as exc:
+                    logger.warning("Angel daily history fallback failed symbol=%s: %s", symbol, str(exc)[:120])
             if not rows:
                 failed += 1
-                logger.warning("NSE per-security history returned no rows symbol=%s", symbol)
+                logger.warning("Daily history returned no rows symbol=%s", symbol)
             else:
                 stored += repository.upsert_daily_equity_bars(rows)
                 downloaded += 1
+                logger.info("Daily history filled symbol=%s source=%s bars=%d", symbol, source, len(rows))
         except Exception:
             failed += 1
-            logger.warning("NSE per-security history failed symbol=%s", symbol, exc_info=True)
+            logger.warning("Daily history failed symbol=%s", symbol, exc_info=True)
         if delay_seconds > 0 and index < len(wanted):
             time.sleep(delay_seconds)
     return {"requested": len(wanted), "downloaded": downloaded, "stored": stored, "failed": failed}
