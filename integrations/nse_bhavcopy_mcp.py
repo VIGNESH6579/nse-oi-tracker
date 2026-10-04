@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from mcp import ClientSession
@@ -143,7 +143,7 @@ async def _fetch_worker(
                         properties, ("endDate", "end_date", "toDate", "to_date"), end_date
                     )
                     if start_arg:
-                        args[start_arg[0]] = (end_date - __import__("datetime").timedelta(days=100)).strftime("%Y-%m-%d")
+                        args[start_arg[0]] = (end_date - timedelta(days=100)).strftime("%Y-%m-%d")
                     if finish_arg:
                         args[finish_arg[0]] = finish_arg[1]
                     result = await session.call_tool("get_stock_history", arguments=args)
