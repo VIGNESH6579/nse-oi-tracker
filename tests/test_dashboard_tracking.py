@@ -99,6 +99,13 @@ def test_history_shows_exact_entry_seconds_and_refreshes_with_live_monitor():
     assert "setInterval(() => this.loadServerHistory(), 30000)" in INDEX
 
 
+def test_live_signal_table_shows_persisted_first_added_time():
+    assert "first_seen_at_ist" in INDEX
+    assert "First detected in today's Live Signals list" in INDEX
+    assert "Added" in INDEX
+    assert "row.first_seen_at_ist ? hm(row.first_seen_at_ist) + ' IST'" in INDEX
+
+
 def test_history_shows_server_tracked_current_ltp_separately_from_entry():
     assert "Current LTP" in INDEX
     assert "t.currentLTP" in INDEX
