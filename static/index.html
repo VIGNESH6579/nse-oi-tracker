@@ -268,6 +268,7 @@
               <th class="px-3 py-2.5 text-left font-medium">Sector</th>
               <th class="px-3 py-2.5 text-left font-medium">Signal</th>
               <th class="px-3 py-2.5 text-left font-medium">Dir</th>
+              <th class="px-3 py-2.5 text-left font-medium">Added</th>
               <th class="px-3 py-2.5 text-right font-medium">LTP (₹)</th>
               <th class="px-3 py-2.5 text-right font-medium">Price%</th>
               <th class="px-3 py-2.5 text-right font-medium">OI%</th>
@@ -284,7 +285,7 @@
             <template x-if="loading && signals.length === 0">
               <template x-for="i in 10">
                 <tr class="border-t border-gray-800">
-                  <td colspan="13" class="px-3 py-2.5">
+                  <td colspan="14" class="px-3 py-2.5">
                     <div class="h-3 bg-gray-800 animate-pulse rounded"
                          :style="`width:${50+Math.random()*40}%`"></div>
                   </td>
@@ -330,6 +331,13 @@
                         x-text="row.actionable
                           ? (row.signal_direction==='BUY' ? '▲ PAPER BUY SIGNAL' : '▼ PAPER SELL SIGNAL')
                           : 'OBSERVE · NO TRADE'"></span>
+                </td>
+
+                <!-- First detected time: persisted across 60s refreshes -->
+                <td class="px-3 py-2.5 text-left">
+                  <span class="mono text-[10px] text-cyan-300"
+                        :title="row.first_seen_at_ist ? 'First detected in today\'s Live Signals list' : 'Waiting for first persisted observation'"
+                        x-text="row.first_seen_at_ist ? hm(row.first_seen_at_ist) + ' IST' : '—'"></span>
                 </td>
 
                 <!-- LTP -->
