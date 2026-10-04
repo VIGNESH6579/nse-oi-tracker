@@ -139,6 +139,10 @@ async def _fetch_worker(
                         raise RuntimeError("NSE Bhavcopy MCP does not expose get_stock_history")
                     schema = getattr(stock_tool, "inputSchema", {}) or {}
                     properties = schema.get("properties", {})
+                    LOGGER.warning(
+                        "NSE Bhavcopy MCP get_stock_history schema properties=%s required=%s",
+                        sorted(properties.keys()), schema.get("required", []),
+                    )
                     if "symbol" not in properties:
                         raise RuntimeError("NSE Bhavcopy MCP get_stock_history has no symbol parameter")
                     args: dict[str, Any] = {"symbol": symbol}
