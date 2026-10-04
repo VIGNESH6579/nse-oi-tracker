@@ -73,10 +73,14 @@ def backfill_recent_bhavcopies(
     for index, candidate in enumerate(missing[:max_downloads], start=1):
         try:
             bars = collect_equity_bhavcopy(candidate)
-            if symbols:
-                bars = [bar for bar in bars if str(bar.get("symbol") or "").upper() in symbols]
-            downloaded += 1
-            stored += repository.upsert_daily_equity_bars(bars)
+            if not bars:
+                failed += 1
+                logger.warning("Bhavcopy returned no usable rows date=%s", candidate)
+            else:
+                if symbols:
+                    bars = [bar for bar in bars if str(bar.get("symbol") or "").upper() in symbols]
+                downloaded += 1
+                stored += repository.upsert_daily_equity_bars(bars)
         except Exception:
             failed += 1
             logger.warning("Bhavcopy download failed date=%s; retrying with backoff", candidate, exc_info=True)

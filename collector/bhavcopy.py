@@ -23,25 +23,29 @@ def parse_equity_bhavcopy(csv_text: str) -> list[dict[str, float | str]]:
     # CSV parser consume that formatting rather than silently treating every
     # row as a non-EQ series.
     for row in csv.DictReader(StringIO(csv_text), skipinitialspace=True):
-        if str(row.get("SERIES") or "").strip().upper() != "EQ":
+        series = str(row.get("SERIES") or row.get("SctySrs") or "").strip().upper()
+        if series != "EQ":
             continue
-        symbol = str(row.get("SYMBOL") or "").strip().upper()
-        raw_date = str(row.get("DATE1") or "").strip()
+        symbol = str(row.get("SYMBOL") or row.get("TckrSymb") or "").strip().upper()
+        raw_date = str(row.get("DATE1") or row.get("TradDt") or "").strip()
         try:
             trade_date = datetime.strptime(raw_date, "%d-%b-%Y").date().isoformat()
         except ValueError:
-            continue
+            try:
+                trade_date = datetime.strptime(raw_date[:10], "%Y-%m-%d").date().isoformat()
+            except ValueError:
+                continue
         if not symbol:
             continue
         bars.append(
             {
                 "symbol": symbol,
                 "trade_date": trade_date,
-                "open": _number(row.get("OPEN_PRICE")),
-                "high": _number(row.get("HIGH_PRICE")),
-                "low": _number(row.get("LOW_PRICE")),
-                "close": _number(row.get("CLOSE_PRICE")),
-                "volume": _number(row.get("TTL_TRD_QNTY")),
+                "open": _number(row.get("OPEN_PRICE") or row.get("OpnPric")),
+                "high": _number(row.get("HIGH_PRICE") or row.get("HghPric")),
+                "low": _number(row.get("LOW_PRICE") or row.get("LwPric")),
+                "close": _number(row.get("CLOSE_PRICE") or row.get("ClsPric")),
+                "volume": _number(row.get("TTL_TRD_QNTY") or row.get("TtlTradgVol")),
             }
         )
     return bars

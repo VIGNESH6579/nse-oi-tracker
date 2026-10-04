@@ -92,3 +92,15 @@ def test_backfill_fills_a_new_symbol_even_when_dates_already_exist(monkeypatch):
     assert result["downloaded"] == 3
     assert requested == dates
     assert sum(1 for row in repository.saved if row["symbol"] == "NEW") == 3
+
+
+def test_backfill_counts_empty_archive_as_failure(monkeypatch):
+    repository = FakeRepository()
+    monkeypatch.setattr("collector.backfill.collect_equity_bhavcopy", lambda day: [])
+    result = backfill_recent_bhavcopies(
+        repository, end_date=date(2026, 1, 27), required_days=1,
+        max_downloads=1, delay_seconds=0,
+    )
+    assert result["downloaded"] == 0
+    assert result["stored"] == 0
+    assert result["failed"] == 1
