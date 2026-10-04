@@ -142,28 +142,26 @@ async def _fetch_worker(
                     if "symbol" not in properties:
                         raise RuntimeError("NSE Bhavcopy MCP get_stock_history has no symbol parameter")
                     args: dict[str, Any] = {"symbol": symbol}
+                    # NSE's current get_stock_history schema uses a trading-day
+                    # count. Supplying it explicitly avoids a server-side null
+                    # unboxing error when only symbol is sent.
+                    if "days" in properties:
+                        args["days"] = 90
+                    if "period" in properties:
+                        args["period"] = "daily"
                     start_arg = _date_arg(
                         properties, ("startDate", "start_date", "fromDate", "from_date"), end_date
                     )
                     finish_arg = _date_arg(
                         properties, ("endDate", "end_date", "toDate", "to_date"), end_date
                     )
-                    if start_arg:
-                        args[start_arg[0]] = (end_date - timedelta(days=100)).strftime("%Y-%m-%d")
-                    if finish_arg:
-                        args[finish_arg[0]] = finish_arg[1]
+                    if "days" not in properties:
+                        if start_arg:
+                            args[start_arg[0]] = (end_date - timedelta(days=100)).strftime("%Y-%m-%d")
+                        if finish_arg:
+                            args[finish_arg[0]] = finish_arg[1]
                     result = await session.call_tool("get_stock_history", arguments=args)
                     rows = _rows_from_result(result, symbol)
-                    if not rows:
-                        raw_parts = []
-                        for item in getattr(result, "content", []) or []:
-                            raw_text = getattr(item, "text", None)
-                            if raw_text:
-                                raw_parts.append(str(raw_text)[:1500])
-                        LOGGER.warning(
-                            "NSE Bhavcopy MCP zero rows symbol=%s raw=%s",
-                            symbol, " | ".join(raw_parts)[:3000],
-                        )
                     output[symbol] = rows
                     LOGGER.info(
                         "NSE Bhavcopy MCP symbol=%s rows=%d worker=%d",
