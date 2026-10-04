@@ -28,7 +28,7 @@ def _date_arg(properties: dict[str, Any], names: tuple[str, ...], value: date) -
 
 
 def _iter_dicts(value: Any):
-    """Yield every nested mapping so MCP wrapper shapes cannot hide the history rows."""
+    """Yield every nested mapping, including JSON-encoded MCP wrapper values."""
     if isinstance(value, dict):
         yield value
         for child in value.values():
@@ -36,6 +36,12 @@ def _iter_dicts(value: Any):
     elif isinstance(value, list):
         for child in value:
             yield from _iter_dicts(child)
+    elif isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return
+        yield from _iter_dicts(decoded)
 
 
 def _rows_from_result(result: Any, symbol: str) -> list[dict]:
