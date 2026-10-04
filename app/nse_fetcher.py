@@ -614,6 +614,67 @@ def fetch_index_history(index_type: str, from_date: date, to_date: date) -> list
     return out
 
 
+
+def fetch_equity_history(symbol: str, from_date: date, to_date: date) -> list[dict]:
+    """Fetch official NSE per-security EQ history when bulk Bhavcopy archives are blocked."""
+    encoded_symbol = quote(str(symbol).upper(), safe="")
+    series = quote('["EQ"]', safe="")
+    url = (
+        f"{NSE_BASE}/api/historical/cm/equity?symbol={encoded_symbol}"
+        f"&series={series}&from={from_date:%d-%m-%Y}&to={to_date:%d-%m-%Y}&CSV=true"
+    )
+    text = _nse.get_text(url, referer=f"{NSE_BASE}/get-quotes/equity?symbol={encoded_symbol}")
+    if not text:
+        data = _nse.get(url, referer=f"{NSE_BASE}/get-quotes/equity?symbol={encoded_symbol}")
+        rows = data.get("data") if isinstance(data, dict) else []
+        return _normalize_equity_history_rows(rows, symbol)
+    rows = list(__import__("csv").DictReader(__import__("io").StringIO(text), skipinitialspace=True))
+    return _normalize_equity_history_rows(rows, symbol)
+
+
+def _normalize_equity_history_rows(rows: list[dict], symbol: str) -> list[dict]:
+    out: list[dict] = []
+    for row in rows or []:
+        def val(*keys):
+            for key in keys:
+                value = row.get(key)
+                if value not in (None, "", "-"):
+                    return value
+            return None
+        raw_date = str(val("CH_TIMESTAMP", "mTIMESTAMP", "Date", "DATE", "TradDt") or "").strip()
+        parsed_date = None
+        for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                parsed_date = datetime.strptime(raw_date[:10], fmt).date()
+                break
+            except ValueError:
+                continue
+        if parsed_date is None:
+            continue
+        try:
+            values = [
+                float(str(val(*keys) or "0").replace(",", ""))
+                for keys in (
+                    ("CH_OPENING_PRICE", "OPEN", "OpnPric"),
+                    ("CH_TRADE_HIGH_PRICE", "HIGH", "HghPric"),
+                    ("CH_TRADE_LOW_PRICE", "LOW", "LwPric"),
+                    ("CH_CLOSING_PRICE", "CLOSE", "ClsPric"),
+                    ("CH_TOT_TRADED_QTY", "TOTTRDQTY", "TtlTradgVol"),
+                )
+            ]
+        except (TypeError, ValueError):
+            continue
+        if values[3] <= 0:
+            continue
+        out.append({
+            "symbol": str(val("CH_SYMBOL", "SYMBOL", "TckrSymb") or symbol).strip().upper(),
+            "trade_date": parsed_date.isoformat(),
+            "open": values[0], "high": values[1], "low": values[2],
+            "close": values[3], "volume": values[4],
+        })
+    return out
+
+
 def fetch_market_indices() -> dict | None:
     """Fetch the public NSE broad-index feed, including INDIA VIX/breadth."""
     return _nse.get(
