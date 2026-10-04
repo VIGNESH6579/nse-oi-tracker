@@ -139,16 +139,14 @@ async def _fetch_worker(
                         raise RuntimeError("NSE Bhavcopy MCP does not expose get_stock_history")
                     schema = getattr(stock_tool, "inputSchema", {}) or {}
                     properties = schema.get("properties", {})
-                    LOGGER.warning(
-                        "NSE Bhavcopy MCP get_stock_history schema properties=%s required=%s",
-                        sorted(properties.keys()), schema.get("required", []),
-                    )
                     if "symbol" not in properties:
                         raise RuntimeError("NSE Bhavcopy MCP get_stock_history has no symbol parameter")
                     args: dict[str, Any] = {"symbol": symbol}
                     # NSE's current get_stock_history schema uses a trading-day
                     # count. Supplying it explicitly avoids a server-side null
                     # unboxing error when only symbol is sent.
+                    if "months" in properties:
+                        args["months"] = 3
                     if "days" in properties:
                         args["days"] = 90
                     if "period" in properties:
