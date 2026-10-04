@@ -258,44 +258,43 @@ class NSESession:
                 return None
             return None
 
-    def get_archive_text(self, url: str, referer: str, retries: int = 2) -> str | None:
-        """Fetch a static NSE archive without the expensive live-page seed cycle."""
-        headers = {**BASE_HEADERS, "Referer": referer, "Accept": "text/csv,text/plain,*/*"}
-        for attempt in range(retries):
-            try:
-                request_kwargs = {"headers": headers, "impersonate": CHROME, "timeout": 25}
-                proxies = _proxy_kwargs()
-                if proxies:
-                    request_kwargs["proxies"] = proxies
-                response = cffi_requests.get(url, **request_kwargs)
-                if response.status_code == 200 and response.content:
-                    return response.text
-                logger.warning("HTTP %s fetching archive %s", response.status_code, url)
-            except Exception as exc:
-                logger.warning("Archive fetch failed (attempt %s) %s: %s", attempt + 1, url, exc)
-            if attempt + 1 < retries:
-                time.sleep(self._retry_delay(attempt + 1))
-        return None
+    def _archive_get(self, url: str, referer: str, accept: str, retries: int):
+        """Fetch an NSE archive through the persistent Chrome-impersonated session."""
+        with self._lock:
+            self._ensure()
+            if self._sess is None:
+                return None
+            headers = {**BASE_HEADERS, "Referer": referer, "Accept": accept}
+            for attempt in range(retries):
+                try:
+                    response = self._sess.get(url, headers=headers, timeout=25)
+                    if response.status_code == 200 and response.content:
+                        return response
+                    logger.warning("HTTP %s fetching NSE archive %s (attempt %s)", response.status_code, url, attempt + 1)
+                    if response.status_code in (401, 403, 429, 503):
+                        now = time.time()
+                        if now - self._last_rebuild_attempt > 45:
+                            self._last_rebuild_attempt = now
+                            new_sess = self._build()
+                            if new_sess is not None:
+                                self._sess = new_sess
+                                self._last_init = time.time()
+                except Exception as exc:
+                    logger.warning("NSE archive request failed (attempt %s): %s", attempt + 1, exc)
+                if attempt + 1 < retries:
+                    time.sleep(self._retry_delay(attempt + 1))
+            return None
 
+    def get_archive_text(self, url: str, referer: str, retries: int = 2) -> str | None:
+        """Fetch a text NSE archive through the persistent seeded session."""
+        response = self._archive_get(url, referer, "text/csv,text/plain,*/*", retries)
+        return response.text if response is not None else None
 
     def get_archive_bytes(self, url: str, referer: str, retries: int = 2) -> bytes | None:
-        """Fetch a binary NSE archive such as the current UDiFF Bhavcopy ZIP."""
-        headers = {**BASE_HEADERS, "Referer": referer, "Accept": "application/zip,application/octet-stream,*/*"}
-        for attempt in range(retries):
-            try:
-                request_kwargs = {"headers": headers, "impersonate": CHROME, "timeout": 25}
-                proxies = _proxy_kwargs()
-                if proxies:
-                    request_kwargs["proxies"] = proxies
-                response = cffi_requests.get(url, **request_kwargs)
-                if response.status_code == 200 and response.content:
-                    return response.content
-                logger.warning("HTTP %s fetching binary archive %s", response.status_code, url)
-            except Exception as exc:
-                logger.warning("Binary archive fetch failed (attempt %s) %s: %s", attempt + 1, exc)
-            if attempt + 1 < retries:
-                time.sleep(self._retry_delay(attempt + 1))
-        return None
+        """Fetch a binary NSE archive through the persistent seeded session."""
+        response = self._archive_get(url, referer, "application/zip,application/octet-stream,*/*", retries)
+        return response.content if response is not None else None
+
 
     def get_seeded(self, seed_url: str, seed_referer: str,
                    api_url: str, api_referer: str,
