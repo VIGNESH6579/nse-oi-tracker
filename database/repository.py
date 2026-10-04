@@ -924,6 +924,22 @@ class SignalRepository:
                 )
             return SnapshotWrite(snapshot_id=snapshot_id, created=True, signal_count=len(signals))
 
+    def first_seen_for_date(self, trade_date: str) -> dict[tuple[str, str, str], str]:
+        """Return first detection timestamps keyed by symbol, direction and signal."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, direction, signal, first_seen_at_ist
+                FROM signal_first_seen
+                WHERE trade_date = ?
+                """,
+                (trade_date,),
+            ).fetchall()
+        return {
+            (str(row["symbol"]), str(row["direction"]), str(row["signal"])): str(row["first_seen_at_ist"])
+            for row in rows
+        }
+
     def latest_snapshot_metadata(self) -> dict[str, Any] | None:
         """Return the newest persisted scan marker for restart-safe health data."""
         with self._connect() as connection:
