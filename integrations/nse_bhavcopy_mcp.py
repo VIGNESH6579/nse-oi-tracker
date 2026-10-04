@@ -90,7 +90,12 @@ def _rows_from_result(result: Any, symbol: str) -> list[dict]:
     return sorted(unique.values(), key=lambda row: row["trade_date"])
 
 
-async def _fetch_batch(symbols: list[str], end_date: date, delay_seconds: float) -> dict[str, list[dict]]:
+async def _fetch_worker(
+    symbols: list[str],
+    end_date: date,
+    delay_seconds: float,
+    worker_id: int,
+) -> dict[str, list[dict]]:
     output: dict[str, list[dict]] = {}
     async with streamablehttp_client(NSE_BHAVCOPY_MCP_URL) as (read_stream, write_stream, _session_id):
         async with ClientSession(read_stream, write_stream) as session:
@@ -117,6 +122,31 @@ async def _fetch_batch(symbols: list[str], end_date: date, delay_seconds: float)
                 output[symbol] = _rows_from_result(result, symbol)
                 if delay_seconds > 0 and index + 1 < len(symbols):
                     await asyncio.sleep(delay_seconds)
+    LOGGER.info("NSE Bhavcopy MCP worker=%d completed symbols=%d rows=%d",
+                worker_id, len(symbols), sum(len(rows) for rows in output.values()))
+    return output
+
+
+async def _fetch_batch(symbols: list[str], end_date: date, delay_seconds: float) -> dict[str, list[dict]]:
+    """Fetch with a small fixed worker pool so startup can finish within its bound."""
+    workers = min(4, len(symbols))
+    chunks = [symbols[index::workers] for index in range(workers)]
+    results = await asyncio.gather(
+        *(_fetch_worker(chunk, end_date, delay_seconds, index + 1)
+          for index, chunk in enumerate(chunks)),
+        return_exceptions=True,
+    )
+    output: dict[str, list[dict]] = {}
+    errors = []
+    for result in results:
+        if isinstance(result, Exception):
+            errors.append(result)
+            continue
+        output.update(result)
+    if errors and not output:
+        raise RuntimeError(f"NSE Bhavcopy MCP workers all failed: {errors[0]}")
+    if errors:
+        LOGGER.warning("NSE Bhavcopy MCP partial worker failure count=%d", len(errors))
     return output
 
 

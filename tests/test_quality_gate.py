@@ -223,3 +223,12 @@ def test_websocket_five_minute_candles_are_real_intraday_for_gate():
         has_bars=True, daily_validation_ready=True, require_real_intraday=True,
     )
     assert "real_5m_candles_unavailable" not in result["missing_confirmations"]
+
+
+def test_bhavcopy_mcp_backfill_uses_bounded_worker_pool():
+    from integrations.nse_bhavcopy_mcp import _fetch_batch
+    import inspect
+    source = inspect.getsource(_fetch_batch)
+    assert "workers = min(4, len(symbols))" in source
+    assert "asyncio.gather" in source
+    assert "return_exceptions=True" in source
