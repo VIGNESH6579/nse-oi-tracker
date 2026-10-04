@@ -23,6 +23,13 @@ def test_empty_successful_signal_scan_does_not_force_another_upstream_fetch():
 
 
 
+
+def test_live_signal_list_preserves_first_detected_time():
+    assert "_signal_first_seen: dict[str, str]" in MAIN
+    assert '"detected_at_ist": _signal_first_seen.get' in MAIN
+    assert 'x-text="hm(row.detected_at_ist)"' in INDEX
+    assert '<th class="px-3 py-2.5 text-right font-medium">Added</th>' in INDEX
+
 def test_signal_api_exposes_actual_data_source_status():
     assert '"primary_market_data_source": active_source' in MAIN
     assert '"angel_one_configured": angel_market_data is not None' in MAIN

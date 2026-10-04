@@ -271,6 +271,7 @@
               <th class="px-3 py-2.5 text-right font-medium">LTP (₹)</th>
               <th class="px-3 py-2.5 text-right font-medium">Price%</th>
               <th class="px-3 py-2.5 text-right font-medium">OI%</th>
+              <th class="px-3 py-2.5 text-right font-medium">Added</th>
               <th class="px-3 py-2.5 text-right font-medium lv-entry">Entry</th>
               <th class="px-3 py-2.5 text-right font-medium lv-tg1">TG1</th>
               <th class="px-3 py-2.5 text-right font-medium lv-tg2">TG2</th>
@@ -347,6 +348,11 @@
                     :class="row.oi_change_pct >= 0 ? 'text-sky-400' : 'text-amber-400'"
                     x-text="(row.oi_change_pct >= 0 ? '+' : '') + row.oi_change_pct.toFixed(2) + '%'"></td>
 
+                <!-- Added / first detected -->
+                <td class="px-3 py-2.5 text-right mono text-gray-300"
+                    :title="'First added to this live signal list'"
+                    x-text="hm(row.detected_at_ist)"></td>
+
                 <!-- Entry -->
                 <td class="px-3 py-2.5 text-right mono font-semibold lv-entry"
                     :title="row.actionable ? 'Reference entry' : 'Reference only; not a trade recommendation'"
@@ -388,7 +394,7 @@
 
             <!-- Empty states -->
             <template x-if="!loading && filtered.length === 0 && signals.length === 0">
-              <tr><td colspan="13" class="py-20 text-center text-gray-600">
+              <tr><td colspan="14" class="py-20 text-center text-gray-600">
                 <div class="text-5xl mb-3 opacity-30">📡</div>
                 <div class="text-sm" x-text="dataStatus === 'UNAVAILABLE'
                   ? 'NSE live OI data is temporarily unavailable; no signal can be computed. Try Refresh.'
@@ -399,7 +405,7 @@
               </td></tr>
             </template>
             <template x-if="!loading && filtered.length === 0 && signals.length > 0 && !signals.some(r => r.actionable)">
-              <tr><td colspan="13" class="py-10 text-center text-gray-600 text-sm">
+              <tr><td colspan="14" class="py-10 text-center text-gray-600 text-sm">
                 <span x-text="signals.length + ' candidate' + (signals.length === 1 ? '' : 's') + ' detected, none confirmed yet (still forming / did not pass the gate).'"></span>
               </td></tr>
             </template>
