@@ -38,6 +38,18 @@ def test_snapshots_are_deduplicated_and_events_are_server_owned(tmp_path):
     assert events[0]["risk_source"] == "percentage_fallback_pending_atr"
 
 
+def test_signal_first_seen_time_stays_at_first_detection(tmp_path):
+    repository = SignalRepository(tmp_path / "first_seen.sqlite3")
+    first_at = datetime(2026, 9, 10, 11, 25, tzinfo=IST)
+    second_at = first_at + timedelta(minutes=17)
+
+    repository.record_scan([_signal("FIRSTSEEN")], first_at)
+    repository.record_scan([_signal("FIRSTSEEN")], second_at)
+
+    first_seen = repository.first_seen_for_date("2026-09-10")
+    assert first_seen[("FIRSTSEEN", "BUY", "LONG_BUILDUP")] == first_at.isoformat()
+
+
 def test_initial_ltp_is_normalized_to_rounded_entry(tmp_path):
     repository = SignalRepository(tmp_path / "prices.sqlite3")
     repository.record_scan([_signal("PRICE", 100.1234)], datetime(2026, 9, 10, 10, 0, tzinfo=IST))
