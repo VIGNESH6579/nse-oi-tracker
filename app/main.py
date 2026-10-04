@@ -660,17 +660,31 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
         # NSE's bulk archive is currently blocked from Render egress. Fill the
         # deepest F&O history gaps through the official per-security API instead.
         missing = await asyncio.to_thread(repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS)
-        if missing:
-            api_cap = min(max_downloads, len(missing))
+        # Also repair symbols whose depth is sufficient but whose newest daily
+        # bar is stale. This matters after a Render restart: the database may
+        # have 60 bars but still be missing the latest completed session.
+        expected_date = _backfill_end_date().isoformat()
+        stale = []
+        for symbol in sorted(symbols):
+            try:
+                latest = await asyncio.to_thread(repository.daily_equity_bars_for_symbol, symbol, limit=1)
+                latest_date = str(latest[-1].get("trade_date") or "") if latest else ""
+                if latest_date < expected_date:
+                    stale.append(symbol)
+            except Exception:
+                stale.append(symbol)
+        fallback_symbols = sorted(set(missing) | set(stale))
+        if fallback_symbols:
+            api_cap = min(max_downloads, len(fallback_symbols))
             if api_cap:
                 api_result = await asyncio.to_thread(
                     backfill_symbol_history,
                     repository,
-                    set(missing),
+                    set(fallback_symbols),
                     end_date=_backfill_end_date(),
                     max_symbols=api_cap,
                 )
-                result["symbol_api_fallback"] = api_result
+                result["symbol_history_fallback"] = api_result
                 result["stored"] = int(result.get("stored", 0)) + int(api_result.get("stored", 0))
                 result["downloaded"] = int(result.get("downloaded", 0)) + int(api_result.get("downloaded", 0))
                 result["failed"] = int(result.get("failed", 0)) + int(api_result.get("failed", 0))
@@ -1166,8 +1180,15 @@ async def lifespan(app: FastAPI):
     gc.freeze()
     # Restore analytics before any market-data backfill; the restore is optional
     # and bounded, so an unavailable bucket never blocks application startup.
-    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
-        await asyncio.to_thread(restore_latest_backup, settings.database_path)
+    # Render's filesystem is ephemeral. A deployment can start with the
+    # small bundled seed even though a much deeper durable snapshot exists.
+    # Restore the durable snapshot whenever history depth is below the 60-day
+    # readiness target, not only when the database is completely empty.
+    initial_summary = repository.daily_equity_bar_summary()
+    if int(initial_summary.get("min_bars") or 0) < DAILY_HISTORY_TARGET_BARS:
+        restored = await asyncio.to_thread(restore_latest_backup, settings.database_path)
+        if restored:
+            logger.info("Startup restored durable snapshot because min_bars=%s was below target=%s", initial_summary.get("min_bars"), DAILY_HISTORY_TARGET_BARS)
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
     angel_stream.start()
