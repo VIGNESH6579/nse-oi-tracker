@@ -1,8 +1,10 @@
 fastapi==0.111.0
-uvicorn[standard]==0.30.1
+uvicorn[standard]==0.31.1
 curl-cffi==0.7.4
 python-dotenv==1.0.1
 tzdata==2024.1
 pyotp==2.9.0
 apscheduler==3.10.4
 websocket-client==1.8.0
+
+mcp==1.30.0
