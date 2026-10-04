@@ -56,7 +56,7 @@ from analytics.intraday import observe as observe_intraday
 from analytics.intraday import candle_vwap
 from analytics.candle_priority import prioritize_candidates
 from collector.bhavcopy import collect_equity_bhavcopy
-from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates, bundled_fno_symbols
+from collector.backfill import backfill_recent_bhavcopies, backfill_symbol_history, recent_nse_trading_dates, bundled_fno_symbols
 from collector.index_backfill import backfill_index_bars
 from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot, last_snapshot_age_s, last_snapshot_info
 from collector.universe import universe_source, cached_universe_size, cached_universe, add_extra_symbols
@@ -657,6 +657,23 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
             max_downloads=max_downloads,
             symbols=symbols,
         )
+        # NSE's bulk archive is currently blocked from Render egress. Fill the
+        # deepest F&O history gaps through the official per-security API instead.
+        if int(result.get("stored", 0)) == 0:
+            missing = await asyncio.to_thread(repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS)
+            api_cap = min(max_downloads, len(missing))
+            if api_cap:
+                api_result = await asyncio.to_thread(
+                    backfill_symbol_history,
+                    repository,
+                    set(missing),
+                    end_date=_backfill_end_date(),
+                    max_symbols=api_cap,
+                )
+                result["symbol_api_fallback"] = api_result
+                result["stored"] = int(result.get("stored", 0)) + int(api_result.get("stored", 0))
+                result["downloaded"] = int(result.get("downloaded", 0)) + int(api_result.get("downloaded", 0))
+                result["failed"] = int(result.get("failed", 0)) + int(api_result.get("failed", 0))
     result.update({
         "started_at_ist": started_at,
         "duration_seconds": round(time.monotonic() - started, 2),
