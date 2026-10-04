@@ -188,7 +188,10 @@ async def _fetch_worker(
 
 async def _fetch_batch(symbols: list[str], end_date: date, delay_seconds: float) -> dict[str, list[dict]]:
     """Fetch with a small fixed worker pool so startup can finish within its bound."""
-    workers = 1  # preserve BACKFILL_MAX_PER_MIN global pacing; concurrency is not rate-limit safe
+    # The MCP endpoint is a network service, not the NSE bulk archive. A small
+    # fixed pool keeps a fresh Render instance inside the startup readiness
+    # window while still bounding concurrency for the free-tier service.
+    workers = min(4, max(1, len(symbols)))
     chunks = [symbols[index::workers] for index in range(workers)]
     results = await asyncio.gather(
         *(_fetch_worker(chunk, end_date, delay_seconds, index + 1)
