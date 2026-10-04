@@ -129,15 +129,17 @@ def backfill_symbol_history(
     angel = AngelOneMarketData.from_environment()
     for index, symbol in enumerate(wanted, start=1):
         try:
-            rows = fetch_equity_history(symbol, start_date, end_date)
-            source = "nse"
-            if not rows and angel is not None and angel.configured:
-                # Render's NSE egress can be blocked even when Angel read-only
-                # market data is healthy. SmartAPI provides free ONE_DAY candles,
-                # so use it only as a read-only history fallback.
+            rows = []
+            source = ""
+            # Render's NSE egress is currently returning persistent 403s for
+            # historical endpoints. Angel ONE ONE_DAY candles are free,
+            # read-only, and are already authenticated/healthy in production.
+            # Prefer that working path so each refill batch finishes quickly;
+            # retain NSE as a secondary fallback for environments where Angel
+            # is unavailable or returns no history.
+            if angel is not None and angel.configured:
                 try:
                     angel_rows = angel.daily_candles(symbol, days=calendar_days, exchange="NSE")
-                    rows = []
                     for row in angel_rows or []:
                         raw_time = str(row.get("time") or "")[:10]
                         if not raw_time or len(raw_time) != 10:
@@ -161,7 +163,14 @@ def backfill_symbol_history(
                     if rows:
                         source = "angel_one_daily"
                 except Exception as exc:
-                    logger.warning("Angel daily history fallback failed symbol=%s: %s", symbol, str(exc)[:120])
+                    logger.warning("Angel daily history failed symbol=%s; trying NSE fallback: %s", symbol, str(exc)[:120])
+            if not rows:
+                try:
+                    rows = fetch_equity_history(symbol, start_date, end_date)
+                    if rows:
+                        source = "nse"
+                except Exception as exc:
+                    logger.warning("NSE daily history fallback failed symbol=%s: %s", symbol, str(exc)[:120])
             if not rows:
                 failed += 1
                 logger.warning("Daily history returned no rows symbol=%s", symbol)
