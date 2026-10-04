@@ -136,6 +136,7 @@ def backfill_symbol_history(
         try:
             rows = []
             source = ""
+            angel_error = False
             # Render's NSE egress is currently returning persistent 403s for
             # historical endpoints. Angel ONE ONE_DAY candles are free,
             # read-only, and are already authenticated/healthy in production.
@@ -168,8 +169,13 @@ def backfill_symbol_history(
                     if rows:
                         source = "angel_one_daily"
                 except Exception as exc:
+                    angel_error = True
                     logger.warning("Angel daily history failed symbol=%s; trying NSE fallback: %s", symbol, str(exc)[:120])
-            if not rows:
+            # If Angel is configured and answered normally with no rows, do not
+            # fall into the known-blocked NSE per-symbol endpoint. An empty Angel
+            # result means the instrument has no usable history; an Angel error is
+            # the case where NSE fallback is still useful.
+            if not rows and (angel is None or not angel.configured or angel_error):
                 try:
                     rows = fetch_equity_history(symbol, start_date, end_date)
                     if rows:
