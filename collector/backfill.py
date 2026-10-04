@@ -209,30 +209,25 @@ def backfill_symbol_gaps(
     dates: int = 20,
     delay_seconds: float | None = None,
 ) -> dict[str, int]:
-    """Re-download recent bhavcopies but keep ONLY rows for ``symbols``.
+    """Fill feed-only/renamed F&O symbols without touching blocked NSE archives.
 
-    Used for F&O names the OI feed reports that Angel's master names differently
-    (renames/demergers), so they get ATR/volume history without re-storing everything.
+    This helper is invoked by the lightweight feed-gap monitor. Render's NSE
+    archive egress is persistently HTTP 403, so using collect_equity_bhavcopy()
+    here caused repeated archive retries every 20 minutes. Reuse the working
+    authenticated Angel ONE ONE_DAY path instead.
     """
     wanted = {str(s).upper() for s in symbols if s}
     if not wanted or dates <= 0:
         return {"requested": 0, "downloaded": 0, "stored": 0, "failed": 0}
-    if delay_seconds is None:
-        delay_seconds = 60.0 / get_settings().backfill_max_per_min
-    candidates = recent_nse_trading_dates(end_date, dates)
-    downloaded = stored = failed = 0
-    for index, candidate in enumerate(candidates, start=1):
-        try:
-            rows = [bar for bar in collect_equity_bhavcopy(candidate) if str(bar.get("symbol") or "").upper() in wanted]
-            stored += repository.upsert_daily_equity_bars(rows)
-            downloaded += 1
-        except Exception:
-            failed += 1
-            logger.warning("Gap-fill download failed date=%s", candidate, exc_info=True)
-        if delay_seconds > 0 and index < len(candidates):
-            time.sleep(delay_seconds)
-    return {"requested": len(candidates), "downloaded": downloaded, "stored": stored, "failed": failed}
-
+    calendar_days = max(int(dates * 2), 40)
+    return backfill_symbol_history(
+        repository,
+        wanted,
+        end_date=end_date,
+        max_symbols=len(wanted),
+        calendar_days=calendar_days,
+        delay_seconds=delay_seconds,
+    )
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill free public NSE EQ bhavcopy bars.")
