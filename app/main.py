@@ -649,16 +649,20 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
                 "started_at_ist": started_at, "duration_seconds": 0.0,
                 "daily_equity_data": repository.daily_equity_bar_summary()}
     async with _backfill_lock:
-        result = await asyncio.to_thread(
-            backfill_recent_bhavcopies,
-            repository,
-            end_date=_backfill_end_date(),
-            required_days=required_days,
-            max_downloads=max_downloads,
-            symbols=symbols,
-        )
-        # NSE's bulk archive is currently blocked from Render egress. Fill the
-        # deepest F&O history gaps through the official per-security API instead.
+        # Render's NSE archive egress is persistently returning HTTP 403.
+        # Do not spend the single free-tier worker repeatedly retrying blocked
+        # bulk archives. Angel ONE ONE_DAY history is the working, authenticated,
+        # read-only path and is used below for the actual F&O depth refill.
+        result = {
+            "requested": 0,
+            "downloaded": 0,
+            "stored": 0,
+            "skipped": 0,
+            "failed": 0,
+            "bulk_nse_skipped": "nse_archive_403",
+        }
+        # Fill the deepest F&O history gaps through Angel ONE first, with NSE
+        # per-security history retained only as a secondary fallback.
         missing = await asyncio.to_thread(repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS)
         # Also repair symbols whose depth is sufficient but whose newest daily
         # bar is stale. This matters after a Render restart: the database may
