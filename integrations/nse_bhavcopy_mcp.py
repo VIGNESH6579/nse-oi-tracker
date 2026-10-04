@@ -41,8 +41,13 @@ def _rows_from_result(result: Any, symbol: str) -> list[dict]:
     rows: list[dict] = []
     for payload in payloads:
         candidates = payload.get("data") if isinstance(payload, dict) else payload
-        if isinstance(payload, dict) and isinstance(candidates, dict):
-            candidates = candidates.get("data") or candidates.get("rows") or candidates.get("history")
+        if isinstance(payload, dict):
+            candidates = (
+                candidates if isinstance(candidates, list)
+                else payload.get("history") or payload.get("rows") or payload.get("results")
+            )
+            if isinstance(candidates, dict):
+                candidates = candidates.get("data") or candidates.get("rows") or candidates.get("history")
         if not isinstance(candidates, list):
             continue
         for row in candidates:
