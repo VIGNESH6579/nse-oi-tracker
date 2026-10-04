@@ -126,6 +126,19 @@ class SignalRepository:
                 CREATE INDEX IF NOT EXISTS idx_event_open_symbol
                     ON signal_events(trade_date, status, symbol);
 
+                CREATE TABLE IF NOT EXISTS signal_first_seen (
+                    id INTEGER PRIMARY KEY,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    signal TEXT NOT NULL,
+                    first_seen_at_ist TEXT NOT NULL,
+                    UNIQUE(trade_date, symbol, direction, signal)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_signal_first_seen_date
+                    ON signal_first_seen(trade_date, first_seen_at_ist ASC);
+
                 CREATE TABLE IF NOT EXISTS daily_equity_bars (
                     trade_date TEXT NOT NULL,
                     symbol TEXT NOT NULL,
@@ -770,6 +783,23 @@ class SignalRepository:
                 return SnapshotWrite(snapshot_id=int(row["id"]), created=False, signal_count=int(row["signal_count"]))
 
             snapshot_id = int(cursor.lastrowid)
+            # Keep the first time a detected pattern entered the Live Signals list.
+            # This is independent of later rescans so the UI can show how long the
+            # symbol has remained under observation.
+            for signal in signals:
+                payload, _plan = self._event_payload(signal, captured_at)
+                symbol = str(payload.get("symbol") or "").upper()
+                signal_name = str(payload.get("signal") or "NEUTRAL")
+                direction = str(payload.get("direction") or "")
+                if symbol and direction:
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO signal_first_seen
+                            (trade_date, symbol, direction, signal, first_seen_at_ist)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (trade_date, symbol, direction, signal_name, captured_at.isoformat()),
+                    )
             for signal in signals:
                 payload, plan = self._event_payload(signal, captured_at)
                 symbol = str(payload.get("symbol") or "").upper()
@@ -893,6 +923,22 @@ class SignalRepository:
                     ),
                 )
             return SnapshotWrite(snapshot_id=snapshot_id, created=True, signal_count=len(signals))
+
+    def first_seen_for_date(self, trade_date: str) -> dict[tuple[str, str, str], str]:
+        """Return first detection timestamps keyed by symbol, direction and signal."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, direction, signal, first_seen_at_ist
+                FROM signal_first_seen
+                WHERE trade_date = ?
+                """,
+                (trade_date,),
+            ).fetchall()
+        return {
+            (str(row["symbol"]), str(row["direction"]), str(row["signal"])): str(row["first_seen_at_ist"])
+            for row in rows
+        }
 
     def latest_snapshot_metadata(self) -> dict[str, Any] | None:
         """Return the newest persisted scan marker for restart-safe health data."""

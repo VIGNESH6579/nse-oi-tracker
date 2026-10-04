@@ -1443,6 +1443,17 @@ async def oi_signals(
 
     results = list(cached)
 
+    # Persisted first-seen time lets the dashboard show when an observation
+    # entered the list, rather than resetting the timestamp on every 60s scan.
+    first_seen = await asyncio.to_thread(repository.first_seen_for_date, ist_trade_date())
+    for row in results:
+        key = (
+            str(row.get("symbol") or "").upper(),
+            str(row.get("signal_direction") or row.get("direction") or "").upper(),
+            str(row.get("signal") or "NEUTRAL"),
+        )
+        row["first_seen_at_ist"] = first_seen.get(key)
+
     # Optional filters
     if signal:
         results = [r for r in results if r["signal"] == signal.upper()]
