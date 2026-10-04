@@ -32,3 +32,11 @@ def test_bhavcopy_parser_accepts_udiff_columns():
         "open": 1400.0, "high": 1420.0, "low": 1390.0,
         "close": 1410.0, "volume": 123456.0,
     }]
+
+
+def test_collect_equity_bhavcopy_accepts_current_udiff(monkeypatch):
+    udiff = """TradDt,TckrSymb,SctySrs,OpnPric,HghPric,LwPric,ClsPric,TtlTradgVol
+2026-09-10,RELIANCE,EQ,1400,1420,1390,1410,123456
+"""
+    monkeypatch.setattr("collector.bhavcopy.fetch_equity_bhavcopy", lambda _: udiff)
+    assert collect_equity_bhavcopy(date(2026, 9, 10))[0]["symbol"] == "RELIANCE"
