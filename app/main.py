@@ -659,8 +659,8 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
         )
         # NSE's bulk archive is currently blocked from Render egress. Fill the
         # deepest F&O history gaps through the official per-security API instead.
-        if int(result.get("stored", 0)) == 0:
-            missing = await asyncio.to_thread(repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS)
+        missing = await asyncio.to_thread(repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS)
+        if missing:
             api_cap = min(max_downloads, len(missing))
             if api_cap:
                 api_result = await asyncio.to_thread(
