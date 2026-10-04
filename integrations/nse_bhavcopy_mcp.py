@@ -27,61 +27,82 @@ def _date_arg(properties: dict[str, Any], names: tuple[str, ...], value: date) -
     return None
 
 
+def _iter_dicts(value: Any):
+    """Yield every nested mapping so MCP wrapper shapes cannot hide the history rows."""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_dicts(child)
+
+
 def _rows_from_result(result: Any, symbol: str) -> list[dict]:
-    texts = [item.text for item in getattr(result, "content", []) if getattr(item, "text", None)]
     payloads: list[Any] = []
-    structured = getattr(result, "structuredContent", None)
-    if structured is not None:
-        payloads.append(structured)
-    for text in texts:
+    for attr in ("structuredContent", "structured_content"):
+        structured = getattr(result, attr, None)
+        if structured is not None:
+            payloads.append(structured)
+    for item in getattr(result, "content", []) or []:
+        text = getattr(item, "text", None)
+        if not text:
+            continue
         try:
             payloads.append(json.loads(text))
         except (TypeError, json.JSONDecodeError):
             continue
+
+    def normalized(mapping: dict) -> dict[str, Any]:
+        return {
+            "".join(ch for ch in str(key).lower() if ch.isalnum()): value
+            for key, value in mapping.items()
+        }
+
+    def pick(row: dict[str, Any], *names: str):
+        data = normalized(row)
+        for name in names:
+            value = data.get("".join(ch for ch in name.lower() if ch.isalnum()))
+            if value not in (None, ""):
+                return value
+        return None
+
     rows: list[dict] = []
     for payload in payloads:
-        candidates = payload.get("data") if isinstance(payload, dict) else payload
-        if isinstance(payload, dict):
-            candidates = (
-                candidates if isinstance(candidates, list)
-                else payload.get("history") or payload.get("rows") or payload.get("results")
-            )
-            if isinstance(candidates, dict):
-                candidates = candidates.get("data") or candidates.get("rows") or candidates.get("history")
-        if not isinstance(candidates, list):
-            continue
-        for row in candidates:
-            if not isinstance(row, dict):
-                continue
-            def pick(*keys):
-                for key in keys:
-                    if row.get(key) not in (None, ""):
-                        return row[key]
-                return None
-            raw_date = str(pick("date", "tradeDate", "TradDt", "DATE", "mTIMESTAMP") or "")
+        for row in _iter_dicts(payload):
+            raw_date = str(pick(
+                row, "date", "tradeDate", "trade_date", "businessDate",
+                "tradingDate", "timestamp", "mTIMESTAMP", "TradDt",
+            ) or "")
             parsed = None
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y"):
+            date_text = raw_date.strip()
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d/%m/%Y", "%Y/%m/%d"):
                 try:
-                    parsed = date.fromisoformat(raw_date[:10]) if fmt == "%Y-%m-%d" else __import__("datetime").datetime.strptime(raw_date[:10], fmt).date()
+                    parsed = (
+                        date.fromisoformat(date_text[:10])
+                        if fmt in {"%Y-%m-%d", "%Y/%m/%d"}
+                        else __import__("datetime").datetime.strptime(date_text[:10], fmt).date()
+                    )
                     break
                 except ValueError:
                     continue
             if parsed is None:
                 continue
             try:
-                values = [
-                    float(pick("open", "Open", "openPrice", "OpnPric")),
-                    float(pick("high", "High", "highPrice", "HghPric")),
-                    float(pick("low", "Low", "lowPrice", "LwPric")),
-                    float(pick("close", "Close", "closePrice", "ClsPric")),
-                    float(pick("volume", "Volume", "tradedVolume", "totalVolume", "TtlTradgVol") or 0),
+                raw_values = [
+                    pick(row, "open", "openPrice", "open_price", "OpnPric"),
+                    pick(row, "high", "highPrice", "high_price", "HghPric"),
+                    pick(row, "low", "lowPrice", "low_price", "LwPric"),
+                    pick(row, "close", "closePrice", "close_price", "ClsPric"),
+                    pick(row, "volume", "tradedVolume", "totalVolume", "totalTradedQuantity", "TtlTradgVol") or 0,
                 ]
+                values = [float(str(value).replace(",", "")) for value in raw_values]
             except (TypeError, ValueError):
                 continue
             if values[3] <= 0 or values[1] < values[2] or values[0] <= 0:
                 continue
             rows.append({
-                "symbol": str(pick("symbol", "SYMBOL", "TckrSymb") or symbol).upper(),
+                "symbol": str(pick(row, "symbol", "SYMBOL", "TckrSymb") or symbol).upper(),
                 "trade_date": parsed.isoformat(),
                 "open": values[0], "high": values[1], "low": values[2],
                 "close": values[3], "volume": values[4],
@@ -129,7 +150,7 @@ async def _fetch_worker(
 
 async def _fetch_batch(symbols: list[str], end_date: date, delay_seconds: float) -> dict[str, list[dict]]:
     """Fetch with a small fixed worker pool so startup can finish within its bound."""
-    workers = min(4, len(symbols))
+    workers = 1  # preserve BACKFILL_MAX_PER_MIN global pacing; concurrency is not rate-limit safe
     chunks = [symbols[index::workers] for index in range(workers)]
     results = await asyncio.gather(
         *(_fetch_worker(chunk, end_date, delay_seconds, index + 1)

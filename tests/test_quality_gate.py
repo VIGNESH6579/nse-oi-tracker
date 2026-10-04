@@ -229,6 +229,35 @@ def test_bhavcopy_mcp_backfill_uses_bounded_worker_pool():
     from integrations.nse_bhavcopy_mcp import _fetch_batch
     import inspect
     source = inspect.getsource(_fetch_batch)
-    assert "workers = min(4, len(symbols))" in source
-    assert "asyncio.gather" in source
-    assert "return_exceptions=True" in source
+    assert "workers = 1" in source
+    assert "BACKFILL_MAX_PER_MIN global pacing" in source
+
+def test_bhavcopy_mcp_parser_accepts_nested_structured_history():
+    from types import SimpleNamespace
+    from integrations.nse_bhavcopy_mcp import _rows_from_result
+
+    result = SimpleNamespace(
+        structuredContent={
+            "result": {
+                "history": [{
+                    "businessDate": "2026-10-01",
+                    "openPrice": "100.00",
+                    "highPrice": "105.00",
+                    "lowPrice": "99.00",
+                    "closePrice": "104.00",
+                    "totalTradedQuantity": "1,234",
+                }]
+            }
+        },
+        content=[],
+    )
+    rows = _rows_from_result(result, "TEST")
+    assert rows == [{
+        "symbol": "TEST",
+        "trade_date": "2026-10-01",
+        "open": 100.0,
+        "high": 105.0,
+        "low": 99.0,
+        "close": 104.0,
+        "volume": 1234.0,
+    }]
