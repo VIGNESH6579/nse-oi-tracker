@@ -379,7 +379,7 @@ class AngelOneMarketData:
             # them in every scan: the first candle call right after the quotes was the one
             # Angel kept answering with HTTP 403 "exceeding access rate".
             wait = max(
-                self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "1.1")),
+                self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "1.5")),
                 self._last_quote_at + float(os.getenv("ANGEL_HIST_QUOTE_GAP_S", "1.5")) if self._last_quote_at else 0.0,
             ) - now
             if wait > 0:
