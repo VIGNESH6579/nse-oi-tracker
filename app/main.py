@@ -116,6 +116,8 @@ _last_good_signals_at = 0.0
 _last_refresh_at_ist: str | None = None
 _last_refresh_was_stale = False
 _last_snapshot_id: int | None = None
+_signal_first_seen: dict[str, str] = {}
+_signal_active_symbols: set[str] = set()
 _last_refresh_completed_monotonic = 0.0
 _started_at = now_ist()
 _startup_state = "STARTING"
@@ -389,6 +391,18 @@ def _refresh_signals() -> list[dict]:
     monotonic_now = time.monotonic()
     captured_at = now_ist()
     served_stale = False
+    if signals:
+        current_symbols = {str(s.get("symbol") or "").upper() for s in signals if str(s.get("symbol") or "").strip()}
+        for symbol in current_symbols:
+            if symbol not in _signal_active_symbols or symbol not in _signal_first_seen:
+                _signal_first_seen[symbol] = captured_at.isoformat()
+        _signal_active_symbols = current_symbols
+        signals = [
+            {**signal, "detected_at_ist": _signal_first_seen.get(str(signal.get("symbol") or "").upper(), captured_at.isoformat())}
+            for signal in signals
+        ]
+    else:
+        _signal_active_symbols = set()
     if signals:
         _last_good_signals = signals
         _last_good_signals_at = monotonic_now
