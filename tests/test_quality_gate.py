@@ -229,7 +229,7 @@ def test_bhavcopy_mcp_backfill_uses_bounded_worker_pool():
     from integrations.nse_bhavcopy_mcp import _fetch_batch
     import inspect
     source = inspect.getsource(_fetch_batch)
-    assert "workers = 1" in source
+    assert "workers = min(4, max(1, len(symbols)))" in source
     assert "BACKFILL_MAX_PER_MIN global pacing" in source
 
 def test_bhavcopy_mcp_parser_accepts_nested_structured_history():
