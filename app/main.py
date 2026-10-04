@@ -649,66 +649,31 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
                 "started_at_ist": started_at, "duration_seconds": 0.0,
                 "daily_equity_data": repository.daily_equity_bar_summary()}
     async with _backfill_lock:
-        # Render's egress to the NSE bulk archive is frequently HTTP 403. The
-        # official read-only Bhavcopy MCP is reachable from Render and returns
-        # per-symbol daily history, so use it as the primary Render backfill
-        # source instead of wasting the startup window on blocked bulk downloads.
-        if render_startup_backfill_enabled():
-            missing = await asyncio.to_thread(
-                repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS
-            )
-            if missing:
+        result = await asyncio.to_thread(
+            backfill_recent_bhavcopies,
+            repository,
+            end_date=_backfill_end_date(),
+            required_days=required_days,
+            max_downloads=max_downloads,
+            symbols=symbols,
+        )
+        # NSE's bulk archive is currently blocked from Render egress. Fill the
+        # deepest F&O history gaps through the official per-security API instead.
+        missing = await asyncio.to_thread(repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS)
+        if missing:
+            api_cap = min(max_downloads, len(missing))
+            if api_cap:
                 api_result = await asyncio.to_thread(
                     backfill_symbol_history,
                     repository,
                     set(missing),
                     end_date=_backfill_end_date(),
-                    max_symbols=len(missing),
-                    delay_seconds=2.0,
+                    max_symbols=api_cap,
                 )
-                result = {
-                    "requested": len(missing),
-                    "downloaded": int(api_result.get("downloaded", 0)),
-                    "stored": int(api_result.get("stored", 0)),
-                    "skipped": 0,
-                    "failed": int(api_result.get("failed", 0)),
-                    "symbol_api_mcp": api_result,
-                }
-            else:
-                result = {
-                    "requested": 0, "downloaded": 0, "stored": 0,
-                    "skipped": 0, "failed": 0,
-                    "symbol_api_mcp": {"requested": 0, "downloaded": 0, "stored": 0, "failed": 0},
-                }
-        else:
-            result = await asyncio.to_thread(
-                backfill_recent_bhavcopies,
-                repository,
-                end_date=_backfill_end_date(),
-                required_days=required_days,
-                max_downloads=max_downloads,
-                symbols=symbols,
-            )
-            # Local/CLI fallback: if a bulk date archive is unavailable, fill
-            # the deepest F&O gaps through the official per-security API.
-            missing = await asyncio.to_thread(
-                repository.symbols_missing_bars, symbols, DAILY_HISTORY_TARGET_BARS
-            )
-            if missing:
-                api_cap = min(max_downloads, len(missing))
-                if api_cap:
-                    api_result = await asyncio.to_thread(
-                        backfill_symbol_history,
-                        repository,
-                        set(missing),
-                        end_date=_backfill_end_date(),
-                        max_symbols=api_cap,
-                    )
-                    result["symbol_api_fallback"] = api_result
-                    result["stored"] = int(result.get("stored", 0)) + int(api_result.get("stored", 0))
-                    result["downloaded"] = int(result.get("downloaded", 0)) + int(api_result.get("downloaded", 0))
-                    result["failed"] = int(result.get("failed", 0)) + int(api_result.get("failed", 0))
-
+                result["symbol_api_fallback"] = api_result
+                result["stored"] = int(result.get("stored", 0)) + int(api_result.get("stored", 0))
+                result["downloaded"] = int(result.get("downloaded", 0)) + int(api_result.get("downloaded", 0))
+                result["failed"] = int(result.get("failed", 0)) + int(api_result.get("failed", 0))
     result.update({
         "started_at_ist": started_at,
         "duration_seconds": round(time.monotonic() - started, 2),
@@ -746,9 +711,9 @@ async def _startup_backfill_then_retest() -> None:
     startup and without changing the backfill's own bounded behaviour.
     """
     try:
-        await asyncio.wait_for(automatic_startup_backfill(), timeout=1500)
+        await asyncio.wait_for(automatic_startup_backfill(), timeout=450)
     except asyncio.TimeoutError:
-        logger.error("Startup Bhavcopy backfill timed out after 1500s; readiness remains fail-closed")
+        logger.error("Startup Bhavcopy backfill timed out after 450s; readiness remains fail-closed")
         _startup_state = "BLOCKED"
         _startup_error = "startup Bhavcopy backfill timed out"
         return
