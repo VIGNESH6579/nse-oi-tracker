@@ -912,6 +912,7 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
     now = now_ist()
     today = now.date().isoformat()
     banned = banned_symbols()
+    ban_available = bool(ban_info().get("ban_list_ok"))
     bias = _market_bias_cached()
     out, missing_counts, failed_symbols = [], {}, {}
     for signal in signals:
@@ -925,6 +926,7 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
             ema20=tech.get("ema20"), ema50=tech.get("ema50"),
             banned=symbol.upper() in banned, market_bias=bias, now=now,
             has_bars=bool(bars), daily_validation_ready=tech.get("validation_ready") is True,
+            ban_list_available=ban_available,
             require_real_intraday=True,
             is_index=symbol.upper() in INDEX_SYMBOLS,
         )
