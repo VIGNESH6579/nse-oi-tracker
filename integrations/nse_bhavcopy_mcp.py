@@ -154,6 +154,16 @@ async def _fetch_worker(
                         args[finish_arg[0]] = finish_arg[1]
                     result = await session.call_tool("get_stock_history", arguments=args)
                     rows = _rows_from_result(result, symbol)
+                    if not rows:
+                        raw_parts = []
+                        for item in getattr(result, "content", []) or []:
+                            raw_text = getattr(item, "text", None)
+                            if raw_text:
+                                raw_parts.append(str(raw_text)[:1500])
+                        LOGGER.warning(
+                            "NSE Bhavcopy MCP zero rows symbol=%s raw=%s",
+                            symbol, " | ".join(raw_parts)[:3000],
+                        )
                     output[symbol] = rows
                     LOGGER.info(
                         "NSE Bhavcopy MCP symbol=%s rows=%d worker=%d",
