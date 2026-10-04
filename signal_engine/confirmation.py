@@ -52,7 +52,8 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
                   now: datetime, cfg: GateConfig | None = None, has_bars: bool = True,
                   daily_validation_ready: bool = True,
                   require_real_intraday: bool = False,
-                  is_index: bool = False) -> dict[str, Any]:
+                  is_index: bool = False,
+                  ban_list_available: bool = True) -> dict[str, Any]:
     cfg = cfg or GateConfig.from_env()
     name = str(signal.get("signal") or "NEUTRAL")
     direction = ENTRY_SIGNALS.get(name)
@@ -68,6 +69,7 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
     need(direction is not None, "not_a_buildup_entry")
     need(has_bars, "no_daily_bars")
     need(daily_validation_ready, "daily_history_incomplete")
+    need(ban_list_available, "fo_ban_list_unavailable")
     need(not banned, "fo_ban_period")
     need(signal.get("stale_price") is not True, "stale_price")
     history = float(oi_ctx.get("history_minutes") or 0)
