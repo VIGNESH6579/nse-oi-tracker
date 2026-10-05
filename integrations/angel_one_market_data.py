@@ -405,8 +405,8 @@ class AngelOneMarketData:
             # them in every scan: the first candle call right after the quotes was the one
             # Angel kept answering with HTTP 403 "exceeding access rate".
             wait = max(
-                self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "1.5")),
-                self._last_quote_at + float(os.getenv("ANGEL_HIST_QUOTE_GAP_S", "1.5")) if self._last_quote_at else 0.0,
+                self._last_hist_at + float(os.getenv("ANGEL_HIST_MIN_INTERVAL", "4.0")),
+                self._last_quote_at + float(os.getenv("ANGEL_HIST_QUOTE_GAP_S", "4.0")) if self._last_quote_at else 0.0,
             ) - now
             if wait > 0:
                 time.sleep(wait)
@@ -444,7 +444,7 @@ class AngelOneMarketData:
         retries = max(0, int(os.getenv("ANGEL_HIST_RETRIES", "1")))
         for attempt in range(retries + 1):
             if attempt:
-                time.sleep(float(os.getenv("ANGEL_HIST_RETRY_WAIT_S", "2.0")))
+                time.sleep(float(os.getenv("ANGEL_HIST_RETRY_WAIT_S", "5.0")))
                 self._hist_wait()
             response = requests.post(
                 f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
@@ -458,7 +458,7 @@ class AngelOneMarketData:
             if attempt < retries:
                 continue
             self._hist_consecutive_403 += 1
-            base = float(os.getenv("ANGEL_HIST_COOLDOWN_S", "45"))
+            base = float(os.getenv("ANGEL_HIST_COOLDOWN_S", "60"))
             cap = float(os.getenv("ANGEL_HIST_COOLDOWN_MAX_S", "300"))
             cooldown = min(cap, base * (2 ** (self._hist_consecutive_403 - 1)))
             self._hist_block_until = time.monotonic() + cooldown
