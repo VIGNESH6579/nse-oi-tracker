@@ -23,12 +23,12 @@ _lock = threading.Lock()
 _state: dict = {"symbols": frozenset(), "fetched_at": None, "ok": False, "source": None}
 _SYMBOL = re.compile(r"^[A-Z0-9&\-]{2,20}$")
 
-
-
-
 RELAY_CSV_URL = "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/fo_secban.csv"
 RELAY_META_URL = "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/fo_secban_meta.json"
-RELAY_MAX_AGE_S = 30 * 60
+# GitHub Actions normally refreshes this every 10 minutes. Allow a bounded
+# delay during Actions scheduling so a perfectly valid official daily file
+# does not fail closed merely because one scheduled run was delayed.
+RELAY_MAX_AGE_S = 2 * 60 * 60
 
 
 def _fetch_verified_relay() -> str:
@@ -52,6 +52,7 @@ def _fetch_verified_relay() -> str:
     if not text.strip():
         raise RuntimeError("verified NSE ban relay returned empty CSV")
     return text
+
 
 def parse_ban_csv(text: str) -> frozenset[str]:
     found = set()
