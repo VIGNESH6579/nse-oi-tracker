@@ -455,6 +455,17 @@ class AngelOneMarketData:
             raise RuntimeError(f"HTTP {response.status_code} from Angel candle API: {snippet or 'empty body'}")
         response.raise_for_status()
         body = response.json()
+        if not body.get("status") and "invalid token" in str(body.get("message") or "").lower():
+            logger.warning("Angel candle JWT rejected; forcing a fresh read-only login and retrying once")
+            self._login(force=True)
+            response = requests.post(
+                f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
+                headers=self._headers(),
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            body = response.json()
         if not body.get("status"):
             raise RuntimeError(f"Angel One candle request failed: {body.get('message', 'unknown error')}")
         candles = []
