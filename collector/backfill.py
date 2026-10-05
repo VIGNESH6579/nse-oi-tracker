@@ -137,6 +137,7 @@ def backfill_symbol_history(
             rows = []
             source = ""
             angel_error = False
+            angel_rate_limited = False
             # Render's NSE egress is currently returning persistent 403s for
             # historical endpoints. Angel ONE ONE_DAY candles are free,
             # read-only, and are already authenticated/healthy in production.
@@ -175,6 +176,7 @@ def backfill_symbol_history(
                         marker in detail.lower()
                         for marker in ("exceeding access rate", "http 403", "http 429", "access denied")
                     )
+                    angel_rate_limited = rate_limited
                     if rate_limited:
                         # Render's NSE historical egress is also blocked with 403.
                         # Falling back here only burns the free worker's time and can
@@ -194,13 +196,11 @@ def backfill_symbol_history(
             # Angel request, also skip NSE: Render's NSE historical egress is known
             # to return 403 and the fallback would only waste the worker. Other Angel
             # errors may still use NSE as a secondary fallback outside that condition.
-            rate_limited_error = bool(
-                angel_error and any(
-                    marker in str(locals().get("exc") or "").lower()
-                    for marker in ("exceeding access rate", "http 403", "http 429", "access denied")
-                )
-            )
-            if not rows and (angel is None or not angel.configured or (angel_error and not rate_limited_error)):
+            if not rows and (
+                angel is None
+                or not angel.configured
+                or (angel_error and not angel_rate_limited)
+            ):
                 try:
                     rows = fetch_equity_history(symbol, start_date, end_date)
                     if rows:
