@@ -23,6 +23,8 @@ _MAX_BAR_DATES = 80
 _last_successful_snapshot_at: datetime | None = None
 _last_snapshot_bytes: int | None = None
 _last_snapshot_error: str | None = None
+_PUBLIC_SEED_URL = "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/seed_bhavcopy.sqlite3.gz"
+_PUBLIC_SEED_MAX_BYTES = 10 * 1024 * 1024
 
 
 def last_snapshot_info() -> dict:
@@ -267,39 +269,55 @@ def restore_latest_backup(database_path: Path) -> bool:
 
 
 def restore_bundled_seed(database_path: Path) -> bool:
-    """Populate an empty database from the bundled repository seed."""
+    """Merge the latest public F&O history seed, falling back to the bundled copy."""
     project_root = Path(__file__).resolve().parents[1]
-    seed_gz = project_root / "data" / "seed_bhavcopy.sqlite3.gz"
-    if not seed_gz.exists():
-        return False
-    try:
-        database_path = Path(database_path)
-        database_path.parent.mkdir(parents=True, exist_ok=True)
-        if database_path.exists():
-            try:
-                with sqlite3.connect(database_path) as conn:
-                    if conn.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0] > 0:
-                        return False
-            except Exception:
-                pass
-        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+    local_seed = project_root / "data" / "seed_bhavcopy.sqlite3.gz"
+
+    def merge_seed(seed_path: Path, label: str) -> bool:
         try:
-            with gzip.open(seed_gz, "rb") as source, open(tmp_path, "wb") as target:
-                shutil.copyfileobj(source, target)
-            with sqlite3.connect(database_path) as dest:
-                dest.execute(f"ATTACH DATABASE '{tmp_path.as_posix()}' AS seed")
-                dest.execute("INSERT OR IGNORE INTO daily_equity_bars SELECT * FROM seed.daily_equity_bars")
-                try:
-                    dest.execute("INSERT OR IGNORE INTO daily_index_bars SELECT * FROM seed.daily_index_bars")
-                except Exception:
-                    pass
-                dest.commit()
-                dest.execute("DETACH DATABASE seed")
-            logger.info("Restored bundled bhavcopy seed")
-            return True
-        finally:
-            tmp_path.unlink(missing_ok=True)
+            with gzip.open(seed_path, "rb") as source, tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+                shutil.copyfileobj(source, tmp)
+                tmp_path = Path(tmp.name)
+            try:
+                with sqlite3.connect(database_path) as dest:
+                    dest.execute(f"ATTACH DATABASE '{tmp_path.as_posix()}' AS seed")
+                    dest.execute("INSERT OR IGNORE INTO daily_equity_bars SELECT * FROM seed.daily_equity_bars")
+                    try:
+                        dest.execute("INSERT OR IGNORE INTO daily_index_bars SELECT * FROM seed.daily_index_bars")
+                    except Exception:
+                        pass
+                    dest.commit()
+                    dest.execute("DETACH DATABASE seed")
+                logger.info("Merged %s bhavcopy seed", label)
+                return True
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("Failed to merge %s bhavcopy seed", label, exc_info=True)
+            return False
+
+    database_path = Path(database_path)
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        request = urllib.request.Request(
+            _PUBLIC_SEED_URL,
+            headers={"User-Agent": "nse-oi-tracker-history-seed/1.0", "Accept": "application/gzip"},
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = response.read(_PUBLIC_SEED_MAX_BYTES + 1)
+        if len(payload) <= _PUBLIC_SEED_MAX_BYTES:
+            with tempfile.NamedTemporaryFile(suffix=".sqlite3.gz", delete=False) as tmp:
+                tmp.write(payload)
+                public_path = Path(tmp.name)
+            try:
+                if merge_seed(public_path, "public NSE"):
+                    return True
+            finally:
+                public_path.unlink(missing_ok=True)
     except Exception:
-        logger.warning("Failed to restore bundled bhavcopy seed", exc_info=True)
-        return False
+        logger.info("Public NSE history seed unavailable; trying bundled seed", exc_info=True)
+
+    if local_seed.exists():
+        return merge_seed(local_seed, "bundled")
+    return False
