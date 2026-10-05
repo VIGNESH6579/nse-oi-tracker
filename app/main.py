@@ -249,10 +249,15 @@ def _refresh_signals() -> list[dict]:
                     for row in stream_rows
                 ]
                 stream_summary = summarize_candles(stream_rows, now=now_ist())
-                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3 :
+                if stream_summary.get("available") and int(stream_summary.get("candle_count") or 0) >= 3:
                     # A WebSocket subscription can start after 09:30, so its local
                     # candle buffer may not contain the opening range. Preserve the
-                    # opening range observed independently by the OI scan loop.
+                    # opening range observed independently by the OI scan loop when
+                    # it exists. If neither source has the opening range, DO NOT
+                    # short-circuit here: fall through to the bounded historical
+                    # FIVE_MINUTE call below so a late Render wake/restart can recover
+                    # the 09:15-09:30 range. Without this fallback, the gate would
+                    # fail "opening_range_incomplete" for the rest of the session.
                     if not stream_summary.get("or_complete") and qctx.get("or_complete"):
                         stream_summary.update({
                             "or_high": qctx.get("or_high"),
@@ -274,8 +279,12 @@ def _refresh_signals() -> list[dict]:
                         }
                     )
                     context = stream_summary
-                    enriched_intraday.append({**signal, "intraday_context": context})
-                    continue
+                    # The stream context is sufficient only when the opening range
+                    # is also known. Otherwise continue into the historical-candle
+                    # fallback below to recover the missing 09:15-09:30 range.
+                    if stream_summary.get("or_complete"):
+                        enriched_intraday.append({**signal, "intraday_context": context})
+                        continue
             except Exception:
                 logger.exception("Angel WebSocket candle context failed for %s", symbol)
 
