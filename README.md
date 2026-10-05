@@ -104,3 +104,4 @@ and the current signal-quality boundary. See [signal logic](docs/signal-logic.md
 [API reference](docs/api.md), [scheduler flow](docs/scheduler.md),
 [deployment](docs/deployment.md), and [troubleshooting](docs/troubleshooting.md)
 for operating guidance.
+
