@@ -34,21 +34,24 @@ jobs:
           import gzip
           import shutil
           import tempfile
-                    from collector.backfill import backfill_recent_bhavcopies
+          import csv
+          import io
+          import urllib.request
+          from collector.backfill import backfill_recent_bhavcopies
           from database.repository import SignalRepository
           from utils.time import now_ist
 
-          root = Path.cwd()
           work = Path(tempfile.mkdtemp(prefix="nse-seed-"))
           db = work / "seed.sqlite3"
           repo = SignalRepository(db)
-          import csv, io, urllib.request
+
           request = urllib.request.Request(
               "https://archives.nseindia.com/content/fo/fo_mktlots.csv",
               headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"},
           )
           with urllib.request.urlopen(request, timeout=30) as response:
               text = response.read().decode("utf-8", "ignore")
+
           symbols = set()
           for row in csv.reader(io.StringIO(text)):
               if len(row) >= 2:
