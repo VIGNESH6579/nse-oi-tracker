@@ -123,8 +123,12 @@ class AngelOneMarketData:
             headers["Authorization"] = f"Bearer {self._jwt}"
         return headers
 
-    def _login(self) -> None:
+    def _login(self, *, force: bool = False) -> None:
         with self._lock:
+            if force:
+                self._jwt = None
+                self._feed_token = None
+                self._login_at = 0.0
             if time.time() < self._breaker_until:
                 raise AngelUnavailable("Angel login circuit breaker is open")
             if self._jwt and time.time() - self._login_at < 8 * 60 * 60:
