@@ -34,9 +34,7 @@ jobs:
           import gzip
           import shutil
           import tempfile
-          import csv
-          import io
-          from curl_cffi import requests
+          from collector.universe import load_fno_universe
           from collector.backfill import backfill_recent_bhavcopies
           from database.repository import SignalRepository
           from utils.time import now_ist
@@ -45,24 +43,9 @@ jobs:
           db = work / "seed.sqlite3"
           repo = SignalRepository(db)
 
-          response = requests.get(
-              "https://archives.nseindia.com/content/fo/fo_mktlots.csv",
-              headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"},
-              impersonate="chrome",
-              timeout=30,
-          )
-          response.raise_for_status()
-          text = response.content.decode("utf-8", "ignore")
-
-          symbols = set()
-          for row in csv.reader(io.StringIO(text, newline="")):
-              if len(row) >= 2:
-                  symbol = row[1].strip().upper()
-                  if symbol and symbol != "SYMBOL" and " " not in symbol:
-                      symbols.add(symbol)
-          symbols -= {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI"}
+          symbols = set(load_fno_universe(force=True))
           if len(symbols) < 120:
-              raise RuntimeError(f"F&O universe too small from NSE fo_mktlots.csv: {len(symbols)}")
+              raise RuntimeError(f"F&O universe too small: {len(symbols)}")
 
           end = now_ist().date() - timedelta(days=1)
           result = backfill_recent_bhavcopies(
