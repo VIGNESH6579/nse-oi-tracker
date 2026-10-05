@@ -606,12 +606,20 @@ async def ingest_daily_bhavcopy(trade_date: str | None = None) -> int:
 
 
 async def ingest_daily_index_bars() -> int:
-    """Append the latest public NSE daily OHLC rows for the four F&O indices."""
+    """Append Angel ONE daily OHLC for the four F&O indices; NSE is secondary only."""
     try:
-        result = await asyncio.to_thread(backfill_index_bars, repository, days=2, max_downloads=2, angel_client=angel_market_data)
-        return int(result.get("stored", 0))
+        result = await asyncio.to_thread(
+            backfill_index_bars,
+            repository,
+            days=60,
+            max_downloads=4,
+            angel_client=angel_market_data,
+        )
+        stored = int(result.get("stored", 0))
+        logger.info("Daily index history refresh stored=%d source=%s", stored, result.get("source"))
+        return stored
     except Exception:
-        logger.exception("Daily NSE index-bar ingestion failed")
+        logger.exception("Daily index-bar ingestion failed")
         return 0
 
 
@@ -719,6 +727,7 @@ async def automatic_startup_backfill() -> None:
 
 
 async def _startup_backfill_then_retest() -> None:
+    global _startup_state, _startup_error, _startup_ready_at_ist
     """Run the bounded startup backfill, then re-run scan + self-test once.
 
     automatic_startup_backfill() runs as a background task so it never blocks
@@ -740,6 +749,10 @@ async def _startup_backfill_then_retest() -> None:
         _startup_state = "BLOCKED"
         _startup_error = "startup Bhavcopy backfill failed"
         return
+    try:
+        await ingest_daily_index_bars()
+    except Exception:
+        logger.exception("Post-backfill index history refresh failed")
     try:
         await refresh_signals()
     except Exception:
@@ -837,8 +850,9 @@ def maybe_fill_feed_gaps() -> bool:
         try:
             add_extra_symbols(extras)
             _gap_fill["result"] = backfill_symbol_gaps(repository, missing, end_date=_backfill_end_date(), dates=20)
-            _gap_fill["gave_up"].update(repository.symbols_missing_bars(missing, 15))     # no bhavcopy rows exist: stop retrying
-            logger.info("Feed gap-fill finished symbols=%s result=%s gave_up=%s", sorted(missing)[:20], _gap_fill["result"], sorted(_gap_fill["gave_up"]))
+            # Do not permanently give up after a transient Angel historical 403/rate limit.
+            # Failed symbols are retried on the next 20-minute gap-fill window.
+            logger.info("Feed gap-fill finished symbols=%s result=%s", sorted(missing)[:20], _gap_fill["result"])
         except Exception:
             logger.exception("Feed gap-fill failed")
         finally:
