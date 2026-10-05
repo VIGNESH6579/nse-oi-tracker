@@ -43,20 +43,28 @@ def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=N
             else:
                 rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
         except Exception as exc:
-            # Angel historical data is rate-limited independently of the live
-            # stream. Do not retry it here; immediately use the public NSE
-            # history path for this index instead.
-            logger.warning(
-                "Angel index history unavailable for %s (%s); falling back to NSE",
-                symbol,
-                type(exc).__name__,
+            detail = str(exc)[:160]
+            rate_limited = any(
+                marker in detail.lower()
+                for marker in ("exceeding access rate", "http 403", "http 429", "access denied", "cooling down")
             )
-            source = "nse_index_history"
-            if angel_client is not None:
-                try:
-                    rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
-                except Exception:
-                    logger.exception("NSE index history fallback failed for %s", symbol)
+            if rate_limited:
+                logger.warning("Angel index history rate-limited for %s; skipping blocked NSE fallback: %s", symbol, detail)
+                # Do not burn time on the known-blocked NSE endpoint. Continue to
+                # the next index only when the Angel client itself permits it.
+                source = "angel_one_daily_index"
+            else:
+                logger.warning(
+                    "Angel index history unavailable for %s (%s); falling back to NSE",
+                    symbol,
+                    type(exc).__name__,
+                )
+                source = "nse_index_history"
+                if angel_client is not None:
+                    try:
+                        rows = fetch_index_history(INDEX_TYPES[symbol], start, end)
+                    except Exception:
+                        logger.exception("NSE index history fallback failed for %s", symbol)
 
         sources.add(source)
         stored += repository.upsert_daily_index_bars(
