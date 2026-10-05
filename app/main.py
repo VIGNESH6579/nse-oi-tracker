@@ -1209,7 +1209,8 @@ async def lifespan(app: FastAPI):
         restored = await asyncio.to_thread(restore_latest_backup, settings.database_path)
         if restored:
             logger.info("Startup restored durable snapshot because min_bars=%s was below target=%s", initial_summary.get("min_bars"), DAILY_HISTORY_TARGET_BARS)
-    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+    post_restore_summary = repository.daily_equity_bar_summary()
+    if int(post_restore_summary.get("min_bars") or 0) < DAILY_HISTORY_TARGET_BARS:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
     angel_stream.start()
     if render_startup_backfill_enabled():
