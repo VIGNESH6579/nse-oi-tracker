@@ -34,8 +34,7 @@ jobs:
           import gzip
           import shutil
           import tempfile
-          from app.market_calendar import recent_nse_trading_dates
-          from collector.backfill import backfill_recent_bhavcopies
+                    from collector.backfill import backfill_recent_bhavcopies
           from collector.index_backfill import backfill_index_bars
           from collector.universe import load_fno_universe
           from database.repository import SignalRepository
