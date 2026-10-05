@@ -1,6 +1,8 @@
 name: Refresh public NSE history seed
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "0 13 * * 1-5"
