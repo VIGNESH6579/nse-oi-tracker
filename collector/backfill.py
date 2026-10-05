@@ -210,6 +210,13 @@ def backfill_symbol_history(
             if not rows:
                 failed += 1
                 logger.warning("Daily history returned no rows symbol=%s", symbol)
+                if angel_rate_limited:
+                    # Angel's historical endpoint can intermittently return 403 even
+                    # below its documented rate. Stop this batch at the first such
+                    # response instead of walking through the remaining symbols while
+                    # the client is in cooldown. The scheduler will resume later.
+                    logger.warning("Stopping history batch after Angel rate limit symbol=%s", symbol)
+                    break
             else:
                 stored += repository.upsert_daily_equity_bars(rows)
                 downloaded += 1
@@ -223,7 +230,7 @@ def backfill_symbol_history(
         # fallback requests because that path is shared with archive traffic.
         if source != "angel_one_daily" and delay_seconds > 0 and index < len(wanted):
             time.sleep(delay_seconds)
-    return {"requested": len(wanted), "downloaded": downloaded, "stored": stored, "failed": failed}
+    return {"requested": len(wanted), "downloaded": downloaded, "stored": stored, "failed": failed, "rate_limited": bool(angel_rate_limited)}
 
 
 def backfill_symbol_gaps(
