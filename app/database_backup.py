@@ -281,7 +281,12 @@ def restore_bundled_seed(database_path: Path) -> bool:
             try:
                 with sqlite3.connect(database_path) as dest:
                     dest.execute(f"ATTACH DATABASE '{tmp_path.as_posix()}' AS seed")
-                    seed_count = dest.execute("SELECT COUNT(*) FROM seed.daily_equity_bars").fetchone()[0]\n                    if int(seed_count or 0) < 1000:\n                        raise ValueError(f"public seed contains too few daily bars: {seed_count}")\n                    before_count = dest.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]\n                    dest.execute("INSERT OR IGNORE INTO daily_equity_bars SELECT * FROM seed.daily_equity_bars")\n                    after_count = dest.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]
+                    seed_count = dest.execute("SELECT COUNT(*) FROM seed.daily_equity_bars").fetchone()[0]
+                    if int(seed_count or 0) < 1000:
+                        raise ValueError(f"public seed contains too few daily bars: {seed_count}")
+                    before_count = dest.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]
+                    dest.execute("INSERT OR IGNORE INTO daily_equity_bars SELECT * FROM seed.daily_equity_bars")
+                    after_count = dest.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]
                     try:
                         dest.execute("INSERT OR IGNORE INTO daily_index_bars SELECT * FROM seed.daily_index_bars")
                     except Exception:
