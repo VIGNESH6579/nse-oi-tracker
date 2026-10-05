@@ -718,7 +718,7 @@ async def automatic_startup_backfill() -> None:
     in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
     # During market hours fetch only the newest 16 dates (enough for ATR14);
     # the rest is topped up after the close to protect the 512 MB instance.
-    limit = min(20, settings.backfill_target_days)
+    limit = min(3, settings.backfill_target_days)
     try:
         result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
         logger.info("Automatic bhavcopy backfill finished (market_hours=%s cap=%d): %s", in_market_hours, limit, result)
@@ -816,7 +816,7 @@ async def scheduled_backfill_topup() -> None:
         current = now_ist()
         minutes = current.hour * 60 + current.minute
         in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
-        limit = min(10, settings.backfill_target_days)
+        limit = min(3, settings.backfill_target_days)
         result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
         logger.info("Post-close bhavcopy top-up finished: %s", result)
     except Exception:
@@ -1172,7 +1172,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         scheduled_backfill_topup,
-        IntervalTrigger(minutes=15, timezone=IST),
+        IntervalTrigger(minutes=1, timezone=IST),
         id="daytime-bhavcopy-topup",
         replace_existing=True,
         max_instances=1,
