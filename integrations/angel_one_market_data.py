@@ -260,6 +260,17 @@ class AngelOneMarketData:
             )
             response.raise_for_status()
             body = response.json()
+            if not body.get("status") and "invalid token" in str(body.get("message") or "").lower():
+                logger.warning("Angel quote JWT rejected; forcing a fresh read-only login and retrying once")
+                self._login(force=True)
+                response = requests.post(
+                    f"{BASE_URL}/rest/secure/angelbroking/market/v1/quote/",
+                    headers=self._headers(),
+                    json={"mode": "FULL", "exchangeTokens": {exchange.upper(): batch}},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                body = response.json()
             if not body.get("status"):
                 raise RuntimeError(f"Angel One quote request failed: {body.get('message', 'unknown error')}")
             self._last_quote_at = time.monotonic()
