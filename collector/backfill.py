@@ -170,12 +170,37 @@ def backfill_symbol_history(
                         source = "angel_one_daily"
                 except Exception as exc:
                     angel_error = True
-                    logger.warning("Angel daily history failed symbol=%s; trying NSE fallback: %s", symbol, str(exc)[:120])
+                    detail = str(exc)[:160]
+                    rate_limited = any(
+                        marker in detail.lower()
+                        for marker in ("exceeding access rate", "http 403", "http 429", "access denied")
+                    )
+                    if rate_limited:
+                        # Render's NSE historical egress is also blocked with 403.
+                        # Falling back here only burns the free worker's time and can
+                        # delay the next Angel request. Let Angel's own cooldown/retry
+                        # logic recover on the next symbol instead.
+                        logger.warning(
+                            "Angel daily history rate-limited symbol=%s; skipping NSE fallback: %s",
+                            symbol, detail,
+                        )
+                    else:
+                        logger.warning(
+                            "Angel daily history failed symbol=%s; trying NSE fallback: %s",
+                            symbol, detail,
+                        )
             # If Angel is configured and answered normally with no rows, do not
-            # fall into the known-blocked NSE per-symbol endpoint. An empty Angel
-            # result means the instrument has no usable history; an Angel error is
-            # the case where NSE fallback is still useful.
-            if not rows and (angel is None or not angel.configured or angel_error):
+            # fall into the known-blocked NSE per-symbol endpoint. For a rate-limited
+            # Angel request, also skip NSE: Render's NSE historical egress is known
+            # to return 403 and the fallback would only waste the worker. Other Angel
+            # errors may still use NSE as a secondary fallback outside that condition.
+            rate_limited_error = bool(
+                angel_error and any(
+                    marker in str(locals().get("exc") or "").lower()
+                    for marker in ("exceeding access rate", "http 403", "http 429", "access denied")
+                )
+            )
+            if not rows and (angel is None or not angel.configured or (angel_error and not rate_limited_error)):
                 try:
                     rows = fetch_equity_history(symbol, start_date, end_date)
                     if rows:
