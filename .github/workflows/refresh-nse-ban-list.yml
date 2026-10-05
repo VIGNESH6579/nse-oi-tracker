@@ -1,6 +1,8 @@
 name: Refresh NSE F&O ban list
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "*/10 3-12 * * 1-5"
