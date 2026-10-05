@@ -1,0 +1,62 @@
+name: Refresh NSE F&O ban list
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 3-12 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-ban-list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout data branch
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          fetch-depth: 1
+
+      - name: Fetch official NSE ban list
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          ok=0
+          for url in             "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"             "https://archives.nseindia.com/content/fo/fo_secban.csv"; do
+            echo "Fetching $url"
+            if curl --fail --location --silent --show-error               --retry 3 --retry-delay 2               -A "Mozilla/5.0 (compatible; NSE-OI-Tracker/1.0)"               -H "Accept: text/csv,*/*"               "$url" -o data/fo_secban.csv; then
+              if [ -s data/fo_secban.csv ]; then
+                ok=1
+                break
+              fi
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "Official NSE ban-list download failed"
+            exit 1
+          fi
+          python - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import json
+          p = Path("data/fo_secban_meta.json")
+          p.write_text(json.dumps({
+              "source": "official_nse_fo_secban",
+              "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
+          }, indent=2) + "\n")
+          PY
+
+      - name: Commit refreshed ban list
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/fo_secban.csv data/fo_secban_meta.json
+          if git diff --cached --quiet; then
+            echo "Ban list unchanged"
+            exit 0
+          fi
+          git commit -m "data: refresh NSE F&O ban list"
+          git push origin HEAD:data
