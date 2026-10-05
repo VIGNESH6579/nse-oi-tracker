@@ -294,11 +294,22 @@ class AngelOneMarketData:
                     # NIFTY index quote on any gap day (market bias then read UNKNOWN).
                     # Fail closed on genuinely bad data: no price, no session range yet
                     # (pre-open), or an internally inconsistent high/low.
-                    if (min(ltp, open_price, high, low) <= 0
-                            or high < max(ltp, open_price, low)
-                            or low > min(ltp, open_price, high)):
+                    malformed_ohlc = (
+                        min(ltp, open_price, high, low) <= 0
+                        or high < max(ltp, open_price, low)
+                        or low > min(ltp, open_price, high)
+                    )
+                    # NFO futures quotes are used here primarily for LTP/OI. Angel can
+                    # occasionally publish a stale/inconsistent session OHLC tuple for
+                    # an otherwise valid futures contract (observed for TCS27OCT26FUT).
+                    # Do not discard valid futures OI because of that auxiliary field.
+                    # Equity/index quotes remain fail-closed on malformed OHLC.
+                    if malformed_ohlc and normalized_exchange != "NFO":
                         logger.warning("Ignoring malformed Angel quote for %s: invalid OHLC range", symbol)
                         continue
+                    if malformed_ohlc and normalized_exchange == "NFO":
+                        logger.warning("Using Angel NFO quote for %s with malformed OHLC; retaining LTP/OI only", symbol)
+                        open_price = high = low = 0.0
                     output[symbol] = {
                         "ltp": ltp,
                         "open": open_price,
