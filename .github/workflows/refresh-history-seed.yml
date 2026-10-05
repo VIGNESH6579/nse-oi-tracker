@@ -36,7 +36,7 @@ jobs:
           import tempfile
           import csv
           import io
-          import urllib.request
+          from curl_cffi import requests
           from collector.backfill import backfill_recent_bhavcopies
           from database.repository import SignalRepository
           from utils.time import now_ist
@@ -45,15 +45,17 @@ jobs:
           db = work / "seed.sqlite3"
           repo = SignalRepository(db)
 
-          request = urllib.request.Request(
+          response = requests.get(
               "https://archives.nseindia.com/content/fo/fo_mktlots.csv",
               headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"},
+              impersonate="chrome",
+              timeout=30,
           )
-          with urllib.request.urlopen(request, timeout=30) as response:
-              text = response.read().decode("utf-8", "ignore")
+          response.raise_for_status()
+          text = response.content.decode("utf-8", "ignore")
 
           symbols = set()
-          for row in csv.reader(io.StringIO(text)):
+          for row in csv.reader(io.StringIO(text, newline="")):
               if len(row) >= 2:
                   symbol = row[1].strip().upper()
                   if symbol and symbol != "SYMBOL" and " " not in symbol:
