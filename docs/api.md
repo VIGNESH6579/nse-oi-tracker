@@ -31,13 +31,9 @@ daily partitions use Asia/Kolkata (IST).
 ## Technical and option chain
 
 - `GET /api/technical/{symbol}`: persisted daily bhavcopy indicators.
-- `GET /api/cas/{symbol}`: stored candidate volatility context and its missing
-  inputs; the recommendation remains `NO_TRADE`.
-- `GET /api/option-chain/{symbol}?refresh=false`: current PCR/max-pain,
-  strike ladder, and stored trend summary.
-- `GET /api/option-chain/{symbol}/history?limit=200`: option snapshot series.
-- `GET /api/option-chain/{symbol}/heatmap?refresh=false`: relative strike OI
-  intensity data, not a price forecast.
+- `GET /api/option-chain/{symbol}?strikes=1`: read-only Angel near-ATM stock CE/PE ladder.
+- `GET /api/scalp/live`: current open paper scalps and recent events.
+- `GET /api/scalp/history/today`: persisted paper scalp events for the current IST day.
 
 ## History and audit exports
 
