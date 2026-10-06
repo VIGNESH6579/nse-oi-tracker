@@ -51,7 +51,7 @@ durable external database before treating history as production data.
 - `GET /api/health` ? market status, version, persistence status, and last
   refresh metadata.
 - `GET /api/oi-signals` ? current scanner output with freshness metadata.
-- `GET /api/option-chain/{symbol}` ? PCR, max pain, and strike ladder.
+- `GET /api/option-chain/{symbol}` ? read-only Angel near-ATM CE/PE ladder for one stock.
 - `GET /api/history/today` ? visible, server-owned IST-day signal events and
   lifecycle status.
 - `GET /api/analytics/today` ? server-calculated same-day outcomes.
@@ -67,9 +67,8 @@ HTTPS origins; it is deliberately blank by default.
 
 ## Extended API
 
-- `GET /api/option-chain/{symbol}/heatmap` exposes relative CE/PE OI and
-  delta-OI intensity for the current chain window.
-- `GET /api/option-chain/{symbol}/history` returns stored PCR/max-pain data.
+- `GET /api/scalp/live` ? current open paper scalps and recent events.
+- `GET /api/scalp/history/today` ? persisted today-only scalp events with exit reason and hold time.
 - `GET /api/market-overview` and `/api/market-regime` expose public NSE
   index/VIX/breadth/FII-DII context.
 - `GET /api/news` returns public NSE corporate disclosures with event-risk
