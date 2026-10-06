@@ -372,6 +372,12 @@ class AngelOneMarketStream:
             "exchange_timestamp_ms": tick.exchange_timestamp_ms,
         }
 
+    def latest_tick_for_symbol(self, symbol: str, *, max_age_s: float = 10.0) -> dict[str, Any] | None:
+        key = self._symbol_tokens.get(str(symbol).upper().strip())
+        if key is None:
+            return None
+        return self.latest_tick(key[0], key[1], max_age_s=max_age_s)
+
     def recent_candles(self, exchange_type: int, token: str, *, limit: int = 12) -> list[dict[str, Any]]:
         return self.candles.recent(exchange_type, token, limit=limit)
 
