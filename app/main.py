@@ -71,7 +71,6 @@ from analytics.market_overview import normalize_market_overview
 from analytics.backtest import summarize_candidate_backtest
 from alerts.dispatcher import dispatch_candidate_alert
 from analytics.sectors import attach_sector, known_sectors
-from analytics.cas import confidence_analysis
 from analytics.traps import trap_risk
 from analytics.sources import public_source_inventory
 from integrations.angel_one_market_data import AngelOneMarketData
@@ -387,17 +386,6 @@ def _refresh_signals() -> list[dict]:
             logger.exception("Confirmation gate failed; failing closed")
             signals = [{**signal, "actionable": False, "trade_recommendation": "NO_TRADE",
                         "confirmation_gate": "FAILED", "missing_confirmations": ["gate_error"]} for signal in signals]
-        try:
-            market_context = cache.get("market-overview")
-            if market_context is None:
-                # VIX/index regime only, refreshed at most once per cache TTL. News/announcements
-                # and FII/DII cash flow were removed from the scan: no intraday signal value.
-                market_context = normalize_market_overview(fetch_market_indices(), [])
-                cache.set("market-overview", market_context, ttl=settings.cache_ttl_seconds)
-            signals = [{**signal, "cas_context": confidence_analysis(signal.get("technical_context"), None, market_context)}
-                       for signal in signals]
-        except Exception:
-            logger.exception("Could not attach public VIX/regime/CAS context to scanner results")
     monotonic_now = time.monotonic()
     captured_at = now_ist()
     served_stale = False
@@ -1764,5 +1752,4 @@ async def debug(x_debug_token: str = Header(default="")):
         "sample_rows":      sample,
         "price_sources":    {r.get("symbol"): r.get("price_source") for r in sample},
         "oi_field_usage":   sample_field_usage(),
-        "cas_time_ist":     oi_engine._last_cas_time_ist,
     }
