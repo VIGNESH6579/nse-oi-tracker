@@ -5,10 +5,10 @@ option-chain analytics. This branch adds the production foundation for
 server-owned signal history, SQLite event storage, scheduled lifecycle jobs,
 and a dashboard migration path from browser-local history.
 
-The current build adds daily bhavcopy technical context, public VIX/FII-DII
-market context, corporate-disclosure event-risk labels, OI heatmaps, and
-auditable candidate-outcome analytics while retaining the same-origin
-lightweight dashboard.
+The current build keeps the existing F&O OI scanner as an optional research
+mode and adds a separate Angel One stock-options scalping paper mode. CAS has
+been removed from the product path: no CAS signals, context, API, or dashboard
+UI are used.
 
 It is analytical decision support, not investment advice. Current OI labels
 are not a complete multi-factor trading signal.
@@ -73,7 +73,6 @@ HTTPS origins; it is deliberately blank by default.
 - `GET /api/market-overview` and `/api/market-regime` expose public NSE
   index/VIX/breadth/FII-DII context.
 - `GET /api/news` returns public NSE corporate disclosures with event-risk
-  labels; `GET /api/cas/{symbol}` exposes the candidate's volatility context.
 - `GET /api/participant-oi` returns the latest public NSE participant-wise
   OI report and preserves its end-of-day report date (it is not intraday).
 - `GET /api/backtest` and `/api/backtest/export.csv` provide an auditable
@@ -105,3 +104,28 @@ and the current signal-quality boundary. See [signal logic](docs/signal-logic.md
 [deployment](docs/deployment.md), and [troubleshooting](docs/troubleshooting.md)
 for operating guidance.
 
+
+
+## Stock option scalping paper mode
+
+Set `SIGNAL_MODE=scalp_chain` (the default) to use the separate Angel One
+near-ATM stock-options paper scalper. It uses a bounded liquid-stock universe,
+underlying opening-range/VWAP impulse, Angel option quotes, and a hard
+10-minute time exit. It never places orders.
+
+Set `SIGNAL_MODE=swing_oi` only when you explicitly want the existing F&O OI
+scanner. Swing OI rows are not scalp entries and are never used as scalp exits.
+
+Scalp controls:
+
+- `MAX_HOLD_MINUTES=10`
+- `ENTRY_START=09:30`
+- `ENTRY_END=14:30`
+- `SCALP_MAX_CONCURRENT=3`
+- `SCALP_OPTION_STOP_PCT=30`
+- `SCALP_OPTION_TARGET_PCT=20`
+- `SCALP_CHAIN_TTL_S=20`
+- `SCALP_TOP_N=10`
+
+The scalp API is `GET /api/scalp/live` and
+`GET /api/scalp/history/today`. Angel credentials remain environment-only.
