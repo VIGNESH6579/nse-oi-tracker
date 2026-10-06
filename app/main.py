@@ -67,6 +67,7 @@ from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
 from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles, bias_from_quote, quote_context
 from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS, INDEX_SYMBOLS
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
+from signal_engine.scalp_chain import ScalpChainEngine
 from analytics.market_overview import normalize_market_overview
 from analytics.backtest import summarize_candidate_backtest
 from alerts.dispatcher import dispatch_candidate_alert
@@ -79,11 +80,15 @@ from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
 
-APP_VERSION = "4.4.0"
+APP_VERSION = "4.5.0"
+SIGNAL_MODE = os.getenv("SIGNAL_MODE", "scalp_chain").strip().lower()
+if SIGNAL_MODE not in {"scalp_chain", "swing_oi"}:
+    SIGNAL_MODE = "scalp_chain"
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
 angel_market_data = AngelOneMarketData.from_environment()
 angel_stream = AngelOneMarketStream(angel_market_data)
+scalp_engine = ScalpChainEngine(angel_market_data, angel_stream, repository)
 
 # Set this in Render's environment variables to lock down /api/debug in
 # production. Left unset, /api/debug stays open (dev convenience) but says
@@ -487,15 +492,26 @@ async def refresh_signals() -> list[dict]:
 
 
 async def scheduled_refresh() -> None:
-    """Refresh only during an exchange-open session."""
+    """Refresh the legacy swing OI scanner only when that mode is selected."""
     global _scheduler_heartbeat_at_ist
     _scheduler_heartbeat_at_ist = now_ist().isoformat()
-    if not is_market_open():
+    if SIGNAL_MODE != "swing_oi" or not is_market_open():
         return
     try:
         await refresh_signals()
     except Exception:
-        logger.exception("Scheduled signal refresh failed")
+        logger.exception("Scheduled swing OI refresh failed")
+
+async def scheduled_scalp_refresh() -> None:
+    """Run the Angel option-chain paper scalper on its bounded 30-second cadence."""
+    global _scheduler_heartbeat_at_ist
+    _scheduler_heartbeat_at_ist = now_ist().isoformat()
+    if SIGNAL_MODE != "scalp_chain" or not is_market_open():
+        return
+    try:
+        await asyncio.to_thread(scalp_engine.refresh)
+    except Exception:
+        logger.exception("Scheduled scalp-chain refresh failed")
 
 
 async def scheduled_confirmed_signal_cleanup() -> None:
@@ -995,6 +1011,7 @@ def _self_test_probes(stage: str):
     return self_test.build_probes(
         stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
         scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth, stream=angel_stream,
+        mode=SIGNAL_MODE, scalp=scalp_engine,
     )
 
 
@@ -1106,6 +1123,14 @@ async def lifespan(app: FastAPI):
         scheduled_refresh,
         IntervalTrigger(seconds=settings.poll_interval_seconds, timezone=IST),
         id="nse-signal-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_scalp_refresh,
+        IntervalTrigger(seconds=30, timezone=IST),
+        id="scalp-chain-refresh",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -1493,6 +1518,25 @@ async def oi_signals(
     """
     if refresh:
         cache.delete("all_signals")
+
+    if SIGNAL_MODE != "swing_oi":
+        status = get_market_status()
+        return {
+            "mode": SIGNAL_MODE,
+            "market_open": status == MARKET_STATUS_OPEN,
+            "market_status": status,
+            "market_status_label": MARKET_STATUS_LABELS[status],
+            "total_fno_active": 0,
+            "high_confidence": 0,
+            "medium_confidence": 0,
+            "filtered_count": 0,
+            "signal_counts": {},
+            "signal_meta": {},
+            "available_sectors": [],
+            "signals": [],
+            "data_status": "SCALP_MODE",
+            "data_warning": "Swing OI scanner is disabled in scalp_chain mode.",
+        }
 
     cached = cache.get("all_signals")
 
