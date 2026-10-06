@@ -31,7 +31,8 @@ CRITICAL = {
 
 
 def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[str]], ban_info: Callable[[], dict],
-                 scan_stats: Callable[[], dict], window_depth: Callable[[], dict], stream=None, min_bars: int = 15) -> dict[str, Probe]:
+                 scan_stats: Callable[[], dict], window_depth: Callable[[], dict], stream=None,
+                 min_bars: int = 15, mode: str = "swing_oi", scalp=None) -> dict[str, Probe]:
     def equity_quotes():
         quotes = angel.full_quotes(SAMPLE)
         good = [s for s in SAMPLE if float((quotes.get(s) or {}).get("ltp") or 0) > 0]
@@ -89,6 +90,16 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
         first = candle_minute(candles[0]) if candles else None
         return len(candles) >= 3 and first == 555, f"{len(candles)} historical Angel candles, first_minute={first} (expected 555)"
 
+    def scalp_chain():
+        if scalp is None:
+            return False, "scalp engine unavailable"
+        return scalp.probe_chain("RELIANCE")
+
+    if mode == "scalp_chain":
+        if stage == "pre_open":
+            return {"angel_session": session, "angel_daily_candles": daily_candles}
+        if stage == "post_open":
+            return {"angel_session": session, "scalp_chain": scalp_chain, "angel_equity_quotes": equity_quotes}
     if stage == "pre_open":
         return {"angel_session": session, "angel_daily_candles": daily_candles, "bars_coverage": bars_coverage,
                 "fno_universe": universe_size, "index_bars": index_bars, "ban_list": ban_list}
@@ -107,7 +118,10 @@ def run_stage(stage: str, probes: dict[str, Probe], now: datetime) -> dict[str, 
             ok, detail = False, f"{type(exc).__name__}: {str(exc)[:140]}"
         checks[name] = {"ok": bool(ok), "detail": detail}
     failed = [name for name, check in checks.items() if not check["ok"]]
-    critical = [name for name in failed if name in CRITICAL.get(stage, set())]
+    critical_set = CRITICAL.get(stage, set())
+    if stage == "post_open" and "scalp_chain" in checks:
+        critical_set = {"angel_session", "scalp_chain", "angel_equity_quotes"}
+    critical = [name for name in failed if name in critical_set]
     verdict = "READY" if not failed else ("BLOCKED" if critical else "DEGRADED")
     result = {"stage": stage, "at": now.isoformat(timespec="seconds"), "verdict": verdict, "failed": failed, "checks": checks}
     with _lock:

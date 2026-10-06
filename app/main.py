@@ -67,11 +67,11 @@ from collector.fno_ban import refresh_ban_list, banned_symbols, ban_info
 from analytics.intraday_confirm import summarize_candles, average_daily_volume, bias_from_candles, bias_from_quote, quote_context
 from signal_engine.confirmation import evaluate_gate, ENTRY_SIGNALS, INDEX_SYMBOLS
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
+from signal_engine.scalp_chain import ScalpChainEngine
 from analytics.market_overview import normalize_market_overview
 from analytics.backtest import summarize_candidate_backtest
 from alerts.dispatcher import dispatch_candidate_alert
 from analytics.sectors import attach_sector, known_sectors
-from analytics.cas import confidence_analysis
 from analytics.traps import trap_risk
 from analytics.sources import public_source_inventory
 from integrations.angel_one_market_data import AngelOneMarketData
@@ -80,11 +80,15 @@ from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
 
-APP_VERSION = "4.4.0"
+APP_VERSION = "4.5.1"
+SIGNAL_MODE = os.getenv("SIGNAL_MODE", "scalp_chain").strip().lower()
+if SIGNAL_MODE not in {"scalp_chain", "swing_oi"}:
+    SIGNAL_MODE = "scalp_chain"
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
 angel_market_data = AngelOneMarketData.from_environment()
 angel_stream = AngelOneMarketStream(angel_market_data)
+scalp_engine = ScalpChainEngine(angel_market_data, angel_stream, repository)
 
 # Set this in Render's environment variables to lock down /api/debug in
 # production. Left unset, /api/debug stays open (dev convenience) but says
@@ -387,17 +391,6 @@ def _refresh_signals() -> list[dict]:
             logger.exception("Confirmation gate failed; failing closed")
             signals = [{**signal, "actionable": False, "trade_recommendation": "NO_TRADE",
                         "confirmation_gate": "FAILED", "missing_confirmations": ["gate_error"]} for signal in signals]
-        try:
-            market_context = cache.get("market-overview")
-            if market_context is None:
-                # VIX/index regime only, refreshed at most once per cache TTL. News/announcements
-                # and FII/DII cash flow were removed from the scan: no intraday signal value.
-                market_context = normalize_market_overview(fetch_market_indices(), [])
-                cache.set("market-overview", market_context, ttl=settings.cache_ttl_seconds)
-            signals = [{**signal, "cas_context": confidence_analysis(signal.get("technical_context"), None, market_context)}
-                       for signal in signals]
-        except Exception:
-            logger.exception("Could not attach public VIX/regime/CAS context to scanner results")
     monotonic_now = time.monotonic()
     captured_at = now_ist()
     served_stale = False
@@ -499,15 +492,26 @@ async def refresh_signals() -> list[dict]:
 
 
 async def scheduled_refresh() -> None:
-    """Refresh only during an exchange-open session."""
+    """Refresh the legacy swing OI scanner only when that mode is selected."""
     global _scheduler_heartbeat_at_ist
     _scheduler_heartbeat_at_ist = now_ist().isoformat()
-    if not is_market_open():
+    if SIGNAL_MODE != "swing_oi" or not is_market_open():
         return
     try:
         await refresh_signals()
     except Exception:
-        logger.exception("Scheduled signal refresh failed")
+        logger.exception("Scheduled swing OI refresh failed")
+
+async def scheduled_scalp_refresh() -> None:
+    """Run the Angel option-chain paper scalper on its bounded 30-second cadence."""
+    global _scheduler_heartbeat_at_ist
+    _scheduler_heartbeat_at_ist = now_ist().isoformat()
+    if SIGNAL_MODE != "scalp_chain" or not is_market_open():
+        return
+    try:
+        await asyncio.to_thread(scalp_engine.refresh)
+    except Exception:
+        logger.exception("Scheduled scalp-chain refresh failed")
 
 
 async def scheduled_confirmed_signal_cleanup() -> None:
@@ -1007,6 +1011,7 @@ def _self_test_probes(stage: str):
     return self_test.build_probes(
         stage, angel=angel_market_data, repository=repository, universe=cached_universe, ban_info=ban_info,
         scan_stats=lambda: oi_engine._last_scan_stats, window_depth=oi_engine.oi_window.depth, stream=angel_stream,
+        mode=SIGNAL_MODE, scalp=scalp_engine,
     )
 
 
@@ -1118,6 +1123,14 @@ async def lifespan(app: FastAPI):
         scheduled_refresh,
         IntervalTrigger(seconds=settings.poll_interval_seconds, timezone=IST),
         id="nse-signal-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_scalp_refresh,
+        IntervalTrigger(seconds=30, timezone=IST),
+        id="scalp-chain-refresh",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -1385,6 +1398,8 @@ async def health():
         "snapshot_backend": "github" if os.getenv("NSE_OI_BACKUP_GITHUB_REPO") and os.getenv("NSE_OI_BACKUP_GITHUB_TOKEN") else "url" if os.getenv("NSE_OI_BACKUP_URL") else "none",
         "angel":         angel_state,
         "angel_stream":  angel_stream.health(),
+        "signal_mode": SIGNAL_MODE,
+        "scalp": scalp_engine.health(),
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "memory_rss_peak_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
@@ -1486,6 +1501,29 @@ async def sources():
     }
 
 
+@app.get("/api/scalp/live")
+async def scalp_live():
+    """Current open and recent Angel option-chain paper scalps."""
+    if SIGNAL_MODE != "scalp_chain":
+        return {"mode": SIGNAL_MODE, "paper_only": True, "open": [], "recent": [],
+                "data_warning": "Scalp mode is disabled; SIGNAL_MODE is swing_oi."}
+    return scalp_engine.live()
+
+
+@app.get("/api/scalp/history/today")
+async def scalp_history_today():
+    """Today’s persisted scalp paper events with entry/exit/hold metadata."""
+    trade_date = ist_trade_date(now_ist())
+    rows = await asyncio.to_thread(repository.scalp_events_for_date, trade_date)
+    return {
+        "mode": SIGNAL_MODE,
+        "paper_only": True,
+        "trade_date": trade_date,
+        "events": rows,
+        "count": len(rows),
+    }
+
+
 @app.get("/api/oi-signals")
 async def oi_signals(
     refresh:      bool  = Query(False, description="Force fresh NSE fetch"),
@@ -1505,6 +1543,25 @@ async def oi_signals(
     """
     if refresh:
         cache.delete("all_signals")
+
+    if SIGNAL_MODE != "swing_oi":
+        status = get_market_status()
+        return {
+            "mode": SIGNAL_MODE,
+            "market_open": status == MARKET_STATUS_OPEN,
+            "market_status": status,
+            "market_status_label": MARKET_STATUS_LABELS[status],
+            "total_fno_active": 0,
+            "high_confidence": 0,
+            "medium_confidence": 0,
+            "filtered_count": 0,
+            "signal_counts": {},
+            "signal_meta": {},
+            "available_sectors": [],
+            "signals": [],
+            "data_status": "SCALP_MODE",
+            "data_warning": "Swing OI scanner is disabled in scalp_chain mode.",
+        }
 
     cached = cache.get("all_signals")
 
@@ -1764,5 +1821,4 @@ async def debug(x_debug_token: str = Header(default="")):
         "sample_rows":      sample,
         "price_sources":    {r.get("symbol"): r.get("price_source") for r in sample},
         "oi_field_usage":   sample_field_usage(),
-        "cas_time_ist":     oi_engine._last_cas_time_ist,
     }

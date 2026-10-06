@@ -236,6 +236,34 @@ class SignalRepository:
                     PRIMARY KEY(report_date, participant)
                 );
 
+                CREATE TABLE IF NOT EXISTS scalp_events (
+                    id INTEGER PRIMARY KEY,
+                    trade_date TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'scalp_chain',
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    strike REAL NOT NULL,
+                    option_type TEXT NOT NULL,
+                    expiry TEXT NOT NULL,
+                    entry_time_ist TEXT NOT NULL,
+                    exit_time_ist TEXT,
+                    underlying_entry REAL NOT NULL,
+                    underlying_exit REAL,
+                    entry_option_ltp REAL NOT NULL,
+                    exit_option_ltp REAL,
+                    hold_minutes REAL,
+                    exit_reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    rule_ids_json TEXT NOT NULL,
+                    chain_snapshot_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scalp_events_date
+                    ON scalp_events(trade_date, entry_time_ist DESC);
+                CREATE INDEX IF NOT EXISTS idx_scalp_events_open
+                    ON scalp_events(trade_date, status, symbol);
+
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER NOT NULL
                 );
@@ -510,6 +538,57 @@ class SignalRepository:
         return str(row["trade_date"]) if row and row["trade_date"] else None
 
 
+
+    def save_scalp_entry(self, event: dict[str, Any]) -> int:
+        with self._connect() as connection:
+            cur = connection.execute(
+                """INSERT INTO scalp_events
+                   (trade_date, mode, symbol, direction, strike, option_type, expiry,
+                    entry_time_ist, underlying_entry, entry_option_ltp, rule_ids_json,
+                    chain_snapshot_id, payload_json, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')""",
+                (
+                    event["trade_date"], event.get("mode", "scalp_chain"), event["symbol"],
+                    event["direction"], float(event["strike"]), event["option_type"],
+                    event["expiry"], event["entry_time_ist"], float(event["underlying_entry"]),
+                    float(event["entry_option_ltp"]), json.dumps(event.get("rule_ids", [])),
+                    event["chain_snapshot_id"], json.dumps(event, separators=(",", ":")),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def close_scalp(self, event_id: int, *, exit_time_ist: str, underlying_exit: float,
+                    exit_option_ltp: float, hold_minutes: float, exit_reason: str,
+                    payload: dict[str, Any] | None = None) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE scalp_events
+                   SET exit_time_ist=?, underlying_exit=?, exit_option_ltp=?,
+                       hold_minutes=?, exit_reason=?, status='CLOSED',
+                       payload_json=?
+                   WHERE id=?""",
+                (
+                    exit_time_ist, float(underlying_exit), float(exit_option_ltp),
+                    float(hold_minutes), str(exit_reason),
+                    json.dumps(payload or {}, separators=(",", ":")), int(event_id),
+                ),
+            )
+
+    def open_scalps(self, trade_date: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM scalp_events WHERE trade_date=? AND status='OPEN' ORDER BY entry_time_ist ASC",
+                (trade_date,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def scalp_events_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM scalp_events WHERE trade_date=? ORDER BY entry_time_ist DESC",
+                (trade_date,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def backtest_events(self, start_date: str, end_date: str, tier: str | None = "TRADE") -> list[dict[str, Any]]:
         """Return stored candidate events, including archive, for transparent analysis."""

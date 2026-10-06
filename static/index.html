@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>NSE F&O OI Scanner 📊</title>
+  <title>NSE OI Tracker · Angel Stock Option Scalper</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -69,8 +69,8 @@
               bg-green-400 rounded-full pulse-dot border-2 border-gray-900"></span>
       </div>
       <div>
-        <h1 class="text-base font-bold text-white leading-tight tracking-tight">NSE F&O OI Scanner</h1>
-        <p class="text-[10px] text-gray-500">Live NSE OI observations · validated signal layer · paper tracking only</p>
+        <h1 class="text-base font-bold text-white leading-tight tracking-tight" x-text="mode === 'scalp_chain' ? 'Angel Stock Option Scalper' : 'NSE F&O OI Scanner'"></h1>
+        <p class="text-[10px] text-gray-500" x-text="mode === 'scalp_chain' ? 'Angel One CE/PE near-ATM · paper only · hard 10-minute exit' : 'Legacy F&O OI research mode · not a scalp product'"></p>
       </div>
     </div>
 
@@ -121,7 +121,58 @@
   </div>
 </header>
 
-<main class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
+
+<main x-show="mode === 'scalp_chain'" class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
+  <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <div><h2 class="text-sm font-bold text-white">Stock Options Scalping · PAPER</h2>
+      <p class="text-[10px] text-gray-500">Underlying OR/VWAP impulse → Angel near-ATM CE/PE confirmation → exit within minutes.</p></div>
+      <div class="flex-1"></div>
+      <span class="badge bg-blue-950 text-blue-300 border-blue-800">ENTRY 09:30–14:30 IST</span>
+      <span class="badge bg-gray-800 text-gray-300 border-gray-700">MAX HOLD 10m</span>
+      <span class="badge bg-amber-950 text-amber-300 border-amber-800">NO LIVE ORDERS</span>
+    </div>
+  </section>
+  <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Open scalps</div><div class="text-2xl font-bold mono text-blue-300" x-text="scalpOpen.length"></div></div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Chain status</div><div class="text-sm font-bold" :class="scalpHealth.chain_ok ? 'text-green-400' : 'text-amber-400'" x-text="scalpHealth.chain_ok ? 'LIVE / CACHED' : 'WAITING'"></div></div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Universe</div><div class="text-sm font-bold mono text-gray-200" x-text="(scalpHealth.universe_size || 0) + ' stocks · top ' + (scalpHealth.top_n || 0)"></div></div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Last error</div><div class="text-[10px] text-amber-300 break-all" x-text="scalpHealth.last_error || 'none'"></div></div>
+  </section>
+  <section class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between"><h3 class="text-xs font-bold text-gray-200">Live scalps</h3><span class="text-[10px] text-gray-600 mono" x-text="scalpUpdated ? hm(scalpUpdated) + ' IST' : '—'"></span></div>
+    <div class="overflow-x-auto"><table class="w-full text-xs"><thead class="bg-gray-950 text-gray-500"><tr>
+      <th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-left">CE/PE</th><th class="px-3 py-2 text-right">Strike</th><th class="px-3 py-2 text-right">Entry</th><th class="px-3 py-2 text-right">Age (min)</th><th class="px-3 py-2 text-left">Status</th>
+    </tr></thead><tbody>
+      <template x-if="scalpOpen.length === 0"><tr><td colspan="6" class="px-4 py-8 text-center text-gray-600">No open paper scalps.</td></tr></template>
+      <template x-for="row in scalpOpen" :key="row.id"><tr class="border-t border-gray-800">
+        <td class="px-3 py-2.5 mono font-bold text-white" x-text="row.symbol"></td>
+        <td class="px-3 py-2.5 font-bold" :class="row.option_type === 'CE' ? 'text-green-400' : 'text-red-400'" x-text="row.option_type"></td>
+        <td class="px-3 py-2.5 text-right mono" x-text="fmt2(row.strike)"></td>
+        <td class="px-3 py-2.5 text-right mono" x-text="'₹' + fmt2(row.entry_option_ltp)"></td>
+        <td class="px-3 py-2.5 text-right mono" x-text="Number(row.hold_minutes || 0).toFixed(1)"></td>
+        <td class="px-3 py-2.5"><span class="badge bg-blue-950 text-blue-300 border-blue-800">OPEN · PAPER</span></td>
+      </tr></template>
+    </tbody></table></div>
+  </section>
+  <section class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-800"><h3 class="text-xs font-bold text-gray-200">Today · paper history</h3></div>
+    <div class="overflow-x-auto"><table class="w-full text-xs"><thead class="bg-gray-950 text-gray-500"><tr>
+      <th class="px-3 py-2 text-left">Entry</th><th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-left">CE/PE</th><th class="px-3 py-2 text-right">Strike</th><th class="px-3 py-2 text-right">Exit</th><th class="px-3 py-2 text-left">Reason</th><th class="px-3 py-2 text-right">Hold</th><th class="px-3 py-2 text-right">Premium P/L%</th>
+    </tr></thead><tbody>
+      <template x-if="scalpRecent.length === 0"><tr><td colspan="8" class="px-4 py-8 text-center text-gray-600">No scalp events yet today.</td></tr></template>
+      <template x-for="row in scalpRecent" :key="row.id"><tr class="border-t border-gray-800">
+        <td class="px-3 py-2 mono" x-text="hm(row.entry_time_ist)"></td><td class="px-3 py-2 mono font-bold" x-text="row.symbol"></td><td class="px-3 py-2" x-text="row.option_type"></td><td class="px-3 py-2 text-right mono" x-text="fmt2(row.strike)"></td>
+        <td class="px-3 py-2 text-right mono" x-text="row.exit_option_ltp ? '₹' + fmt2(row.exit_option_ltp) : '—'"></td>
+        <td class="px-3 py-2"><span class="badge bg-gray-800 text-gray-300 border-gray-700" x-text="row.exit_reason || 'OPEN'"></span></td>
+        <td class="px-3 py-2 text-right mono" x-text="row.hold_minutes != null ? Number(row.hold_minutes).toFixed(1) + 'm' : '—'"></td>
+        <td class="px-3 py-2 text-right mono" :class="Number(row.exit_option_ltp || 0) >= Number(row.entry_option_ltp || 0) ? 'text-green-400' : 'text-red-400'" x-text="row.exit_option_ltp ? (((Number(row.exit_option_ltp)-Number(row.entry_option_ltp))/Number(row.entry_option_ltp)*100).toFixed(2) + '%') : '—'"></td>
+      </tr></template>
+    </tbody></table></div>
+  </section>
+</main>
+
+<main x-show="mode !== 'scalp_chain'" class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
 
   <!-- Error banner -->
   <div x-show="error" x-transition
@@ -551,6 +602,7 @@ const SIGNAL_PARAMS = {
 function scanner() {
   return {
     /* ?? state ?? */
+    mode: 'scalp_chain', scalpOpen: [], scalpRecent: [], scalpHealth: {}, scalpUpdated: '',
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
     marketDataSource: '', oiSource: '', dataStatus: 'NOT_RUN', lastRefreshAt: '', isStale: false,
     marketOverview: null, marketOverviewError: '', marketOverviewFetchedAt: 0, marketOverviewLoading: false,
@@ -657,7 +709,16 @@ function scanner() {
       this.todayLabel = new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'short', day:'numeric' });
       this.tickClock();
       setInterval(() => this.tickClock(), 1000);
-      await Promise.all([this.fetchSignals(), this.fetchMarketOverview()]);
+      try {
+        const health = await fetch('/api/health').then(r => r.json());
+        this.mode = health.signal_mode || 'scalp_chain';
+        this.marketOpen = !!health.market_open;
+        this.marketStatusLabel = health.market_status_label || '';
+      } catch (e) {
+        this.error = 'Health check failed: ' + e.message;
+      }
+      if (this.mode === 'scalp_chain') await this.fetchScalp();
+      else await Promise.all([this.fetchSignals(), this.fetchMarketOverview()]);
       this.startTimer();
     },
 
@@ -677,17 +738,16 @@ function scanner() {
           clearInterval(t);
           // Signals and the index/VIX context both refresh on the same 60s cycle now; previously the
           // Market Context card only ever loaded once at page open, so its CMP went stale immediately.
-          Promise.all([this.fetchSignals(), this.fetchMarketOverview()]).then(() => this.startTimer());
+          (this.mode === 'scalp_chain' ? this.fetchScalp() : Promise.all([this.fetchSignals(), this.fetchMarketOverview()]))
+            .then(() => this.startTimer());
         }
       }, 1000);
     },
 
     async forceRefresh() {
       this.countdown = 60;
-      await Promise.all([
-        this.fetchSignals(true),
-        this.fetchMarketOverview(true),
-      ]);
+      if (this.mode === 'scalp_chain') await this.fetchScalp();
+      else await Promise.all([this.fetchSignals(true), this.fetchMarketOverview(true)]);
     },
 
     async fetchMarketOverview(force=false) {
@@ -714,6 +774,24 @@ function scanner() {
 
 
 
+
+    async fetchScalp() {
+      try {
+        const [live, health] = await Promise.all([
+          fetch('/api/scalp/live').then(r => r.json()),
+          fetch('/api/health').then(r => r.json())
+        ]);
+        this.scalpOpen = live.open || [];
+        this.scalpRecent = live.recent || [];
+        this.scalpUpdated = live.updated_at_ist || '';
+        this.scalpHealth = health.scalp || {};
+        this.marketOpen = !!health.market_open;
+        this.marketStatusLabel = health.market_status_label || '';
+        this.error = '';
+      } catch (e) {
+        this.error = 'Scalp data unavailable: ' + e.message;
+      }
+    },
 
     async fetchSignals(force=false) {
       this.loading = true; this.error = '';
