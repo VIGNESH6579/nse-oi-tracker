@@ -118,7 +118,10 @@ def run_stage(stage: str, probes: dict[str, Probe], now: datetime) -> dict[str, 
             ok, detail = False, f"{type(exc).__name__}: {str(exc)[:140]}"
         checks[name] = {"ok": bool(ok), "detail": detail}
     failed = [name for name, check in checks.items() if not check["ok"]]
-    critical = [name for name in failed if name in CRITICAL.get(stage, set())]
+    critical_set = CRITICAL.get(stage, set())
+    if stage == "post_open" and "scalp_chain" in checks:
+        critical_set = {"angel_session", "scalp_chain", "angel_equity_quotes"}
+    critical = [name for name in failed if name in critical_set]
     verdict = "READY" if not failed else ("BLOCKED" if critical else "DEGRADED")
     result = {"stage": stage, "at": now.isoformat(timespec="seconds"), "verdict": verdict, "failed": failed, "checks": checks}
     with _lock:
