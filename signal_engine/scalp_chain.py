@@ -364,29 +364,63 @@ class ScalpChainEngine:
             underlying = self._underlying_context(symbol)
             if not underlying:
                 continue
+            hold = _minutes_between(position["entry_time_ist"], now)
+
+            # TIME/CLOCK exits must not depend on another option-chain request.
+            # This guarantees every paper scalp is closed at the hard boundary
+            # even if Angel option quotes are temporarily unavailable.
+            if hold >= MAX_HOLD_MINUTES or not _before(now, ABSOLUTE_EXIT):
+                reason = "TIME" if hold >= MAX_HOLD_MINUTES else "CLOCK"
+                exit_ltp = float(position["entry_option_ltp"])
+                self.repository.close_scalp(
+                    int(position["id"]),
+                    exit_time_ist=now.isoformat(),
+                    underlying_exit=float(underlying["ltp"]),
+                    exit_option_ltp=exit_ltp,
+                    hold_minutes=hold,
+                    exit_reason=reason,
+                    payload={"option_quote_unavailable": True},
+                )
+                logger.info(
+                    "SCALP_EXIT PAPER symbol=%s reason=%s hold_minutes=%.2f option_ltp=%.2f",
+                    symbol, reason, hold, exit_ltp,
+                )
+                self._open.pop(symbol, None)
+                continue
+
             chain = self._chain(symbol, spot=float(underlying["ltp"]))
             if not chain:
                 continue
             option_type = position["option_type"]
-            row = next((r for r in chain.get("rows", []) if r.get("option_type") == option_type and float(r.get("strike") or 0) == float(position["strike"])), None)
+            row = next(
+                (r for r in chain.get("rows", [])
+                 if r.get("option_type") == option_type
+                 and float(r.get("strike") or 0) == float(position["strike"])),
+                None,
+            )
             if not row:
                 continue
-            reason = self._exit_reason(position, underlying, float(row["ltp"]), now)
+            option_ltp = float(row.get("ltp") or 0)
+            if option_ltp <= 0:
+                continue
+            reason = self._exit_reason(position, underlying, option_ltp, now)
             if not reason:
                 continue
             hold = _minutes_between(position["entry_time_ist"], now)
+            entry_ltp = float(position["entry_option_ltp"])
+            pnl_pct = ((option_ltp - entry_ltp) / entry_ltp * 100.0) if entry_ltp else 0.0
             self.repository.close_scalp(
                 int(position["id"]),
                 exit_time_ist=now.isoformat(),
                 underlying_exit=float(underlying["ltp"]),
-                exit_option_ltp=float(row["ltp"]),
+                exit_option_ltp=option_ltp,
                 hold_minutes=hold,
                 exit_reason=reason,
-                payload={"pnl_premium_pct": ((float(row["ltp"]) - float(position["entry_option_ltp"])) / float(position["entry_option_ltp"]) * 100.0) if position["entry_option_ltp"] else 0.0},
+                payload={"pnl_premium_pct": pnl_pct},
             )
             logger.info(
                 "SCALP_EXIT PAPER symbol=%s direction=%s option=%s strike=%s reason=%s hold_minutes=%.2f option_ltp=%.2f",
-                symbol, position["direction"], option_type, position["strike"], reason, hold, float(row["ltp"]),
+                symbol, position["direction"], option_type, position["strike"], reason, hold, option_ltp,
             )
             self._open.pop(symbol, None)
 
