@@ -134,10 +134,34 @@ class ScalpChainEngine:
         if cached and time.monotonic() - cached[0] < CHAIN_TTL_S:
             return cached[1]
         try:
-            chain = self.market_data.stock_option_chain_snapshot(key, strikes_each_side=1, spot=spot)
+            chain = self.market_data.option_chain_near_atm(key, spot, strikes_each_side=1)
             if not chain.get("ok"):
                 self._last_error = str(chain.get("reason") or "chain_unavailable")
                 return None
+            # Angel returns a compact strike ladder: [{strike, ce:{...}, pe:{...}}].
+            # Normalize it once to flat CE/PE rows so the state machine can apply
+            # the same rules to entry and exit without inventing any option data.
+            rows: list[dict[str, Any]] = []
+            for bucket in chain.get("chain") or []:
+                strike = float(bucket.get("strike") or 0)
+                for side in ("CE", "PE"):
+                    leg = bucket.get("ce" if side == "CE" else "pe")
+                    if not leg:
+                        continue
+                    rows.append({
+                        "strike": strike,
+                        "option_type": side,
+                        "token": leg.get("token"),
+                        "symbol": leg.get("symbol"),
+                        "ltp": float(leg.get("ltp") or 0),
+                        "oi": float(leg.get("oi") or 0),
+                        "volume": float(leg.get("volume") or 0),
+                        "trading_symbol": leg.get("trading_symbol"),
+                    })
+            if not rows:
+                self._last_error = "chain_no_option_rows"
+                return None
+            chain["rows"] = rows
             self._chain_cache[key] = (time.monotonic(), chain)
             return chain
         except AngelUnavailable as exc:
@@ -149,7 +173,7 @@ class ScalpChainEngine:
             return None
 
     def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
-        candles = self.stream.recent_candles_for_symbol(symbol, limit=12)
+        candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
         if len(candles) < 4:
             return None
         today = now_ist().date()
