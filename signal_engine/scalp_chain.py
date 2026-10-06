@@ -241,6 +241,25 @@ class ScalpChainEngine:
             "rule": "CHAIN_PREMIUM_RISING_AND_DIRECTIONAL_OI",
         }
 
+    def probe_chain(self, symbol: str = "RELIANCE") -> tuple[bool, str]:
+        """One bounded live chain probe used by readiness/self-test."""
+        try:
+            self.stream.ensure_symbols([symbol])
+            tick = self.stream.latest_tick_for_symbol(symbol, max_age_s=15.0)
+            spot = float((tick or {}).get("ltp") or 0)
+            if spot <= 0 and self.market_data is not None:
+                quote = self.market_data.full_quotes([symbol]).get(symbol) or {}
+                spot = float(quote.get("ltp") or 0)
+            chain = self._chain(symbol, spot=spot)
+            if not chain:
+                return False, f"{symbol} chain unavailable"
+            rows = chain.get("rows") or []
+            ce = sum(1 for row in rows if row.get("option_type") == "CE")
+            pe = sum(1 for row in rows if row.get("option_type") == "PE")
+            return ce > 0 and pe > 0, f"{symbol} expiry={chain.get('expiry')} atm={chain.get('atm_strike')} CE={ce} PE={pe}"
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {str(exc)[:120]}"
+
     def _candidate_contexts(self) -> list[dict[str, Any]]:
         try:
             self.stream.ensure_symbols(self.universe)
