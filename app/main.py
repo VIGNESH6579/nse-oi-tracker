@@ -1398,6 +1398,8 @@ async def health():
         "snapshot_backend": "github" if os.getenv("NSE_OI_BACKUP_GITHUB_REPO") and os.getenv("NSE_OI_BACKUP_GITHUB_TOKEN") else "url" if os.getenv("NSE_OI_BACKUP_URL") else "none",
         "angel":         angel_state,
         "angel_stream":  angel_stream.health(),
+        "signal_mode": SIGNAL_MODE,
+        "scalp": scalp_engine.health(),
         "database":       "ready",
         "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "memory_rss_peak_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
@@ -1496,6 +1498,29 @@ async def sources():
             "stream": angel_stream.health(),
         },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
+    }
+
+
+@app.get("/api/scalp/live")
+async def scalp_live():
+    """Current open and recent Angel option-chain paper scalps."""
+    if SIGNAL_MODE != "scalp_chain":
+        return {"mode": SIGNAL_MODE, "paper_only": True, "open": [], "recent": [],
+                "data_warning": "Scalp mode is disabled; SIGNAL_MODE is swing_oi."}
+    return scalp_engine.live()
+
+
+@app.get("/api/scalp/history/today")
+async def scalp_history_today():
+    """Today’s persisted scalp paper events with entry/exit/hold metadata."""
+    trade_date = ist_trade_date(now_ist())
+    rows = await asyncio.to_thread(repository.scalp_events_for_date, trade_date)
+    return {
+        "mode": SIGNAL_MODE,
+        "paper_only": True,
+        "trade_date": trade_date,
+        "events": rows,
+        "count": len(rows),
     }
 
 
