@@ -317,8 +317,6 @@ class ScalpChainEngine:
         hold = _minutes_between(position["entry_time_ist"], now)
         if hold >= MAX_HOLD_MINUTES:
             return "TIME"
-        if not _before(now, ABSOLUTE_EXIT):
-            return "CLOCK"
         direction = position["direction"]
         if direction == "BUY" and (float(underlying["ltp"]) <= float(underlying["vwap"]) or float(underlying["ltp"]) < float(underlying["or_high"])):
             return "UNDERLYING_REVERSE"
@@ -330,6 +328,8 @@ class ScalpChainEngine:
             return "OPTION_STOP"
         if OPTION_TARGET_PCT > 0 and change_pct >= OPTION_TARGET_PCT:
             return "OPTION_TARGET"
+        if not _before(now, ABSOLUTE_EXIT):
+            return "CLOCK"
         return None
 
     def _manage_open(self) -> None:
