@@ -1501,6 +1501,27 @@ async def sources():
     }
 
 
+@app.get("/api/option-chain/{symbol}")
+async def option_chain(symbol: str, strikes: int = Query(1, ge=0, le=2)):
+    """Read-only Angel One near-ATM stock option chain for one symbol."""
+    if angel_market_data is None or not angel_market_data.configured:
+        raise HTTPException(status_code=503, detail="Angel One market data is not configured")
+    symbol = symbol.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+    quotes = await asyncio.to_thread(angel_market_data.full_quotes, [symbol])
+    spot = float((quotes.get(symbol) or {}).get("ltp") or 0)
+    result = await asyncio.to_thread(
+        angel_market_data.option_chain_near_atm,
+        symbol,
+        spot,
+        strikes_each_side=strikes,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("error") or "Angel option chain unavailable")
+    return result
+
+
 @app.get("/api/scalp/live")
 async def scalp_live():
     """Current open and recent Angel option-chain paper scalps."""
