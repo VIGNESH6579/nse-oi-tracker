@@ -508,7 +508,7 @@ class AngelOneMarketData:
         return candles
 
 
-    def stock_option_chain_snapshot(self, symbol: str, *, strikes_each_side: int = 1) -> dict:
+    def stock_option_chain_snapshot(self, symbol: str, *, strikes_each_side: int = 1, spot: float | None = None) -> dict:
         """Read a tiny near-ATM stock option chain using Angel instruments + quotes only.
 
         Angel does not require NSE's public option-chain HTML here: the daily Angel
