@@ -134,10 +134,31 @@ class ScalpChainEngine:
         if cached and time.monotonic() - cached[0] < CHAIN_TTL_S:
             return cached[1]
         try:
-            chain = self.market_data.stock_option_chain_snapshot(key, strikes_each_side=1, spot=spot)
+            chain = self.market_data.option_chain_near_atm(key, spot, strikes_each_side=1)
             if not chain.get("ok"):
                 self._last_error = str(chain.get("reason") or "chain_unavailable")
                 return None
+            rows: list[dict[str, Any]] = []
+            for bucket in chain.get("chain") or []:
+                strike = float(bucket.get("strike") or 0)
+                for side in ("CE", "PE"):
+                    leg = bucket.get("ce" if side == "CE" else "pe")
+                    if not leg:
+                        continue
+                    rows.append({
+                        "strike": strike,
+                        "option_type": side,
+                        "token": leg.get("token"),
+                        "symbol": leg.get("symbol"),
+                        "ltp": float(leg.get("ltp") or 0),
+                        "oi": float(leg.get("oi") or 0),
+                        "volume": float(leg.get("volume") or 0),
+                        "trading_symbol": leg.get("trading_symbol"),
+                    })
+            if not rows:
+                self._last_error = "chain_no_option_rows"
+                return None
+            chain["rows"] = rows
             self._chain_cache[key] = (time.monotonic(), chain)
             return chain
         except AngelUnavailable as exc:
@@ -149,7 +170,7 @@ class ScalpChainEngine:
             return None
 
     def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
-        candles = self.stream.recent_candles_for_symbol(symbol, limit=12)
+        candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
         if len(candles) < 4:
             return None
         today = now_ist().date()
@@ -340,29 +361,58 @@ class ScalpChainEngine:
             underlying = self._underlying_context(symbol)
             if not underlying:
                 continue
+            hold = _minutes_between(position["entry_time_ist"], now)
+            if hold >= MAX_HOLD_MINUTES or not _before(now, ABSOLUTE_EXIT):
+                reason = "TIME" if hold >= MAX_HOLD_MINUTES else "CLOCK"
+                exit_ltp = float(position["entry_option_ltp"])
+                self.repository.close_scalp(
+                    int(position["id"]),
+                    exit_time_ist=now.isoformat(),
+                    underlying_exit=float(underlying["ltp"]),
+                    exit_option_ltp=exit_ltp,
+                    hold_minutes=hold,
+                    exit_reason=reason,
+                    payload={"option_quote_unavailable": True},
+                )
+                logger.info(
+                    "SCALP_EXIT PAPER symbol=%s reason=%s hold_minutes=%.2f option_ltp=%.2f",
+                    symbol, reason, hold, exit_ltp,
+                )
+                self._open.pop(symbol, None)
+                continue
             chain = self._chain(symbol, spot=float(underlying["ltp"]))
             if not chain:
                 continue
             option_type = position["option_type"]
-            row = next((r for r in chain.get("rows", []) if r.get("option_type") == option_type and float(r.get("strike") or 0) == float(position["strike"])), None)
+            row = next(
+                (r for r in chain.get("rows", [])
+                 if r.get("option_type") == option_type
+                 and float(r.get("strike") or 0) == float(position["strike"])),
+                None,
+            )
             if not row:
                 continue
-            reason = self._exit_reason(position, underlying, float(row["ltp"]), now)
+            option_ltp = float(row.get("ltp") or 0)
+            if option_ltp <= 0:
+                continue
+            reason = self._exit_reason(position, underlying, option_ltp, now)
             if not reason:
                 continue
             hold = _minutes_between(position["entry_time_ist"], now)
+            entry_ltp = float(position["entry_option_ltp"])
+            pnl_pct = ((option_ltp - entry_ltp) / entry_ltp * 100.0) if entry_ltp else 0.0
             self.repository.close_scalp(
                 int(position["id"]),
                 exit_time_ist=now.isoformat(),
                 underlying_exit=float(underlying["ltp"]),
-                exit_option_ltp=float(row["ltp"]),
+                exit_option_ltp=option_ltp,
                 hold_minutes=hold,
                 exit_reason=reason,
-                payload={"pnl_premium_pct": ((float(row["ltp"]) - float(position["entry_option_ltp"])) / float(position["entry_option_ltp"]) * 100.0) if position["entry_option_ltp"] else 0.0},
+                payload={"pnl_premium_pct": pnl_pct},
             )
             logger.info(
                 "SCALP_EXIT PAPER symbol=%s direction=%s option=%s strike=%s reason=%s hold_minutes=%.2f option_ltp=%.2f",
-                symbol, position["direction"], option_type, position["strike"], reason, hold, float(row["ltp"]),
+                symbol, position["direction"], option_type, position["strike"], reason, hold, option_ltp,
             )
             self._open.pop(symbol, None)
 
