@@ -1,7 +1,7 @@
 """Angel One stock-option scalping paper engine.
 
 This module is deliberately separate from the legacy F&O OI swing scanner.
-It has no order-placement code and no CAS/regime-entry dependency.
+It has no order-placement code and no regime-as-entry dependency.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, time as dt_time
 from typing import Any
 
-from collector.fno_ban import banned_symbols
+from collector.fno_ban import banned_symbols, ban_info
 from utils.time import now_ist
 from integrations.angel_one_market_data import AngelOneMarketData, AngelUnavailable
 from integrations.angel_one_stream import AngelOneMarketStream
@@ -377,6 +377,11 @@ class ScalpChainEngine:
         if not _in_window(now, ENTRY_START, ENTRY_END):
             return
         if len(self._open) >= MAX_CONCURRENT:
+            return
+        ban_status = ban_info()
+        if not bool(ban_status.get("ban_list_ok")):
+            self._last_error = "fo_ban_list_unavailable"
+            logger.warning("SCALP_SKIP reason=fo_ban_list_unavailable")
             return
         blocked = {str(x).upper() for x in banned_symbols()}
         for candidate in self._candidate_contexts():
