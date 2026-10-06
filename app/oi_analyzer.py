@@ -13,8 +13,7 @@
 from __future__ import annotations
 import logging
 import os
-from datetime import datetime, time as dt_time
-from zoneinfo import ZoneInfo
+from datetime import datetime
 from app.config import (
     PRICE_CHANGE_THRESHOLD, OI_CHANGE_THRESHOLD,
     MIN_OI_ABSOLUTE, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM,
@@ -34,7 +33,6 @@ SIGNAL_LONG_BUILDUP   = "LONG_BUILDUP"
 SIGNAL_SHORT_BUILDUP  = "SHORT_BUILDUP"
 SIGNAL_SHORT_COVERING = "SHORT_COVERING"
 SIGNAL_LONG_UNWINDING = "LONG_UNWINDING"
-SIGNAL_CAS_SHORT_COVERING = "CAS_SHORT_COVERING"
 SIGNAL_NEUTRAL        = "NEUTRAL"
 
 SIGNAL_META = {
@@ -42,7 +40,6 @@ SIGNAL_META = {
     SIGNAL_SHORT_BUILDUP:  {"label":"Short Buildup",  "emoji":"🔴","color":"red",    "bias":"Bearish",      "direction":"SELL"},
     SIGNAL_SHORT_COVERING: {"label":"Short Covering", "emoji":"🟡","color":"yellow", "bias":"Bullish Fade", "direction":"BUY"},
         SIGNAL_LONG_UNWINDING: {"label":"Long Unwinding", "emoji":"🟠","color":"orange", "bias":"Bearish Fade",     "direction":"SELL"},
-    SIGNAL_CAS_SHORT_COVERING: {"label":"CAS Short Covering", "emoji":"⚡","color":"lime", "bias":"Strong Bullish Next Day", "direction":"BUY"},
     SIGNAL_NEUTRAL:        {"label":"Neutral",        "emoji":"⚪","color":"gray",   "bias":"Sideways",     "direction":"NONE"},
 }
 
@@ -57,9 +54,7 @@ CATEGORY_TO_SIGNAL = {
 
 # ── Signal classifier ─────────────────────────────────────────────────────────
 
-_IST = ZoneInfo("Asia/Kolkata")
 _field_usage: dict[str, dict[str, str | None]] = {}
-_last_cas_time_ist: str | None = None
 _last_scan_data_status = "NOT_RUN"
 # symbol -> (direction, consecutive scan count). A reversal resets the count,
 # preventing rapid opposing signals for the same stock from being published.
@@ -80,21 +75,6 @@ def sample_field_usage(limit: int = 5) -> dict[str, dict[str, str | None]]:
     on the most recent scan.
     """
     return dict(list(_field_usage.items())[:limit])
-
-
-def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pct: float) -> bool:
-    """Return true for a strong 15:30–15:40 IST price jump with OI covering."""
-    try:
-        if isinstance(time_ist, datetime):
-            current = time_ist.astimezone(_IST).time()
-        elif hasattr(time_ist, "hour"):
-            current = time_ist
-        else:
-            current = datetime.strptime(str(time_ist).strip(), "%H:%M:%S").time()
-        return bool(dt_time(15, 30) <= current < dt_time(15, 40)
-                    and price_change_pct > 1.5 and oi_change_pct < -3.0)
-    except (TypeError, ValueError):
-        return False
 
 
 from analytics.oi_window import OIWindow
@@ -218,11 +198,9 @@ def _first_numeric(row: dict, fields: tuple[str, ...]) -> tuple[float, str | Non
 
 
 def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                      signal, is_cas_jump=False, low_liquidity=False, source=None) -> dict:
+                      signal, low_liquidity=False, source=None) -> dict:
     meta = SIGNAL_META[signal]
     conf = confidence_score(price_chg_p, oi_chg_p, oi)
-    if is_cas_jump and signal == SIGNAL_CAS_SHORT_COVERING:
-        conf = min(conf + 15, 100)
     tier = "LOW" if low_liquidity else confidence_tier(conf)
     strg = signal_strength(price_chg_p, oi_chg_p)
     confirmed, missing = score_factors(price_chg_p, oi_chg_p, oi)
@@ -250,7 +228,6 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
         "missing_factors":   missing,
         "trade_recommendation": "NO_TRADE",
         "actionable":       actionable,
-        "is_cas_jump": bool(is_cas_jump),
     }
 
 
@@ -365,17 +342,11 @@ def _parse_row(row: dict) -> dict | None:
 
     low_liquidity = oi > 0 and oi < MIN_OI_ABSOLUTE
     signal = classify_signal(price_chg_p, oi_chg_p)
-    global _last_cas_time_ist
-    scan_time = datetime.now(_IST)
-    cas_jump = detect_cas_jump(sym, price_chg_p, scan_time, oi_chg_p)
-    if cas_jump:
-        _last_cas_time_ist = scan_time.strftime("%Y-%m-%d %H:%M:%S %Z")
-        signal = SIGNAL_CAS_SHORT_COVERING
     if signal == SIGNAL_NEUTRAL:
         return None
 
     result = _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity,
+                               signal, low_liquidity=low_liquidity,
                                source=row.get("_data_source"))
 
     # Keep LOW rows classified for diagnostics; scan_all_fno_realtime filters them.
