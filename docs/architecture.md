@@ -79,7 +79,7 @@ as live. Public NSE endpoints can rate-limit or change without notice.
 - `collector/`: bounded full-file bhavcopy ingestion and backfill.
 - `collector/participant_oi.py`: NSE participant-wise OI end-of-day report
   parsing and date-preserving normalization.
-- `analytics/`: technical/regime/CAS context, disclosure risk, option-chain
+- `analytics/`: technical/regime context, disclosure risk, Angel option-chain
   summaries, OI heatmap transformations, trap-risk checks, and candidate
   outcome analysis.
 - `signal_engine/`: candidate-quality boundary and fallback risk-plan rules.
