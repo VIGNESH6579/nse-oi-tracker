@@ -745,17 +745,26 @@ async def _startup_backfill_then_retest() -> None:
     backfill it depends on has finished. Re-running once, only after the
     backfill task itself completes, closes that gap without ever blocking
     startup and without changing the backfill's own bounded behaviour.
+
+    Free-tier cold starts frequently happen outside market hours. A pre_open
+    critical failure in that window must not permanently BLOCK the process:
+    the 5-minute readiness recheck (and the next post_open) can recover.
+    Backfill timeout/failure still records the error but uses DEGRADED when
+    the market is closed so overnight boots remain usable.
     """
+    market_open_now = is_market_open()
     try:
         await asyncio.wait_for(automatic_startup_backfill(), timeout=180)
     except asyncio.TimeoutError:
-        logger.error("Startup Bhavcopy backfill timed out after 180s; readiness remains fail-closed")
-        _startup_state = "BLOCKED"
+        logger.error("Startup Bhavcopy backfill timed out after 180s")
+        # Fail closed only while the market is open; overnight keep DEGRADED
+        # so a later post_open / readiness recheck can still promote to READY.
+        _startup_state = "BLOCKED" if market_open_now else "DEGRADED"
         _startup_error = "startup Bhavcopy backfill timed out"
         return
     except Exception:
         logger.exception("Startup backfill wrapper failed")
-        _startup_state = "BLOCKED"
+        _startup_state = "BLOCKED" if market_open_now else "DEGRADED"
         _startup_error = "startup Bhavcopy backfill failed"
         return
     try:
