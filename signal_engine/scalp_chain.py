@@ -81,6 +81,7 @@ class ScalpChainEngine:
         self._open: dict[str, dict[str, Any]] = {}
         self._last_run_at = 0.0
         self._last_error = ""
+        self._last_ban_warning_at = 0.0
         self._load_open_events()
 
     def _load_universe(self) -> list[str]:
@@ -430,10 +431,15 @@ class ScalpChainEngine:
             return
         ban_status = ban_info()
         if not bool(ban_status.get("ban_list_ok")):
+            # A missing ban feed must not freeze the optional scalp engine. Treat
+            # it as empty for this paper-only path and warn at most once per interval.
             self._last_error = "fo_ban_list_unavailable"
-            logger.warning("SCALP_SKIP reason=fo_ban_list_unavailable")
-            return
-        blocked = {str(x).upper() for x in banned_symbols()}
+            if time.monotonic() - self._last_ban_warning_at >= 300.0:
+                logger.warning("SCALP_BAN_LIST_UNAVAILABLE: continuing with empty ban set")
+                self._last_ban_warning_at = time.monotonic()
+            blocked = set()
+        else:
+            blocked = {str(x).upper() for x in banned_symbols()}
         for candidate in self._candidate_contexts():
             if candidate["symbol"] in blocked:
                 continue
