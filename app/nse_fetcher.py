@@ -365,6 +365,9 @@ _price_snapshots: OrderedDict[str, float] = OrderedDict()
 _price_snapshot_lock = RLock()
 MAX_PRICE_SNAPSHOTS = 1_000
 _INDEX_PREVIOUS_CLOSES: dict[str, float] = {}
+_LAST_ANGEL_OI_ROWS: list[dict] = []
+_LAST_NSE_SPURTS_AT = 0.0
+NSE_OI_SPURTS_RETRY_S = float(os.getenv("NSE_OI_SPURTS_RETRY_S", "300"))
 _INDEX_PREVIOUS_CLOSES_AT = 0.0
 INDEX_PREVIOUS_CLOSE_TTL_SECONDS = 600
 _INDEX_NAMES = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK", "FINNIFTY": "NIFTY FINANCIAL SERVICES", "MIDCPNIFTY": "NIFTY MIDCAP SELECT"}
@@ -434,59 +437,63 @@ def _stored_previous_close(symbol: str, *, today: date | None = None) -> float |
         return None
 
 
-def fetch_all_fno_oi_change() -> list[dict]:
-    """
-    Fetch OI + price data for ALL F&O underlyings.
-
-    IMPORTANT: this used to unconditionally overwrite NSE's own price-change
-    fields with a 60-second poll-to-poll delta computed from an in-memory
-    snapshot. That silently downgraded a proper day-relative % change into
-    minute-level noise on every cycle after the first, which starved the
-    HIGH-confidence signal filter (it compares that price delta against an
-    OI-change % that IS day/session relative ? comparing two different
-    timeframes made the whole signal matrix statistically broken).
-
-    Fixed behavior: NSE's own price-change fields are used whenever present.
-    The rolling snapshot below is now only a FALLBACK for rows where NSE's
-    payload genuinely omits any price-change field (this does happen for
-    some underlyings on this endpoint) ? in that case only, we fall back to
-    a same-poll-interval delta so the row isn't dropped outright.
-    """
-    data = _nse.get(
-        f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings",
-        referer=f"{NSE_BASE}/market-data/oi-spurts",
-    )
-    if not data or not (data.get("data")):
-        logger.info("OI spurts direct get empty or challenged, attempting seeded fetch")
-        data = _nse.get_seeded(
-            seed_url=f"{NSE_BASE}/market-data/oi-spurts",
-            seed_referer=f"{NSE_BASE}/",
-            api_url=f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings",
-            api_referer=f"{NSE_BASE}/market-data/oi-spurts",
-        )
-    if not data:
-        if _angel_fno and _angel_fno.configured:
-            try:
-                fallback = _angel_fno.fno_quotes()
-                if fallback:
-                    logger.warning("Using Angel One NFO futures fallback for %s OI rows", len(fallback))
-                    return [
-                        {
-                            "symbol": symbol,
-                            "ltp": quote.get("ltp", 0),
-                            "underlyingValue": quote.get("ltp", 0),
-                            "oi": quote.get("oi", 0),
-                            "oiChange": quote.get("oi_change", 0),
-                            "oiChangePct": quote.get("oi_change_pct", 0),
-                            "pChange": quote.get("change_pct", 0),
-                            "change": 0,
-                            "_data_source": quote.get("source"),
-                        }
-                        for symbol, quote in fallback.items()
-                    ]
-            except Exception:
-                logger.exception("Angel One NFO futures OI fallback failed")
+def _angel_fno_oi_rows() -> list[dict]:
+    """Primary live OI path on Render: Angel NFO futures quotes."""
+    global _LAST_ANGEL_OI_ROWS
+    if not (_angel_fno and _angel_fno.configured):
         return []
+    try:
+        fallback = _angel_fno.fno_quotes()
+    except Exception:
+        logger.exception("Angel One NFO futures OI failed")
+        return list(_LAST_ANGEL_OI_ROWS)
+    if not fallback:
+        return list(_LAST_ANGEL_OI_ROWS)
+    rows = [
+        {
+            "symbol": symbol,
+            "ltp": quote.get("ltp", 0),
+            "underlyingValue": quote.get("ltp", 0),
+            "oi": quote.get("oi", 0),
+            "oiChange": quote.get("oi_change", 0),
+            "oiChangePct": quote.get("oi_change_pct", 0),
+            "pChange": quote.get("change_pct", 0),
+            "change": 0,
+            "_data_source": quote.get("source") or "angel_futures",
+        }
+        for symbol, quote in fallback.items()
+    ]
+    _LAST_ANGEL_OI_ROWS = rows
+    return rows
+
+
+def fetch_all_fno_oi_change() -> list[dict]:
+    """Fetch OI + price for all F&O underlyings.
+
+    Angel NFO futures are primary on cloud IPs. NSE public OI-spurts is a
+    throttled last-resort (Render almost always gets HTTP 403).
+    """
+    global _LAST_NSE_SPURTS_AT
+    angel_rows = _angel_fno_oi_rows()
+    if angel_rows and len(angel_rows) >= 50:
+        logger.info("Angel NFO futures OI: %s rows (NSE spurts skipped)", len(angel_rows))
+        return angel_rows
+
+    now = time.time()
+    data = None
+    if now - _LAST_NSE_SPURTS_AT >= NSE_OI_SPURTS_RETRY_S:
+        _LAST_NSE_SPURTS_AT = now
+        data = _nse.get(
+            f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings",
+            referer=f"{NSE_BASE}/market-data/oi-spurts",
+        )
+        if not data or not (data.get("data")):
+            logger.warning("NSE OI spurts unavailable (throttled retry in %.0fs)", NSE_OI_SPURTS_RETRY_S)
+            data = None
+    if not data:
+        if angel_rows:
+            return angel_rows
+        return list(_LAST_ANGEL_OI_ROWS)
     rows = data.get("data", [])
     enriched_rows: list[dict] = []
     with _price_snapshot_lock:
