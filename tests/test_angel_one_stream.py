@@ -148,3 +148,10 @@ def test_subscription_payload_uses_ten_character_correlation_id():
 
 def test_text_heartbeat_interval_is_thirty_seconds():
     assert TEXT_HEARTBEAT_INTERVAL_SECONDS == 30
+
+
+def test_latest_tick_for_symbol_missing_safe():
+    stream = AngelOneMarketStream(None, enabled=False)
+    assert stream.latest_tick_for_symbol("RELIANCE") is None
+    stream._symbol_tokens["RELIANCE"] = (1, "999")
+    assert stream.latest_tick_for_symbol("RELIANCE") is None
