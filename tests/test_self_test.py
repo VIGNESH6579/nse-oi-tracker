@@ -186,3 +186,12 @@ def test_readiness_reports_ready_once_a_scan_has_actually_completed():
 
     assert body["last_scan_at"] == "2026-09-24T09:20:00+05:30"
     assert body["readiness"] == "READY"
+
+
+def test_scalp_failure_is_not_core_blocker(tmp_path):
+    repo = _repo(tmp_path, ["A", "B", "C"])
+    probes = _probes("post_open", FakeAngel(), repo, ["A"])
+    probes["scalp_chain"] = lambda: (False, "latest_tick unavailable")
+    result = st.run_stage("post_open", probes, NOW)
+    assert result["verdict"] == "DEGRADED"
+    assert "scalp_chain" in result["failed"]

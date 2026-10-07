@@ -495,7 +495,7 @@ async def scheduled_refresh() -> None:
     """Refresh the legacy swing OI scanner only when that mode is selected."""
     global _scheduler_heartbeat_at_ist
     _scheduler_heartbeat_at_ist = now_ist().isoformat()
-    if SIGNAL_MODE != "swing_oi" or not is_market_open():
+    if not is_market_open():
         return
     try:
         await refresh_signals()

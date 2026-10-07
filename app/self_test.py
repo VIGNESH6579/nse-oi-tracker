@@ -96,10 +96,11 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
         return scalp.probe_chain("RELIANCE")
 
     if mode == "scalp_chain":
-        if stage == "pre_open":
-            return {"angel_session": session, "angel_daily_candles": daily_candles}
+        # Scalp is an optional product path. Keep the same core readiness
+        # probes as the OI scanner and append the scalp probe as non-critical.
         if stage == "post_open":
-            return {"angel_session": session, "scalp_chain": scalp_chain, "angel_equity_quotes": equity_quotes}
+            return {"oi_rows": oi_rows, "oi_window_depth": window_ok, "angel_intraday_candles": intraday_candles,
+                    "angel_equity_quotes": equity_quotes, "angel_futures_oi": futures_oi, "scalp_chain": scalp_chain}
     if stage == "pre_open":
         return {"angel_session": session, "angel_daily_candles": daily_candles, "bars_coverage": bars_coverage,
                 "fno_universe": universe_size, "index_bars": index_bars, "ban_list": ban_list}
@@ -119,8 +120,6 @@ def run_stage(stage: str, probes: dict[str, Probe], now: datetime) -> dict[str, 
         checks[name] = {"ok": bool(ok), "detail": detail}
     failed = [name for name, check in checks.items() if not check["ok"]]
     critical_set = CRITICAL.get(stage, set())
-    if stage == "post_open" and "scalp_chain" in checks:
-        critical_set = {"angel_session", "scalp_chain", "angel_equity_quotes"}
     critical = [name for name in failed if name in critical_set]
     verdict = "READY" if not failed else ("BLOCKED" if critical else "DEGRADED")
     result = {"stage": stage, "at": now.isoformat(timespec="seconds"), "verdict": verdict, "failed": failed, "checks": checks}
