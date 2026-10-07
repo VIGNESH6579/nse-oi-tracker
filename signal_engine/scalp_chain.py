@@ -30,7 +30,7 @@ MAX_CONCURRENT = int(os.getenv("SCALP_MAX_CONCURRENT", "3"))
 OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
 OPTION_TARGET_PCT = float(os.getenv("SCALP_OPTION_TARGET_PCT", "20"))
 CHAIN_TTL_S = float(os.getenv("SCALP_CHAIN_TTL_S", "20"))
-TOP_N = int(os.getenv("SCALP_TOP_N", "10"))
+TOP_N = int(os.getenv("SCALP_CHAIN_TOP_N", os.getenv("SCALP_TOP_N", "5")))
 MIN_OPTION_OI = int(os.getenv("SCALP_MIN_OPTION_OI", "10000"))
 MIN_OPTION_VOLUME = int(os.getenv("SCALP_MIN_OPTION_VOLUME", "100"))
 MOMENTUM_MIN_PCT = float(os.getenv("SCALP_MOMENTUM_MIN_PCT", "0.20"))
@@ -135,7 +135,7 @@ class ScalpChainEngine:
         if cached and time.monotonic() - cached[0] < CHAIN_TTL_S:
             return cached[1]
         try:
-            chain = self.market_data.option_chain_near_atm(key, spot, strikes_each_side=1)
+            chain = self.market_data.option_chain_near_atm(key, spot, strikes_each_side=max(0, min(2, int(os.getenv("SCALP_STRIKES_SIDE", "1")))))
             if not chain.get("ok"):
                 self._last_error = str(chain.get("reason") or "chain_unavailable")
                 return None
