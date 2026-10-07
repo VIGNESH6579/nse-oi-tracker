@@ -652,6 +652,10 @@ class AngelOneMarketData:
         return candles
 
 
+    def stock_option_chain_snapshot(self, symbol: str, *, strikes_each_side: int = 1, spot: float | None = None) -> dict:
+        """Backward-compatible wrapper for the bounded on-demand chain."""
+        return self.option_chain_near_atm(symbol, float(spot or 0), strikes_each_side=strikes_each_side)
+
     def daily_candles(self, symbol: str, *, days: int = 90, exchange: str = "NSE") -> list[dict]:
         """Fetch bounded daily OHLCV candles for an equity or supported index."""
         return self.intraday_candles(symbol, interval="ONE_DAY", exchange=exchange, days=max(1, days))
