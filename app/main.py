@@ -1503,23 +1503,20 @@ async def sources():
 
 @app.get("/api/option-chain/{symbol}")
 async def option_chain(symbol: str, strikes: int = Query(1, ge=0, le=2)):
-    """Read-only Angel One near-ATM stock option chain for one symbol."""
-    if angel_market_data is None or not angel_market_data.configured:
-        raise HTTPException(status_code=503, detail="Angel One market data is not configured")
+    """Read-only bounded Angel One near-ATM stock option chain."""
     symbol = symbol.strip().upper()
     if not symbol:
-        raise HTTPException(status_code=400, detail="symbol is required")
-    quotes = await asyncio.to_thread(angel_market_data.full_quotes, [symbol])
-    spot = float((quotes.get(symbol) or {}).get("ltp") or 0)
-    result = await asyncio.to_thread(
-        angel_market_data.option_chain_near_atm,
-        symbol,
-        spot,
-        strikes_each_side=strikes,
-    )
-    if not result.get("ok"):
-        raise HTTPException(status_code=503, detail=result.get("error") or "Angel option chain unavailable")
-    return result
+        return {"ok": False, "error": "symbol is required", "source": "angel_one_on_demand_opt"}
+    if angel_market_data is None or not angel_market_data.configured:
+        return {"ok": False, "underlying": symbol, "chain": [], "error": "Angel One market data is not configured", "source": "angel_one_on_demand_opt"}
+    try:
+        quotes = await asyncio.to_thread(angel_market_data.full_quotes, [symbol])
+        spot = float((quotes.get(symbol) or {}).get("ltp") or 0)
+        result = await asyncio.to_thread(angel_market_data.option_chain_near_atm, symbol, spot, strikes_each_side=strikes)
+        return result
+    except Exception as exc:
+        logger.warning("Option chain route failed symbol=%s error=%s", symbol, type(exc).__name__)
+        return {"ok": False, "underlying": symbol, "spot": spot if "spot" in locals() else 0, "chain": [], "error": f"{type(exc).__name__}: {str(exc)[:160]}", "source": "angel_one_on_demand_opt"}
 
 
 @app.get("/api/scalp/live")
