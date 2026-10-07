@@ -1040,10 +1040,24 @@ async def scheduled_self_test(stage: str) -> None:
 
 
 async def scheduled_readiness_recheck() -> None:
-    """Re-run critical post-open readiness checks while the market is active."""
+    """Re-run post-open readiness and keep the public startup state synchronized."""
+    global _startup_state, _startup_error, _startup_ready_at_ist
     if not is_market_open() or is_trading_holiday(now_ist().date()) is True:
         return
     await scheduled_self_test("post_open")
+    verdict = self_test.readiness()
+    if verdict == "READY":
+        _startup_state = "READY"
+        _startup_error = None
+        _startup_ready_at_ist = now_ist().isoformat()
+    elif verdict == "DEGRADED":
+        _startup_state = "DEGRADED"
+        _startup_error = "post-open self-test degraded; core scanner remains active"
+        _startup_ready_at_ist = None
+    elif verdict == "BLOCKED":
+        _startup_state = "BLOCKED"
+        _startup_error = "post-open self-test core failure"
+        _startup_ready_at_ist = None
 
 
 async def scheduled_trade_monitor() -> None:
