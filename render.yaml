@@ -31,6 +31,20 @@ services:
         sync: false
       - key: NSE_OI_BACKUP_TOKEN
         sync: false
+      - key: NSE_OI_BACKUP_GITHUB_REPO
+        sync: false
+      - key: NSE_OI_BACKUP_GITHUB_TOKEN
+        sync: false
+      - key: NSE_OI_BACKUP_BRANCH
+        value: data
+      - key: SIGNAL_MODE
+        value: scalp_chain
+      - key: ENTRY_START
+        value: "09:30"
+      - key: ENTRY_END
+        value: "15:00"
+      - key: NSE_OI_SPURTS_RETRY_S
+        value: "300"
       - key: NSE_OI_PROXY_URL
         sync: false
       # Add values later in Render; never commit credentials.
@@ -46,7 +60,6 @@ services:
       - key: ANGEL_ONE_STREAM_ENABLED
         value: "true"
 
-# Render Free web services have an ephemeral filesystem. The app remains
-# usable, but its local SQLite history resets on restart, redeploy, or idle
-# spin-down. Use a paid disk or an external durable database before relying
-# on history for production decisions.
+# Render Free web services have an ephemeral filesystem. Set
+# NSE_OI_BACKUP_GITHUB_REPO + NSE_OI_BACKUP_GITHUB_TOKEN so SQLite history
+# restores from GitHub after restart instead of a cold 60-day crawl.
