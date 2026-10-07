@@ -70,6 +70,7 @@ class AngelOneMarketData:
         self._feed_token: str | None = None
         self._login_at = 0.0
         self._instruments: dict[tuple[str, str], AngelInstrument] = {}
+        self._option_cache: dict[str, tuple[float, list[AngelInstrument]]] = {}
         self._last_quote_at = 0.0
         self._breaker_until = 0.0
         self._hist_lock = threading.Lock()
@@ -203,7 +204,7 @@ class AngelOneMarketData:
                 raw_symbol = str(row.get("symbol") or "").upper()
                 instrument_type = str(row.get("instrumenttype") or "").upper()
                 if exchange == "NFO":
-                    if instrument_type not in ("FUTSTK", "FUTIDX", "OPTSTK", "OPTIDX"):
+                    if instrument_type not in ("FUTSTK", "FUTIDX"):
                         continue
                 elif exchange == "NSE":
                     if not (raw_symbol.endswith("-EQ") or instrument_type == "AMXIDX" or raw_symbol in self._INDEX_NAMES):
@@ -237,6 +238,149 @@ class AngelOneMarketData:
             del text
             self._instruments = result
             return result
+
+    def load_option_instruments(self, underlying: str) -> list[dict]:
+        """Load and cache only one underlying's NFO option contracts.
+
+        The Angel scrip master is streamed on a cache miss and option rows for
+        other underlyings are discarded immediately, keeping the Render Free
+        process from retaining the full options universe.
+        """
+        key = self._lookup_symbol(underlying, exchange="NSE")
+        now = time.monotonic()
+        ttl = max(60.0, float(os.getenv("ANGEL_OPTION_CACHE_TTL_S", "3600")))
+        cached = self._option_cache.get(key)
+        if cached and now - cached[0] < ttl:
+            return [self._option_dict(x) for x in cached[1]]
+        response = requests.get(INSTRUMENT_MASTER_URL, timeout=60)
+        response.raise_for_status()
+        rows: list[AngelInstrument] = []
+        for row in iter_json_array(response.text):
+            if not isinstance(row, dict) or str(row.get("exch_seg") or "").upper() != "NFO":
+                continue
+            instrument_type = str(row.get("instrumenttype") or "").upper()
+            if instrument_type not in ("OPTSTK", "OPTIDX"):
+                continue
+            name = str(row.get("name") or "").upper().strip()
+            if name != key:
+                continue
+            raw_symbol = str(row.get("symbol") or "").upper().strip()
+            token = str(row.get("token") or "").strip()
+            expiry = str(row.get("expiry") or "").strip().upper()
+            option_type = raw_symbol[-2:]
+            if not token or not expiry or option_type not in ("CE", "PE"):
+                continue
+            try:
+                strike_raw = float(row.get("strike") or 0)
+                strike = strike_raw / 100.0 if abs(strike_raw) >= 1000 else strike_raw
+            except (TypeError, ValueError):
+                continue
+            if strike <= 0:
+                continue
+            rows.append(AngelInstrument(raw_symbol, token, "NFO", expiry, instrument_type, name, strike, option_type))
+        self._option_cache[key] = (now, rows)
+        return [self._option_dict(x) for x in rows]
+
+    @staticmethod
+    def _option_dict(instrument: AngelInstrument) -> dict:
+        return {
+            "symbol": instrument.symbol, "token": instrument.token, "exchange": instrument.exchange,
+            "expiry": instrument.expiry, "instrument_type": instrument.instrument_type,
+            "underlying": instrument.underlying, "strike": instrument.strike, "option_type": instrument.option_type,
+        }
+
+    def quotes_by_token(self, tokens: list[str], exchange: str = "NFO") -> dict[str, dict]:
+        """Read-only FULL quotes keyed by Angel token, in batches of 50."""
+        clean = list(dict.fromkeys(str(x).strip() for x in tokens if str(x).strip()))
+        if not clean:
+            return {}
+        self._login()
+        output: dict[str, dict] = {}
+        for offset in range(0, len(clean), 50):
+            batch = clean[offset:offset + 50]
+            elapsed = time.monotonic() - self._last_quote_at
+            if self._last_quote_at and elapsed < 1.0:
+                time.sleep(1.0 - elapsed)
+            response = requests.post(
+                f"{BASE_URL}/rest/secure/angelbroking/market/v1/quote/",
+                headers=self._headers(),
+                json={"mode": "FULL", "exchangeTokens": {exchange.upper(): batch}},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            body = response.json()
+            if not body.get("status"):
+                raise RuntimeError(f"Angel One quote request failed: {body.get('message', 'unknown error')}")
+            self._last_quote_at = time.monotonic()
+            for row in (body.get("data") or {}).get("fetched", []) or []:
+                token = str(row.get("symbolToken") or row.get("symboltoken") or "")
+                if not token:
+                    continue
+                output[token] = {
+                    "ltp": float(row.get("ltp") or 0),
+                    "oi": int(float(row.get("opnInterest") or row.get("openInterest") or 0)),
+                    "volume": int(float(row.get("tradeVolume") or row.get("volume") or 0)),
+                    "avg_price": float(row.get("avgPrice") or 0),
+                    "open": float(row.get("open") or 0), "high": float(row.get("high") or 0),
+                    "low": float(row.get("low") or 0), "close": float(row.get("close") or 0),
+                    "symbol": str(row.get("tradingSymbol") or row.get("symbol") or "").upper(),
+                    "source": "angel_one_option_quote",
+                }
+        return output
+
+    def option_chain_near_atm(self, underlying: str, spot: float, strikes_each_side: int = 1) -> dict:
+        """Return the nearest-expiry CE/PE chain around the supplied spot."""
+        key = self._lookup_symbol(underlying, exchange="NSE")
+        try:
+            contracts = self.load_option_instruments(key)
+            if not contracts:
+                return {"underlying": key, "spot": spot, "chain": [], "ok": False, "error": "option_contracts_unavailable", "source": "angel_one_on_demand_opt"}
+            if float(spot or 0) <= 0:
+                quote = self.full_quotes([key], exchange="NSE").get(key) or {}
+                spot = float(quote.get("ltp") or 0)
+            if spot <= 0:
+                return {"underlying": key, "spot": spot, "chain": [], "ok": False, "error": "underlying_quote_unavailable", "source": "angel_one_on_demand_opt"}
+            by_expiry: dict[str, dict[float, set[str]]] = {}
+            for item in contracts:
+                try:
+                    exp = datetime.strptime(str(item["expiry"]), "%d%b%Y").date()
+                except (TypeError, ValueError):
+                    continue
+                if exp < now_ist().date():
+                    continue
+                by_expiry.setdefault(exp.strftime("%d%b%Y").upper(), {}).setdefault(float(item["strike"]), set()).add(item["option_type"])
+            eligible = [exp for exp, strikes in by_expiry.items() if any(types >= {"CE", "PE"} for types in strikes.values())]
+            if not eligible:
+                return {"underlying": key, "spot": spot, "chain": [], "ok": False, "error": "paired_expiry_unavailable", "source": "angel_one_on_demand_opt"}
+            expiry = min(eligible, key=lambda x: datetime.strptime(x, "%d%b%Y").date())
+            rows = [x for x in contracts if str(x["expiry"]).upper() == expiry]
+            strikes = sorted({float(x["strike"]) for x in rows})
+            atm = min(strikes, key=lambda x: abs(x - spot))
+            idx = strikes.index(atm)
+            side = max(0, int(strikes_each_side))
+            selected_strikes = strikes[max(0, idx-side):idx+side+1]
+            selected = [x for x in rows if float(x["strike"]) in selected_strikes and x["option_type"] in ("CE", "PE")]
+            quotes = self.quotes_by_token([x["token"] for x in selected], exchange="NFO")
+            chain = []
+            flat_rows = []
+            for strike in selected_strikes:
+                ce = next((x for x in selected if float(x["strike"]) == strike and x["option_type"] == "CE"), None)
+                pe = next((x for x in selected if float(x["strike"]) == strike and x["option_type"] == "PE"), None)
+                def leg(item):
+                    if not item: return None
+                    q = quotes.get(item["token"])
+                    if not q: return {"token": item["token"], "symbol": item["symbol"], "ltp": 0, "oi": 0, "volume": 0}
+                    return {"token": item["token"], "symbol": item["symbol"], "ltp": q["ltp"], "oi": q["oi"], "volume": q["volume"]}
+                ceq, peq = leg(ce), leg(pe)
+                chain.append({"strike": strike, "ce": ceq, "pe": peq})
+                for item, q in ((ce, ceq), (pe, peq)):
+                    if item and q:
+                        flat_rows.append({"symbol": key, "expiry": expiry, "strike": strike, "option_type": item["option_type"], **q, "source": "angel_one_option_quote"})
+            ok = any(row.get("ce") and row["ce"].get("ltp", 0) > 0 for row in chain) and any(row.get("pe") and row["pe"].get("ltp", 0) > 0 for row in chain)
+            return {"underlying": key, "spot": spot, "expiry": expiry, "atm_strike": atm, "chain": chain, "rows": flat_rows, "ok": ok, "error": None if ok else "option_quotes_unavailable", "source": "angel_one_on_demand_opt"}
+        except Exception as exc:
+            logger.warning("Angel option chain failed for %s: %s", key, type(exc).__name__)
+            return {"underlying": key, "spot": float(spot or 0), "chain": [], "ok": False, "error": f"{type(exc).__name__}: {str(exc)[:120]}", "source": "angel_one_on_demand_opt"}
 
     def instrument(self, symbol: str, *, exchange: str = "NSE") -> AngelInstrument | None:
         symbol = self._lookup_symbol(symbol, exchange=exchange)
@@ -509,80 +653,8 @@ class AngelOneMarketData:
 
 
     def stock_option_chain_snapshot(self, symbol: str, *, strikes_each_side: int = 1, spot: float | None = None) -> dict:
-        """Read a tiny near-ATM stock option chain using Angel instruments + quotes only.
-
-        Angel does not require NSE's public option-chain HTML here: the daily Angel
-        scrip master supplies current OPTSTK tokens and expiry/strike metadata, and
-        the normal read-only quote endpoint supplies live LTP/OI. Only ATM +/- the
-        requested number of strikes is quoted, keeping Render Free request volume
-        bounded.
-        """
-        underlying = self._lookup_symbol(symbol, exchange="NSE")
-        self._login()
-        instruments = self._get_instruments()
-        today = now_ist().date()
-        candidates: list[AngelInstrument] = []
-        for (exchange, _), instrument in instruments.items():
-            if exchange != "NFO" or instrument.instrument_type != "OPTSTK":
-                continue
-            if str(instrument.underlying or "").upper() != underlying:
-                continue
-            if not instrument.expiry or not instrument.strike or instrument.option_type not in ("CE", "PE"):
-                continue
-            try:
-                expiry = datetime.strptime(str(instrument.expiry), "%d%b%Y").date()
-            except (TypeError, ValueError):
-                continue
-            if expiry >= today:
-                candidates.append(instrument)
-        if not candidates:
-            return {"ok": False, "symbol": underlying, "reason": "option_contracts_unavailable"}
-        expiries = sorted({datetime.strptime(str(x.expiry), "%d%b%Y").date() for x in candidates})
-        expiry = expiries[0]
-        expiry_candidates = [x for x in candidates if datetime.strptime(str(x.expiry), "%d%b%Y").date() == expiry]
-        spot_quote = self.full_quotes([underlying], exchange="NSE").get(underlying)
-        spot = float((spot_quote or {}).get("ltp") or 0)
-        if spot <= 0:
-            return {"ok": False, "symbol": underlying, "reason": "underlying_quote_unavailable"}
-        strikes = sorted({float(x.strike) for x in expiry_candidates if x.strike is not None})
-        if not strikes:
-            return {"ok": False, "symbol": underlying, "reason": "strikes_unavailable"}
-        atm = min(strikes, key=lambda x: abs(x - spot))
-        atm_index = strikes.index(atm)
-        selected_strikes = strikes[max(0, atm_index - strikes_each_side):atm_index + strikes_each_side + 1]
-        selected = [x for x in expiry_candidates if float(x.strike) in selected_strikes]
-        quotes = self.full_quotes([x.symbol for x in selected], exchange="NFO")
-        rows = []
-        for instrument in selected:
-            quote = quotes.get(instrument.symbol)
-            if not quote:
-                continue
-            rows.append({
-                "symbol": underlying,
-                "expiry": instrument.expiry,
-                "strike": float(instrument.strike),
-                "option_type": instrument.option_type,
-                "token": instrument.token,
-                "ltp": float(quote.get("ltp") or 0),
-                "oi": int(float(quote.get("oi") or 0)),
-                "volume": int(float(quote.get("volume") or 0)),
-                "bid": quote.get("bid"),
-                "ask": quote.get("ask"),
-                "source": "angel_one_option_quote",
-            })
-        if not rows:
-            return {"ok": False, "symbol": underlying, "reason": "option_quotes_unavailable"}
-        return {
-            "ok": True,
-            "symbol": underlying,
-            "expiry": expiry.strftime("%d%b%Y").upper(),
-            "spot": spot,
-            "atm_strike": atm,
-            "strikes": selected_strikes,
-            "rows": rows,
-            "captured_at_ist": now_ist().isoformat(),
-            "source": "angel_one_scrip_master_plus_quotes",
-        }
+        """Backward-compatible wrapper for the bounded on-demand chain."""
+        return self.option_chain_near_atm(symbol, float(spot or 0), strikes_each_side=strikes_each_side)
 
     def daily_candles(self, symbol: str, *, days: int = 90, exchange: str = "NSE") -> list[dict]:
         """Fetch bounded daily OHLCV candles for an equity or supported index."""
@@ -590,6 +662,3 @@ class AngelOneMarketData:
 
 
 __all__ = ["AngelInstrument", "AngelOneMarketData"]
-
-
-# Compatibility alias for the scalp engine; read-only Angel option data only.\ndef _scalp_chain_alias(self, underlying: str, *, strikes_each_side: int = 1, spot: float = 0.0) -> dict:\n    return self.stock_option_chain_snapshot(underlying, strikes_each_side=strikes_each_side, spot=spot)\nAngelOneMarketData.option_chain_near_atm = _scalp_chain_alias\n

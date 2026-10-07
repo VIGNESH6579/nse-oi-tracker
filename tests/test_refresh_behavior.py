@@ -100,9 +100,10 @@ def test_dashboard_and_api_only_keep_required_sections():
     """Lean app: only focus / signals / signal-history tabs and the endpoints they use."""
     for tab in ("chain", "heatmap", "intel", "guide"):
         assert f"activeTab === '{tab}'" not in INDEX
-    for route in ("/api/option-chain", "/api/market-intelligence", "/api/participant-oi", "/api/technical",
+    for route in ("/api/market-intelligence", "/api/participant-oi", "/api/technical",
                   "/api/category", "/api/cas/", "/api/signal/{symbol}", "/api/market-regime", "/api/intraday"):
         assert route not in MAIN
+    assert '@app.get("/api/option-chain/{symbol}")' in MAIN
     for kept in ("/api/oi-signals", "/api/history/today", "/api/analytics/today", "/api/market-overview", "/api/health"):
         assert kept in MAIN
     assert "['signals','trades']" in INDEX
@@ -133,3 +134,8 @@ def test_startup_catches_up_previous_day_confirmed_signal_cleanup():
     assert "Free Render instances may sleep through 23:59 IST" in MAIN
     assert "previous_trade_date = (now_ist().date() - timedelta(days=1)).isoformat()" in MAIN
     assert "repository.delete_confirmed_signals_for_date" in MAIN
+
+
+def test_option_chain_route_never_raises_bare_500():
+    assert '"ok": False' in MAIN
+    assert '"source": "angel_one_on_demand_opt"' in MAIN

@@ -170,3 +170,21 @@ def test_two_consecutive_403s_start_a_cooldown_that_escalates(monkeypatch):
     import time as _t
     assert client._hist_block_until - _t.monotonic() > 60                   # 45s -> 90s: it escalated
     assert first_block > 0
+
+
+def test_option_chain_near_atm_shape(monkeypatch):
+    client = AngelOneMarketData(api_key="k", client_code="c", password="p", totp_secret="t")
+    monkeypatch.setattr(client, "load_option_instruments", lambda underlying: [
+        {"symbol": "RELIANCE25000CE", "token": "1", "expiry": "30OCT2026", "strike": 2500.0, "option_type": "CE"},
+        {"symbol": "RELIANCE25000PE", "token": "2", "expiry": "30OCT2026", "strike": 2500.0, "option_type": "PE"},
+        {"symbol": "RELIANCE25500CE", "token": "3", "expiry": "30OCT2026", "strike": 2550.0, "option_type": "CE"},
+        {"symbol": "RELIANCE25500PE", "token": "4", "expiry": "30OCT2026", "strike": 2550.0, "option_type": "PE"},
+    ])
+    monkeypatch.setattr(client, "quotes_by_token", lambda tokens, exchange="NFO": {
+        token: {"ltp": 100 + int(token), "oi": 20000, "volume": 500, "symbol": token}
+        for token in tokens
+    })
+    out = client.option_chain_near_atm("RELIANCE", 2525, strikes_each_side=1)
+    assert out["ok"] is True
+    assert out["atm_strike"] == 2500.0
+    assert out["chain"] and out["chain"][0]["ce"]["ltp"] > 0 and out["chain"][0]["pe"]["ltp"] > 0
