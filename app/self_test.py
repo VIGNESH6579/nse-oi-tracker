@@ -119,7 +119,13 @@ def run_stage(stage: str, probes: dict[str, Probe], now: datetime) -> dict[str, 
             ok, detail = False, f"{type(exc).__name__}: {str(exc)[:140]}"
         checks[name] = {"ok": bool(ok), "detail": detail}
     failed = [name for name, check in checks.items() if not check["ok"]]
-    critical_set = CRITICAL.get(stage, set())
+    critical_set = set(CRITICAL.get(stage, set()))
+    if stage == "post_open":
+        # Warm-up/quality checks are not service-availability failures. Until the
+        # first few live 5m/OI windows accumulate, report DEGRADED rather than
+        # freezing the scanner in BLOCKED. Core auth, quote and scan failures
+        # remain hard blockers.
+        critical_set -= {"oi_window_depth", "angel_intraday_candles"}
     critical = [name for name in failed if name in critical_set]
     verdict = "READY" if not failed else ("BLOCKED" if critical else "DEGRADED")
     result = {"stage": stage, "at": now.isoformat(timespec="seconds"), "verdict": verdict, "failed": failed, "checks": checks}
