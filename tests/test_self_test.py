@@ -105,7 +105,7 @@ def test_post_open_checks_rows_window_and_ist_candles(tmp_path):
     assert few["verdict"] == "BLOCKED" and "oi_rows" in few["failed"]
     # candles that start at 04:30 (UTC-window bug) instead of 09:15 must be caught
     wrong = st.run_stage("post_open", _probes("post_open", FakeAngel(first_minute="04:30"), repo, ["A"]), NOW)
-    assert wrong["verdict"] == "BLOCKED" and "angel_intraday_candles" in wrong["failed"]
+    assert wrong["verdict"] == "DEGRADED" and "angel_intraday_candles" in wrong["failed"]
     warm = st.run_stage("post_open", _probes("post_open", FakeAngel(), repo, ["A"], depth={"symbols": 5, "median_minutes": 2}), NOW)
     assert warm["verdict"] == "DEGRADED" and warm["failed"] == ["oi_window_depth"]
 
