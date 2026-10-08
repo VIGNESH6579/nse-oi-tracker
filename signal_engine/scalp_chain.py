@@ -293,7 +293,7 @@ class ScalpChainEngine:
         except Exception as exc:
             return False, f"{type(exc).__name__}: {str(exc)[:120]}"
 
-    def _ranked_universe(self) -> tuple[list[str], int, int]:
+    def _ranked_universe(self) -> tuple[list[str], int, int, list[str], list[str]]:
         """Build the live scalp universe from current F&O gainers and losers."""
         symbols = sorted(cached_universe() or set(self.universe))
         if not symbols:
@@ -302,7 +302,7 @@ class ScalpChainEngine:
             self.stream.ensure_symbols(symbols)
         except Exception:
             logger.exception("Could not seed dynamic scalp subscriptions")
-            return [], 0, 0
+            return [], 0, 0, [], []
         ranked: list[tuple[str, float]] = []
         for symbol in symbols:
             if symbol in self._open:
@@ -326,7 +326,7 @@ class ScalpChainEngine:
         ordered.extend(s for s, _ in losers if s not in ordered)
         return ordered, len(gainers), len(losers), [s for s, _ in gainers], [s for s, _ in losers]
 
-    def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         symbols, gainers, losers, gainer_symbols, loser_symbols = self._ranked_universe()
         candidates = []
         for symbol in symbols:
