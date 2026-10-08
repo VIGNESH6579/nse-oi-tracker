@@ -1576,25 +1576,9 @@ async def oi_signals(
     if refresh:
         cache.delete("all_signals")
 
-    if SIGNAL_MODE != "swing_oi":
-        status = get_market_status()
-        return {
-            "mode": SIGNAL_MODE,
-            "market_open": status == MARKET_STATUS_OPEN,
-            "market_status": status,
-            "market_status_label": MARKET_STATUS_LABELS[status],
-            "total_fno_active": 0,
-            "high_confidence": 0,
-            "medium_confidence": 0,
-            "filtered_count": 0,
-            "signal_counts": {},
-            "signal_meta": {},
-            "available_sectors": [],
-            "signals": [],
-            "data_status": "SCALP_MODE",
-            "data_warning": "Swing OI scanner is disabled in scalp_chain mode.",
-        }
-
+    # OI is an observation layer and remains available even when the active
+    # entry engine is scalp_chain.  Scalp entries are still produced only by
+    # ScalpChainEngine; this endpoint never turns an OI row into a trade.
     cached = cache.get("all_signals")
 
     # Only a missing cache needs a blocking scan. An empty list is a valid,
@@ -1658,7 +1642,9 @@ async def oi_signals(
         "available_sectors": known_sectors(),
         "signals":           results,
         "data_status":       data_status,
+        "signal_scope":      "OI_OBSERVATION_ONLY",
         "data_warning": (
+
             "NSE upstream returned no OI rows; no signal can be computed right now."
             if data_status == "UNAVAILABLE" and not results else None
         ),
