@@ -23,8 +23,14 @@ _lock = threading.Lock()
 _state: dict = {"symbols": frozenset(), "fetched_at": None, "ok": False, "source": None}
 _SYMBOL = re.compile(r"^[A-Z0-9&\-]{2,20}$")
 
-RELAY_CSV_URL = "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/fo_secban.csv"
-RELAY_META_URL = "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/fo_secban_meta.json"
+RELAY_CSV_URLS = [
+    "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/fo_secban.csv",
+    "https://github.com/VIGNESH6579/nse-oi-tracker/raw/refs/heads/data/data/fo_secban.csv",
+]
+RELAY_META_URLS = [
+    "https://raw.githubusercontent.com/VIGNESH6579/nse-oi-tracker/data/data/fo_secban_meta.json",
+    "https://github.com/VIGNESH6579/nse-oi-tracker/raw/refs/heads/data/data/fo_secban_meta.json",
+]
 # GitHub Actions normally refreshes this every 10 minutes. Allow a bounded
 # delay during Actions scheduling so a perfectly valid official daily file
 # does not fail closed merely because one scheduled run was delayed.
@@ -32,26 +38,36 @@ RELAY_MAX_AGE_S = 2 * 60 * 60
 
 
 def _fetch_verified_relay() -> str:
-    request = urllib.request.Request(
-        RELAY_META_URL,
-        headers={"User-Agent": "nse-oi-tracker-ban-relay/1.0", "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        meta = json.loads(response.read().decode("utf-8"))
+    headers = {"User-Agent": "nse-oi-tracker-ban-relay/1.0", "Accept": "*/*"}
+    meta = None
+    last_error = None
+    for url in RELAY_META_URLS:
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=10) as response:
+                meta = json.loads(response.read().decode("utf-8"))
+            break
+        except Exception as exc:
+            last_error = exc
+    if not meta:
+        raise RuntimeError(f"verified NSE ban relay metadata unavailable: {type(last_error).__name__ if last_error else 'unknown'}")
     stamp = str(meta.get("fetched_at_utc") or "")
     fetched = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     age = (datetime.now(timezone.utc) - fetched).total_seconds()
     if age < 0 or age > RELAY_MAX_AGE_S:
         raise RuntimeError(f"verified NSE ban relay is stale age_s={age:.0f}")
-    request = urllib.request.Request(
-        RELAY_CSV_URL,
-        headers={"User-Agent": "nse-oi-tracker-ban-relay/1.0", "Accept": "text/csv,*/*"},
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        text = response.read().decode("utf-8")
-    if not text.strip():
-        raise RuntimeError("verified NSE ban relay returned empty CSV")
-    return text
+
+    last_error = None
+    for url in RELAY_CSV_URLS:
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=10) as response:
+                text = response.read().decode("utf-8")
+            if text.strip():
+                return text
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"verified NSE ban relay CSV unavailable: {type(last_error).__name__ if last_error else 'unknown'}")
 
 
 def parse_ban_csv(text: str) -> frozenset[str]:
