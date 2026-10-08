@@ -104,7 +104,8 @@ class ScalpChainEngine:
         return {
             "mode": MODE,
             "paper_only": True,
-            "universe_size": len(self.universe),
+            "universe_size": len(cached_universe() or set(self.universe)),
+            "fixed_universe_size": len(self.universe),
             "top_n": TOP_N,
             "rank_top_n": RANK_TOP_N,
             "ranking_basis": "live_intraday_pct_change",
@@ -296,7 +297,7 @@ class ScalpChainEngine:
         """Build the live scalp universe from current F&O gainers and losers."""
         symbols = sorted(cached_universe() or set(self.universe))
         if not symbols:
-            return [], 0, 0
+            return [], 0, 0, [], []
         try:
             self.stream.ensure_symbols(symbols)
         except Exception:
@@ -323,10 +324,10 @@ class ScalpChainEngine:
         losers = sorted((x for x in ranked if x[1] < 0), key=lambda x: x[1])[:RANK_TOP_N]
         ordered = [s for s, _ in gainers]
         ordered.extend(s for s, _ in losers if s not in ordered)
-        return ordered, len(gainers), len(losers)
+        return ordered, len(gainers), len(losers), [s for s, _ in gainers], [s for s, _ in losers]
 
     def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, int]]:
-        symbols, gainers, losers = self._ranked_universe()
+        symbols, gainers, losers, gainer_symbols, loser_symbols = self._ranked_universe()
         candidates = []
         for symbol in symbols:
             ctx = self._underlying_context(symbol)
@@ -337,7 +338,7 @@ class ScalpChainEngine:
                 day_change_pct = ((ltp - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
                 candidates.append({"symbol": symbol, **ctx, "day_change_pct": day_change_pct})
         candidates.sort(key=lambda x: abs(float(x.get("day_change_pct") or 0)), reverse=True)
-        return candidates[:TOP_N], {"ranked_universe": len(symbols), "gainers": gainers, "losers": losers}
+        return candidates[:TOP_N], {"ranked_universe": len(symbols), "gainers": gainers, "losers": losers, "gainer_symbols": gainer_symbols, "loser_symbols": loser_symbols}
 
     def _enter(self, candidate: dict[str, Any], confirmation: dict[str, Any], chain: dict[str, Any]) -> None:
         symbol = candidate["symbol"]
@@ -476,7 +477,7 @@ class ScalpChainEngine:
             "confirmation_failed": 0, "entries": 0,
             "ban_list_unavailable": not bool(ban_status.get("ban_list_ok")),
             "top_rejections": {}, "at": now.isoformat(timespec="seconds"),
-            "ranked_universe": 0, "gainers": 0, "losers": 0,
+            "ranked_universe": 0, "gainers": 0, "losers": 0, "gainer_symbols": [], "loser_symbols": [],
         }
         if not bool(ban_status.get("ban_list_ok")):
             # A missing ban feed must not freeze this paper-only engine.
