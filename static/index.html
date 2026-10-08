@@ -124,7 +124,21 @@
 
 <main class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
   <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
-    <div class="flex flex-wrap items-center gap-3">
+    <div class="flex items-center justify-between mb-2">
+      <div>
+        <h2 class="text-sm font-bold text-white">① SCALP SIGNALS · PAPER ENTRY LAYER</h2>
+        <p class="text-[10px] text-gray-500">A scalp signal is issued only after the underlying impulse, fresh 5-minute data, VWAP/opening-range alignment, volume, and near-ATM option-chain confirmation all agree.</p>
+      </div>
+      <span class="badge bg-amber-950 text-amber-300 border-amber-800">NOT THE OI SIGNAL</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] text-gray-400">
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">BUY scalp</b> = bullish underlying + CE confirmation</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">SELL scalp</b> = bearish underlying + PE confirmation</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">Entry</b> only 09:30–15:00 IST</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">Exit</b> max 10 min / hard flat 15:15</div>
+    </div>
+  </section>
+  <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
       <div><h2 class="text-sm font-bold text-white">Stock Options Scalping · PAPER</h2>
       <p class="text-[10px] text-gray-500">Underlying OR/VWAP impulse → Angel near-ATM CE/PE confirmation → exit within minutes.</p></div>
       <div class="flex-1"></div>
@@ -138,6 +152,23 @@
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Chain status</div><div class="text-sm font-bold" :class="scalpHealth.chain_ok ? 'text-green-400' : 'text-amber-400'" x-text="scalpHealth.chain_ok ? 'LIVE / CACHED' : 'WAITING'"></div></div>
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Universe</div><div class="text-sm font-bold mono text-gray-200" x-text="(scalpHealth.universe_size || 0) + ' stocks · top ' + (scalpHealth.top_n || 0)"></div></div>
     <div class="bg-gray-900 border border-gray-800 rounded-xl p-3"><div class="text-[10px] text-gray-500">Last error</div><div class="text-[10px] text-amber-300 break-all" x-text="scalpHealth.last_error || 'none'"></div></div>
+  </section>
+  <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="text-xs font-bold text-gray-200">Why a scalp was / was not issued</h3>
+      <span class="text-[10px] text-gray-600 mono" x-text="scalpHealth.last_run?.at || 'waiting for live refresh'"></span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-[10px]">
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Candidates</span><b class="block text-white" x-text="scalpHealth.last_run?.candidates ?? 0"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Chain checked</span><b class="block text-white" x-text="scalpHealth.last_run?.chain_checked ?? 0"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Chain unavailable</span><b class="block text-amber-300" x-text="scalpHealth.last_run?.chain_unavailable ?? 0"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Chain confirmation failed</span><b class="block text-amber-300" x-text="scalpHealth.last_run?.confirmation_failed ?? 0"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Entries</span><b class="block text-green-300" x-text="scalpHealth.last_run?.entries ?? 0"></b></div>
+    </div>
+    <div class="mt-2 text-[10px] text-gray-500">
+      <span class="text-gray-300">Top rejection:</span>
+      <span x-text="Object.entries(scalpHealth.last_run?.top_rejections || {}).map(([k,v]) => k + ' ×' + v).join(' · ') || 'none recorded yet'"></span>
+    </div>
   </section>
   <section class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between"><h3 class="text-xs font-bold text-gray-200">Live scalps</h3><span class="text-[10px] text-gray-600 mono" x-text="scalpUpdated ? hm(scalpUpdated) + ' IST' : '—'"></span></div>
@@ -173,6 +204,23 @@
 </main>
 
 <main class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
+
+  <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+    <div class="flex items-center justify-between mb-2">
+      <div>
+        <h2 class="text-sm font-bold text-white">② OI SIGNALS · OBSERVATION LAYER</h2>
+        <p class="text-[10px] text-gray-500">These are broad F&amp;O price/OI classifications. They are <b>not</b> scalp entries.</p>
+      </div>
+      <span class="badge bg-indigo-950 text-indigo-300 border-indigo-800">OI ≠ SCALP</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-[10px] text-gray-400">
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-green-300">Long Buildup</b><br>Price ↑ + OI ↑ → bullish</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-red-300">Short Buildup</b><br>Price ↓ + OI ↑ → bearish</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-yellow-300">Short Covering</b><br>Price ↑ + OI ↓ → bullish fade</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-orange-300">Long Unwinding</b><br>Price ↓ + OI ↓ → bearish fade</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-300">Neutral</b><br>No clear buildup classification</div>
+    </div>
+  </section>
 
   <!-- Error banner -->
   <div x-show="error" x-transition
