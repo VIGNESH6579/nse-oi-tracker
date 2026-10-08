@@ -122,13 +122,13 @@
 </header>
 
 
-<main x-show="mode === 'scalp_chain'" class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
+<main class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
   <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
     <div class="flex flex-wrap items-center gap-3">
       <div><h2 class="text-sm font-bold text-white">Stock Options Scalping · PAPER</h2>
       <p class="text-[10px] text-gray-500">Underlying OR/VWAP impulse → Angel near-ATM CE/PE confirmation → exit within minutes.</p></div>
       <div class="flex-1"></div>
-      <span class="badge bg-blue-950 text-blue-300 border-blue-800">ENTRY 09:30–14:30 IST</span>
+      <span class="badge bg-blue-950 text-blue-300 border-blue-800">ENTRY 09:30–15:00 IST</span>
       <span class="badge bg-gray-800 text-gray-300 border-gray-700">MAX HOLD 10m</span>
       <span class="badge bg-amber-950 text-amber-300 border-amber-800">NO LIVE ORDERS</span>
     </div>
@@ -172,7 +172,7 @@
   </section>
 </main>
 
-<main x-show="mode !== 'scalp_chain'" class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
+<main class="max-w-screen-2xl mx-auto px-4 py-4 space-y-4">
 
   <!-- Error banner -->
   <div x-show="error" x-transition
@@ -603,6 +603,7 @@ function scanner() {
   return {
     /* ?? state ?? */
     mode: 'scalp_chain', scalpOpen: [], scalpRecent: [], scalpHealth: {}, scalpUpdated: '',
+    oiSectionLabel: 'OI Signals · Observation Layer',
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
     marketDataSource: '', oiSource: '', dataStatus: 'NOT_RUN', lastRefreshAt: '', isStale: false,
     marketOverview: null, marketOverviewError: '', marketOverviewFetchedAt: 0, marketOverviewLoading: false,
@@ -717,8 +718,11 @@ function scanner() {
       } catch (e) {
         this.error = 'Health check failed: ' + e.message;
       }
-      if (this.mode === 'scalp_chain') await this.fetchScalp();
-      else await Promise.all([this.fetchSignals(), this.fetchMarketOverview()]);
+      if (this.mode === 'scalp_chain') {
+        await Promise.all([this.fetchScalp(), this.fetchSignals(), this.fetchMarketOverview()]);
+      } else {
+        await Promise.all([this.fetchSignals(), this.fetchMarketOverview()]);
+      }
       this.startTimer();
     },
 
@@ -738,7 +742,9 @@ function scanner() {
           clearInterval(t);
           // Signals and the index/VIX context both refresh on the same 60s cycle now; previously the
           // Market Context card only ever loaded once at page open, so its CMP went stale immediately.
-          (this.mode === 'scalp_chain' ? this.fetchScalp() : Promise.all([this.fetchSignals(), this.fetchMarketOverview()]))
+          (this.mode === 'scalp_chain'
+            ? Promise.all([this.fetchScalp(), this.fetchSignals(), this.fetchMarketOverview()])
+            : Promise.all([this.fetchSignals(), this.fetchMarketOverview()]))
             .then(() => this.startTimer());
         }
       }, 1000);
@@ -746,8 +752,11 @@ function scanner() {
 
     async forceRefresh() {
       this.countdown = 60;
-      if (this.mode === 'scalp_chain') await this.fetchScalp();
-      else await Promise.all([this.fetchSignals(true), this.fetchMarketOverview(true)]);
+      if (this.mode === 'scalp_chain') {
+        await Promise.all([this.fetchScalp(), this.fetchSignals(true), this.fetchMarketOverview(true)]);
+      } else {
+        await Promise.all([this.fetchSignals(true), this.fetchMarketOverview(true)]);
+      }
     },
 
     async fetchMarketOverview(force=false) {
