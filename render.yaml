@@ -43,6 +43,8 @@ services:
         value: "09:30"
       - key: ENTRY_END
         value: "15:00"
+      - key: SCALP_RANK_TOP_N
+        value: "20"
       - key: NSE_OI_SPURTS_RETRY_S
         value: "300"
       - key: NSE_OI_PROXY_URL
