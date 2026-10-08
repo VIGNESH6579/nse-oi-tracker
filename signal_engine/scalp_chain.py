@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 MODE = "scalp_chain"
 ENTRY_START = os.getenv("ENTRY_START", "09:30")
-ENTRY_END = os.getenv("ENTRY_END", "14:30")
+ENTRY_END = os.getenv("ENTRY_END", "15:00")
 MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "10"))
 ABSOLUTE_EXIT = os.getenv("SCALP_ABSOLUTE_EXIT", "15:15")
 MAX_CONCURRENT = int(os.getenv("SCALP_MAX_CONCURRENT", "3"))
@@ -82,6 +82,11 @@ class ScalpChainEngine:
         self._last_run_at = 0.0
         self._last_error = ""
         self._last_ban_warning_at = 0.0
+        self._last_run_stats: dict[str, Any] = {
+            "candidates": 0, "chain_checked": 0, "chain_unavailable": 0,
+            "confirmation_failed": 0, "entries": 0, "ban_list_unavailable": False,
+            "top_rejections": {}, "at": None,
+        }
         self._load_open_events()
 
     def _load_universe(self) -> list[str]:
@@ -105,6 +110,7 @@ class ScalpChainEngine:
             "last_error": self._last_error,
             "max_hold_minutes": MAX_HOLD_MINUTES,
             "entry_window": f"{ENTRY_START}-{ENTRY_END} IST",
+            "last_run": self._last_run_stats,
         }
 
     def _load_open_events(self) -> None:
@@ -430,9 +436,14 @@ class ScalpChainEngine:
         if len(self._open) >= MAX_CONCURRENT:
             return
         ban_status = ban_info()
+        stats: dict[str, Any] = {
+            "candidates": 0, "chain_checked": 0, "chain_unavailable": 0,
+            "confirmation_failed": 0, "entries": 0,
+            "ban_list_unavailable": not bool(ban_status.get("ban_list_ok")),
+            "top_rejections": {}, "at": now.isoformat(timespec="seconds"),
+        }
         if not bool(ban_status.get("ban_list_ok")):
-            # A missing ban feed must not freeze the optional scalp engine. Treat
-            # it as empty for this paper-only path and warn at most once per interval.
+            # A missing ban feed must not freeze this paper-only engine.
             self._last_error = "fo_ban_list_unavailable"
             if time.monotonic() - self._last_ban_warning_at >= 300.0:
                 logger.warning("SCALP_BAN_LIST_UNAVAILABLE: continuing with empty ban set")
@@ -440,19 +451,40 @@ class ScalpChainEngine:
             blocked = set()
         else:
             blocked = {str(x).upper() for x in banned_symbols()}
-        for candidate in self._candidate_contexts():
+
+        candidates = self._candidate_contexts()
+        stats["candidates"] = len(candidates)
+        rejection_counts: dict[str, int] = {}
+        for candidate in candidates:
             if candidate["symbol"] in blocked:
+                rejection_counts["fo_ban_period"] = rejection_counts.get("fo_ban_period", 0) + 1
                 continue
             if len(self._open) >= MAX_CONCURRENT:
+                rejection_counts["max_concurrent"] = rejection_counts.get("max_concurrent", 0) + 1
                 break
+            stats["chain_checked"] += 1
             chain = self._chain(candidate["symbol"], spot=float(candidate["ltp"]))
             if not chain:
+                stats["chain_unavailable"] += 1
+                rejection_counts["option_chain_unavailable"] = rejection_counts.get("option_chain_unavailable", 0) + 1
                 continue
             confirmation = self._chain_confirmation(candidate["symbol"], candidate["direction"], chain)
             self._previous_chain[candidate["symbol"]] = chain
             if confirmation:
                 self._enter(candidate, confirmation, chain)
+                stats["entries"] += 1
+            else:
+                stats["confirmation_failed"] += 1
+                rejection_counts["option_chain_confirmation"] = rejection_counts.get("option_chain_confirmation", 0) + 1
+
+        stats["top_rejections"] = dict(sorted(rejection_counts.items(), key=lambda kv: -kv[1])[:8])
+        self._last_run_stats = stats
         self._last_run_at = time.monotonic()
+        logger.info(
+            "SCALP_REFRESH candidates=%d chain_checked=%d chain_unavailable=%d confirmation_failed=%d entries=%d rejections=%s",
+            stats["candidates"], stats["chain_checked"], stats["chain_unavailable"],
+            stats["confirmation_failed"], stats["entries"], stats["top_rejections"],
+        )
 
     def live(self) -> dict[str, Any]:
         now = now_ist()
