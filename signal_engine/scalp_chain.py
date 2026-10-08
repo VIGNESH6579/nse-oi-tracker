@@ -15,6 +15,7 @@ from datetime import datetime, time as dt_time
 from typing import Any
 
 from collector.fno_ban import banned_symbols, ban_info
+from collector.universe import cached_universe
 from utils.time import now_ist
 from integrations.angel_one_market_data import AngelOneMarketData, AngelUnavailable
 from integrations.angel_one_stream import AngelOneMarketStream
@@ -31,6 +32,7 @@ OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
 OPTION_TARGET_PCT = float(os.getenv("SCALP_OPTION_TARGET_PCT", "20"))
 CHAIN_TTL_S = float(os.getenv("SCALP_CHAIN_TTL_S", "20"))
 TOP_N = int(os.getenv("SCALP_CHAIN_TOP_N", os.getenv("SCALP_TOP_N", "5")))
+RANK_TOP_N = int(os.getenv("SCALP_RANK_TOP_N", "20"))
 MIN_OPTION_OI = int(os.getenv("SCALP_MIN_OPTION_OI", "10000"))
 MIN_OPTION_VOLUME = int(os.getenv("SCALP_MIN_OPTION_VOLUME", "100"))
 MOMENTUM_MIN_PCT = float(os.getenv("SCALP_MOMENTUM_MIN_PCT", "0.20"))
@@ -104,6 +106,8 @@ class ScalpChainEngine:
             "paper_only": True,
             "universe_size": len(self.universe),
             "top_n": TOP_N,
+            "rank_top_n": RANK_TOP_N,
+            "ranking_basis": "live_intraday_pct_change",
             "open_scalps": len(self._open),
             "chain_cache_symbols": len(self._chain_cache),
             "chain_ok": bool(self._chain_cache),
@@ -288,21 +292,52 @@ class ScalpChainEngine:
         except Exception as exc:
             return False, f"{type(exc).__name__}: {str(exc)[:120]}"
 
-    def _candidate_contexts(self) -> list[dict[str, Any]]:
+    def _ranked_universe(self) -> tuple[list[str], int, int]:
+        """Build the live scalp universe from current F&O gainers and losers."""
+        symbols = sorted(cached_universe() or set(self.universe))
+        if not symbols:
+            return [], 0, 0
         try:
-            self.stream.ensure_symbols(self.universe)
+            self.stream.ensure_symbols(symbols)
         except Exception:
-            logger.exception("Could not seed scalp underlying subscriptions")
-            return []
-        candidates = []
-        for symbol in self.universe:
+            logger.exception("Could not seed dynamic scalp subscriptions")
+            return [], 0, 0
+        ranked: list[tuple[str, float]] = []
+        for symbol in symbols:
             if symbol in self._open:
                 continue
+            tick = self.stream.latest_tick_for_symbol(symbol, max_age_s=15.0)
+            if not tick:
+                continue
+            try:
+                ltp = float(tick.get("ltp") or 0)
+                prev_close = float(tick.get("close") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ltp <= 0 or prev_close <= 0:
+                continue
+            pct = (ltp - prev_close) / prev_close * 100.0
+            if pct == pct:
+                ranked.append((symbol, pct))
+        gainers = sorted((x for x in ranked if x[1] > 0), key=lambda x: x[1], reverse=True)[:RANK_TOP_N]
+        losers = sorted((x for x in ranked if x[1] < 0), key=lambda x: x[1])[:RANK_TOP_N]
+        ordered = [s for s, _ in gainers]
+        ordered.extend(s for s, _ in losers if s not in ordered)
+        return ordered, len(gainers), len(losers)
+
+    def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        symbols, gainers, losers = self._ranked_universe()
+        candidates = []
+        for symbol in symbols:
             ctx = self._underlying_context(symbol)
             if ctx and ctx.get("direction"):
-                candidates.append({"symbol": symbol, **ctx})
-        candidates.sort(key=lambda x: abs(float(x.get("momentum_pct") or 0)), reverse=True)
-        return candidates[:TOP_N]
+                tick = self.stream.latest_tick_for_symbol(symbol, max_age_s=15.0) or {}
+                prev_close = float(tick.get("close") or 0)
+                ltp = float(tick.get("ltp") or ctx.get("ltp") or 0)
+                day_change_pct = ((ltp - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
+                candidates.append({"symbol": symbol, **ctx, "day_change_pct": day_change_pct})
+        candidates.sort(key=lambda x: abs(float(x.get("day_change_pct") or 0)), reverse=True)
+        return candidates[:TOP_N], {"ranked_universe": len(symbols), "gainers": gainers, "losers": losers}
 
     def _enter(self, candidate: dict[str, Any], confirmation: dict[str, Any], chain: dict[str, Any]) -> None:
         symbol = candidate["symbol"]
@@ -441,6 +476,7 @@ class ScalpChainEngine:
             "confirmation_failed": 0, "entries": 0,
             "ban_list_unavailable": not bool(ban_status.get("ban_list_ok")),
             "top_rejections": {}, "at": now.isoformat(timespec="seconds"),
+            "ranked_universe": 0, "gainers": 0, "losers": 0,
         }
         if not bool(ban_status.get("ban_list_ok")):
             # A missing ban feed must not freeze this paper-only engine.
@@ -452,7 +488,8 @@ class ScalpChainEngine:
         else:
             blocked = {str(x).upper() for x in banned_symbols()}
 
-        candidates = self._candidate_contexts()
+        candidates, ranking_stats = self._candidate_contexts()
+        stats.update(ranking_stats)
         stats["candidates"] = len(candidates)
         rejection_counts: dict[str, int] = {}
         for candidate in candidates:
