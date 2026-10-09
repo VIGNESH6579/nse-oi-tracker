@@ -57,6 +57,21 @@ def test_local_candle_builds_five_minute_ohlc():
     assert candle["close"] == 102.0
 
 
+def test_local_candle_emits_ist_timestamp_and_completed_bar_marker():
+    builder = LocalFiveMinuteBuilder()
+    first = parse_stream_packet(_packet(ts=1791518100000, ltp=10000, volume=100))
+    second = parse_stream_packet(_packet(ts=1791518160000, ltp=10100, volume=120))
+    third = parse_stream_packet(_packet(ts=1791518400000, ltp=10200, volume=150))
+    row1 = builder.add(first)
+    row2 = builder.add(second)
+    row3 = builder.add(third)
+    assert row1["data_frequency"] == "FIVE_MINUTE"
+    assert row1["time"].endswith("+05:30")
+    assert row1["timestamp_ms"] == 1791518100000
+    assert row2["completed_previous"] is False
+    assert row3["completed_previous"] is True
+
+
 def test_local_candle_invalidates_volume_after_mid_session_reset():
     builder = LocalFiveMinuteBuilder()
     first = parse_stream_packet(_packet(volume=1000))
