@@ -41,10 +41,12 @@ This repository includes a `render.yaml` Blueprint. After connecting the
 repository in Render, it deploys the FastAPI web service and redeploys on each
 commit to `main`. The health check is `/api/health` and Render supplies `PORT`.
 
-Render's Free web service is appropriate for a live demo, not durable history:
-it spins down after idle time and its local filesystem (including SQLite) is
-lost on restart, redeploy, or spin-down. Use a paid persistent disk or a
-durable external database before treating history as production data.
+Render Free has an ephemeral local filesystem, so the running SQLite file can
+be lost on restart, redeploy, or spin-down. This deployment is configured to
+upload and restore a compressed SQLite snapshot through the private
+`nse-oi-data` GitHub repository. Verify `snapshot_backend=github`,
+`snapshot_last_error=null`, and a nonzero `snapshot_bytes` in `/api/health`;
+the snapshot is the durability layer, not a Render persistent disk.
 
 ## Core API
 
@@ -105,30 +107,23 @@ for operating guidance.
 
 
 
-## Stock option scalping paper mode
+## Stock-option scalping paper mode
 
-Set `SIGNAL_MODE=scalp_chain` (the default) to use the separate Angel One
-near-ATM stock-options paper scalper. It uses a bounded liquid-stock universe,
-underlying opening-range/VWAP impulse, Angel option quotes, and a hard
-10-minute time exit. It never places orders.
+Default `SIGNAL_MODE=scalp_chain` is paper-only. It ranks the live F&O universe
+by intraday percentage change and evaluates the top 20 gainers plus top 20
+losers using timestamped Angel One WebSocket five-minute candles. It checks
+opening-range breakout, VWAP side, momentum, and non-dead volume before making
+a bounded on-demand near-ATM CE/PE chain request. A candidate must then pass
+the option premium/OI confirmation. A quiet session with zero entries is valid;
+the health endpoint should expose why candidates were rejected.
 
-Set `SIGNAL_MODE=swing_oi` only when you explicitly want the existing F&O OI
-scanner. Swing OI rows are not scalp entries and are never used as scalp exits.
+- Entry window: 09:30–15:00 IST.
+- Maximum hold: 10 minutes.
+- Hard exit/no new entries after 15:15 IST.
+- Maximum concurrent paper positions: 3.
+- No live orders or CAS.
 
-Scalp controls:
-
-- `MAX_HOLD_MINUTES=10`
-- `ENTRY_START=09:30`
-- `ENTRY_END=14:30`
-- `SCALP_MAX_CONCURRENT=3`
-- `SCALP_OPTION_STOP_PCT=30`
-- `SCALP_OPTION_TARGET_PCT=20`
-- `SCALP_CHAIN_TTL_S=20`
-- `SCALP_TOP_N=10`
-
-The scalp API is `GET /api/scalp/live` and
-`GET /api/scalp/history/today`. Angel credentials remain environment-only.
-
-
-## Stock option scalp mode
-Default `SIGNAL_MODE=scalp_chain` is paper-only: Angel One underlying + near-ATM CE/PE chain, 09:30–14:30 entries, 10-minute maximum hold, absolute 15:15 exit. No order APIs are implemented. `SIGNAL_MODE=swing_oi` keeps the legacy OI scanner separate.
+The OI observation layer is separate from the scalp-entry engine. An OI
+classification is not automatically a scalp entry. APIs:
+`GET /api/scalp/live`, `GET /api/scalp/history/today`,
+`GET /api/oi-signals`, and `GET /api/health`.

@@ -39,10 +39,14 @@ services:
         value: data
       - key: SIGNAL_MODE
         value: scalp_chain
-      - key: ENTRY_START
+      - key: SCALP_ENTRY_START
         value: "09:30"
-      - key: ENTRY_END
+      - key: SCALP_ENTRY_END
         value: "15:00"
+      - key: SCALP_MAX_HOLD_MINUTES
+        value: "10"
+      - key: SCALP_MAX_OPEN
+        value: "3"
       - key: SCALP_RANK_TOP_N
         value: "20"
       - key: NSE_OI_SPURTS_RETRY_S

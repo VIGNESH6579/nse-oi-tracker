@@ -175,13 +175,14 @@ def test_scan_feeds_window_for_every_symbol_and_attaches_context(monkeypatch):
 def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
     import app.main as main
     monkeypatch.setattr(main, "banned_symbols", lambda: frozenset({"BAN"}))
+    monkeypatch.setattr(main, "ban_info", lambda: {"ban_list_ok": True, "size": 1})
     monkeypatch.setattr(main, "_market_bias_cached", lambda: "BULL")
     monkeypatch.setattr(main, "now_ist", lambda: datetime(2026, 9, 21, 10, 0, tzinfo=IST))
     good = {"symbol": "OKAY", "signal": "LONG_BUILDUP", "signal_direction": "BUY", "ltp": 104.5, "confidence": 90,
             "oi_window": {"history_minutes": 30, "window_signal": "LONG_BUILDUP", "streak": 5, "h15": {"oi_pct": 1.0}},
             "intraday_context": {"available": True, "vwap": 102.0, "or_high": 104.0, "or_low": 99.0, "or_complete": True,
                                   "day_open": 100.0, "last_minute": 9 * 60 + 55, "session_volume": 30000,
-                                  "source": "angel_one_5m_ohlcv", "data_frequency": "FIVE_MINUTE", "candle_count": 12, "candle_fresh": True, "candle_age_s": 120, "invalid_candles": 0},
+                                  "source": "angel_one_5m_ohlcv", "data_frequency": "FIVE_MINUTE", "candle_count": 12, "candle_fresh": True, "candle_age_s": 30, "invalid_candles": 0},
             "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99, "validation_ready": True}}
     bad = {**good, "symbol": "BAN"}
     bars = {s: [{"trade_date": "2026-09-18", "close": 99.5, "volume": 50000}] * 12 for s in ("OKAY", "BAN")}

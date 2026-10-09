@@ -70,12 +70,23 @@ def test_universe_extra_symbols_exclude_indices_and_tests():
         universe._extra.clear()
 
 
-def test_backfill_symbol_gaps_keeps_only_requested_symbols(tmp_path, monkeypatch):
+def test_backfill_symbol_gaps_uses_angel_history_for_only_requested_symbols(tmp_path, monkeypatch):
     repo = SignalRepository(tmp_path / "g.sqlite3")
-    monkeypatch.setattr(backfill, "collect_equity_bhavcopy", lambda d: [
-        {"trade_date": d.isoformat(), "symbol": s, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10}
-        for s in ("TMPV", "TCS", "JUNK")])
+    seen = {}
+
+    def fake_history(repository, symbols, **kwargs):
+        seen["symbols"] = set(symbols)
+        assert kwargs["max_symbols"] == 1
+        bars = [
+            {"trade_date": d.isoformat(), "symbol": "TMPV", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10}
+            for d in (date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 18))
+        ]
+        stored = repository.upsert_daily_equity_bars(bars)
+        return {"requested": 1, "downloaded": 3, "stored": stored, "failed": 0}
+
+    monkeypatch.setattr(backfill, "backfill_symbol_history", fake_history)
     result = backfill.backfill_symbol_gaps(repo, {"TMPV"}, end_date=date(2026, 9, 18), dates=3, delay_seconds=0)
+    assert seen["symbols"] == {"TMPV"}
     assert result["downloaded"] == 3 and result["stored"] == 3 and result["failed"] == 0
     assert repo.symbols_missing_bars(["TMPV"], 3) == [] and repo.symbols_missing_bars(["TCS"], 1) == ["TCS"]
     assert backfill.backfill_symbol_gaps(repo, set(), end_date=date(2026, 9, 18))["requested"] == 0
@@ -142,6 +153,9 @@ def test_gap_fill_gives_up_on_symbols_with_no_bhavcopy_rows(tmp_path, monkeypatc
         if not main._gap_fill["running"]:
             break
         time.sleep(0.05)
-    assert calls == [{"AAA"}] and main._gap_fill["gave_up"] == {"AAA"}
+    assert calls == [{"AAA"}] and main._gap_fill["gave_up"] == set()
+    # A transient no-data response is not permanently blacklisted; the normal
+    # 20-minute retry window prevents an immediate repeat.
+    assert main.maybe_fill_feed_gaps() is False
     main._gap_fill["last_start"] = None
-    assert main.maybe_fill_feed_gaps() is False                # nothing left to try
+    assert main.maybe_fill_feed_gaps() is True

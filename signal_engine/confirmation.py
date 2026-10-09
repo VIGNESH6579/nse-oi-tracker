@@ -133,4 +133,14 @@ def evaluate_gate(signal: dict[str, Any], *, oi_ctx: dict[str, Any], intraday: d
         "quality_components": comp,
         "rel_volume": rel,
         "market_bias": market_bias,
+        "oi_window_diagnostics": {
+            "daily_signal": name,
+            "window_signal": oi_ctx.get("window_signal"),
+            "history_minutes": float(oi_ctx.get("history_minutes") or 0),
+            "agreement_streak": int(oi_ctx.get("streak") or 0),
+            "source": oi_ctx.get("source"),
+            "h15": oi_ctx.get("h15"),
+            "h30": oi_ctx.get("h30"),
+            "h60": oi_ctx.get("h60"),
+        },
     }

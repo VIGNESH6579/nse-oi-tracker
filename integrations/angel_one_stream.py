@@ -72,6 +72,7 @@ class _Candle:
     volume: int
     ticks: int
     last_volume: int | None = None
+    last_observed_at: float = 0.0
     source: str = "angel_one_websocket_v2"
 
 
@@ -151,9 +152,11 @@ class LocalFiveMinuteBuilder:
         bucket = self._bucket(tick.exchange_timestamp_ms)
         with self._lock:
             candle = self._candles.get(key)
+            completed_previous = False
             if candle is None or candle.bucket_ms != bucket:
                 if candle is not None:
                     self._history.setdefault(key, deque(maxlen=78)).append(candle)
+                    completed_previous = True
                 candle = _Candle(
                     bucket_ms=bucket,
                     open=tick.ltp,
@@ -180,12 +183,18 @@ class LocalFiveMinuteBuilder:
             candle.high = max(candle.high, tick.ltp)
             candle.low = min(candle.low, tick.ltp)
             candle.close = tick.ltp
+            candle.last_observed_at = tick.received_at
             candle.ticks += 1
-            return self._as_dict(candle, key=key, tick=tick)
+            row = self._as_dict(candle, key=key, tick=tick)
+            row["completed_previous"] = completed_previous
+            return row
 
     def _as_dict(self, candle: _Candle, *, key: tuple[int, str], tick: StreamTick) -> dict[str, Any]:
+        candle_time = datetime.fromtimestamp(candle.bucket_ms / 1000, tz=timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
         return {
+            "time": candle_time.isoformat(timespec="seconds"),
             "timestamp_ms": candle.bucket_ms,
+            "data_frequency": "FIVE_MINUTE",
             "open": candle.open,
             "high": candle.high,
             "low": candle.low,
@@ -194,7 +203,7 @@ class LocalFiveMinuteBuilder:
             "ticks": candle.ticks,
             "source": candle.source,
             "volume_valid": self._volume_valid.get(key, True),
-            "observed_at": tick.received_at,
+            "observed_at": candle.last_observed_at or tick.received_at,
         }
 
     def recent(self, exchange_type: int, token: str, *, limit: int = 12) -> list[dict[str, Any]]:
@@ -243,6 +252,7 @@ class AngelOneMarketStream:
         self._last_tick_symbol = ""
         self._ticks_received = 0
         self._candles_built = 0
+        self._candle_updates = 0
         self._last_stream_health_log_at = 0.0
         self._last_error = ""
         self._reconnects = 0
@@ -262,6 +272,8 @@ class AngelOneMarketStream:
                 "last_tick_symbol": self._last_tick_symbol or None,
                 "ticks_received": self._ticks_received,
                 "candles_built": self._candles_built,
+                "candle_updates": self._candle_updates,
+                "candle_counter_semantics": "candles_built counts completed 5-minute bars; candle_updates counts tick-driven bar updates",
                 "subscriptions": len(self._subscriptions),
                 "reconnects": self._reconnects,
                 "last_error": self._last_error,
@@ -499,9 +511,12 @@ class AngelOneMarketStream:
                 if self._ticks_received == 1 or now - self._last_stream_health_log_at >= 60:
                     self._last_stream_health_log_at = now
                     logger.info("Angel WebSocket live ticks=%d last_token=%s candles=%d", self._ticks_received, tick.token, self._candles_built)
-            if self.candles.add(tick) is not None:
+            candle_update = self.candles.add(tick)
+            if candle_update is not None:
                 with self._lock:
-                    self._candles_built += 1
+                    self._candle_updates += 1
+                    if candle_update.get("completed_previous"):
+                        self._candles_built += 1
         except (TypeError, ValueError, struct.error) as exc:
             self._record_error(type(exc).__name__)
 

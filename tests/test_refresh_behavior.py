@@ -88,7 +88,7 @@ def test_render_auto_deploys_on_main_and_stays_free():
 def test_startup_backfill_is_only_started_when_history_is_incomplete():
     assert "startup_backfill_needed = bhavcopy_backfill_required(repository.daily_equity_bar_summary())" in MAIN
     assert "startup_backfill_needed = True if" not in MAIN
-    assert "timeout=450" in MAIN
+    assert "timeout=180" in MAIN
 
 def test_startup_blocks_until_bounded_bhavcopy_backfill_and_self_test():
     assert "Startup readiness BLOCKED until background Bhavcopy backfill/self-test completes" in MAIN

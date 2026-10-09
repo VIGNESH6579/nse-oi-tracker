@@ -64,7 +64,7 @@ def test_index_backfill_continues_after_one_index_fetch_fails(monkeypatch):
 
 
 
-def test_index_backfill_falls_back_to_nse_when_angel_history_is_unavailable(monkeypatch):
+def test_index_backfill_skips_known_blocked_nse_fallback_after_angel_403(monkeypatch):
     repository = FakeRepository()
     calls = []
 
@@ -91,6 +91,6 @@ def test_index_backfill_falls_back_to_nse_when_angel_history_is_unavailable(monk
     )
 
     assert len([c for c in calls if c[0] == "angel"]) == 4
-    assert len([c for c in calls if c[0] == "nse"]) == 4
-    assert result["stored"] == 4
-    assert all(row["source"] == "nse_index_history" for row in repository.saved)
+    assert len([c for c in calls if c[0] == "nse"]) == 0
+    assert result["stored"] == 0
+    assert repository.saved == []

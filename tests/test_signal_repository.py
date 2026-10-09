@@ -157,3 +157,40 @@ def test_delete_confirmed_signals_for_date_only_removes_trade_tier(tmp_path):
     assert deleted == 2
     events, total = repository.history_for_date("2026-09-30")
     assert total == 0
+
+
+def test_confirmed_signal_monitor_persists_weakening_then_exit_warning_without_auto_close(tmp_path):
+    repository = SignalRepository(tmp_path / "signal_monitor.sqlite3")
+    captured_at = datetime(2026, 9, 10, 10, 0, tzinfo=IST)
+    repository.record_scan([_signal("MONITOR", 100.0)], captured_at)
+
+    weak = {
+        **_signal("MONITOR", 100.1),
+        "missing_confirmations": ["oi_window_disagrees"],
+        "oi_window_diagnostics": {"window_signal": "SHORT_BUILDUP", "history_minutes": 45},
+    }
+    repository.update_open_events([weak], captured_at + timedelta(minutes=1))
+    events, _ = repository.history_for_date("2026-09-10")
+    assert events[0]["status"] == "OPEN"
+    assert events[0]["monitor_status"] == "WEAKENING"
+    assert "OI window no longer agrees" in events[0]["monitor_reason"]
+
+    repository.update_open_events([weak], captured_at + timedelta(minutes=2))
+    events, _ = repository.history_for_date("2026-09-10")
+    assert events[0]["status"] == "OPEN"
+    assert events[0]["monitor_status"] == "EXIT SIGNAL"
+    assert "Review/exit the paper position" in events[0]["monitor_message"]
+    assert len(events[0]["monitor_history"]) == 2
+
+
+def test_confirmed_signal_monitor_marks_stale_price_without_closing_event(tmp_path):
+    repository = SignalRepository(tmp_path / "signal_stale.sqlite3")
+    captured_at = datetime(2026, 9, 10, 10, 0, tzinfo=IST)
+    repository.record_scan([_signal("STALE", 100.0)], captured_at)
+
+    stale = {**_signal("STALE", 100.1), "stale_price": True, "price_age_s": 180}
+    repository.update_open_events([stale], captured_at + timedelta(minutes=1))
+    events, _ = repository.history_for_date("2026-09-10")
+    assert events[0]["status"] == "OPEN"
+    assert events[0]["monitor_status"] == "DATA STALE"
+    assert "cannot be verified" in events[0]["monitor_reason"]

@@ -55,13 +55,23 @@ def test_proxy_is_applied_to_archive_requests(monkeypatch):
     monkeypatch.setenv("NSE_OI_PROXY_URL", "socks5h://proxy.example:1080")
     seen = {}
 
-    def get(url, **kwargs):
-        seen.update(kwargs)
-        return FakeResponse(200, "csv", content_type="text/csv")
+    class FakeSession:
+        def __init__(self, **kwargs):
+            self.headers = {}
+            self.proxies = {}
+            self.cookies = {}
 
-    monkeypatch.setattr(nse_fetcher.cffi_requests, "get", get)
-    assert nse_fetcher.NSESession().get_archive_text("https://nse.test/file.csv", "https://nse.test/") == '"csv"'
-    assert seen["proxies"] == {
+        def get(self, url, **kwargs):
+            seen.update(kwargs)
+            seen["session_proxies"] = dict(self.proxies)
+            return FakeResponse(200, "csv", content_type="text/csv")
+
+    monkeypatch.setattr(nse_fetcher.cffi_requests, "Session", FakeSession)
+    session = nse_fetcher.NSESession()
+    session._sess = session._new_session()
+    monkeypatch.setattr(session, "_ensure", lambda: None)
+    assert session.get_archive_text("https://nse.test/file.csv", "https://nse.test/") == '"csv"'
+    assert seen["session_proxies"] == {
         "http": "socks5h://proxy.example:1080",
         "https": "socks5h://proxy.example:1080",
     }

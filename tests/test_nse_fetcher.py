@@ -8,9 +8,17 @@ import app.nse_fetcher as nse_fetcher
 
 
 
+def _force_nse_fallback(module, monkeypatch):
+    # These tests exercise NSE fallback enrichment, not the production Angel-primary path.
+    monkeypatch.setattr(module, "_angel_fno_oi_rows", lambda: [])
+    monkeypatch.setattr(module, "_LAST_NSE_SPURTS_AT", 0)
+    monkeypatch.setattr(module, "NSE_OI_SPURTS_RETRY_S", 0)
+
+
 def test_fetch_all_fno_oi_change_enriches_second_snapshot(monkeypatch):
 
     module = importlib.reload(nse_fetcher)
+    _force_nse_fallback(module, monkeypatch)
 
     payloads = iter([
 
@@ -55,6 +63,7 @@ def test_native_price_change_is_never_overwritten_by_rolling_snapshot(monkeypatc
     That silently broke signal generation on every cycle after the first.
     """
     module = importlib.reload(nse_fetcher)
+    _force_nse_fallback(module, monkeypatch)
     payloads = iter([
         # First poll: NSE gives us a native pChange already.
         {"data": [{"symbol": "XYZ", "underlyingValue": "100", "oi": 1000, "pChange": 1.25}]},
@@ -100,6 +109,7 @@ def test_fetch_all_fno_oi_change_preserves_rows_with_invalid_price(monkeypatch):
 
 def test_absolute_price_change_does_not_mask_percent_change_fallback(monkeypatch):
     module = importlib.reload(nse_fetcher)
+    _force_nse_fallback(module, monkeypatch)
     payloads = iter([
         {"data": [{"symbol": "ABC", "underlyingValue": "100", "change": "0.50"}]},
         {"data": [{"symbol": "ABC", "underlyingValue": "102", "change": "2.00"}]},

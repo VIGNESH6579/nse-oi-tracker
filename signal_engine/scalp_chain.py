@@ -23,11 +23,11 @@ from integrations.angel_one_stream import AngelOneMarketStream
 logger = logging.getLogger(__name__)
 
 MODE = "scalp_chain"
-ENTRY_START = os.getenv("ENTRY_START", "09:30")
-ENTRY_END = os.getenv("ENTRY_END", "15:00")
-MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "10"))
+ENTRY_START = os.getenv("SCALP_ENTRY_START", os.getenv("ENTRY_START", "09:30"))
+ENTRY_END = os.getenv("SCALP_ENTRY_END", os.getenv("ENTRY_END", "15:00"))
+MAX_HOLD_MINUTES = int(os.getenv("SCALP_MAX_HOLD_MINUTES", os.getenv("MAX_HOLD_MINUTES", "10")))
 ABSOLUTE_EXIT = os.getenv("SCALP_ABSOLUTE_EXIT", "15:15")
-MAX_CONCURRENT = int(os.getenv("SCALP_MAX_CONCURRENT", "3"))
+MAX_CONCURRENT = int(os.getenv("SCALP_MAX_OPEN", os.getenv("SCALP_MAX_CONCURRENT", "3")))
 OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
 OPTION_TARGET_PCT = float(os.getenv("SCALP_OPTION_TARGET_PCT", "20"))
 CHAIN_TTL_S = float(os.getenv("SCALP_CHAIN_TTL_S", "20"))
@@ -84,6 +84,7 @@ class ScalpChainEngine:
         self._last_run_at = 0.0
         self._last_error = ""
         self._last_ban_warning_at = 0.0
+        self._last_context_rejection = ""
         self._last_run_stats: dict[str, Any] = {
             "candidates": 0, "chain_checked": 0, "chain_unavailable": 0,
             "confirmation_failed": 0, "entries": 0, "ban_list_unavailable": False,
@@ -182,24 +183,60 @@ class ScalpChainEngine:
             return None
 
     def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
+        """Return a directional setup only from fresh, timestamped real 5-minute stream bars."""
         candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
         if len(candles) < 4:
+            self._last_context_rejection = "insufficient_candle_count"
             return None
         today = now_ist().date()
-        parsed = []
-        for candle in candles:
+        parsed: list[dict[str, Any]] = []
+        for raw in candles:
+            candle = dict(raw)
+            stamp_value = candle.get("time")
+            if not stamp_value and candle.get("timestamp_ms"):
+                try:
+                    candle["time"] = datetime.fromtimestamp(
+                        float(candle["timestamp_ms"]) / 1000.0, tz=now_ist().tzinfo
+                    ).isoformat(timespec="seconds")
+                    stamp_value = candle["time"]
+                except (TypeError, ValueError, OSError):
+                    stamp_value = None
             try:
-                stamp = datetime.fromisoformat(str(candle["time"]))
+                stamp = datetime.fromisoformat(str(stamp_value))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=now_ist().tzinfo)
+                stamp = stamp.astimezone(now_ist().tzinfo)
+                candle["_parsed_time"] = stamp
                 if stamp.date() != today:
                     continue
+                op, hi, lo, close = (float(candle[k]) for k in ("open", "high", "low", "close"))
+                if min(op, hi, lo, close) <= 0 or hi < max(op, close, lo) or lo > min(op, close, hi):
+                    continue
+                if candle.get("data_frequency") != "FIVE_MINUTE":
+                    continue
                 parsed.append(candle)
-            except Exception:
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
         if len(parsed) < 4:
+            self._last_context_rejection = "insufficient_valid_today_5m_candles"
             return None
-        parsed.sort(key=lambda x: str(x.get("time") or ""))
-        opening = [c for c in parsed if "09:15" <= str(c.get("time"))[11:16] < "09:30"]
+        parsed.sort(key=lambda x: x["_parsed_time"])
+        latest = parsed[-1]
+        latest_stamp = latest["_parsed_time"]
+        try:
+            observed_at = float(latest.get("observed_at") or latest_stamp.timestamp())
+        except (TypeError, ValueError):
+            observed_at = latest_stamp.timestamp()
+        candle_age_s = max(0.0, now_ist().timestamp() - observed_at)
+        if candle_age_s > 360:
+            self._last_context_rejection = "stale_5m_candles"
+            return None
+        opening = [
+            candle for candle in parsed
+            if 9 * 60 + 15 <= candle["_parsed_time"].hour * 60 + candle["_parsed_time"].minute < 9 * 60 + 30
+        ]
         if len(opening) < 2:
+            self._last_context_rejection = "opening_range_incomplete"
             return None
         or_high = max(float(c["high"]) for c in opening)
         or_low = min(float(c["low"]) for c in opening)
@@ -223,6 +260,18 @@ class ScalpChainEngine:
             direction = "SELL"
         else:
             direction = None
+            if not volume_ok:
+                self._last_context_rejection = "volume_not_confirmed"
+            elif (close > or_high and close <= vwap) or (close < or_low and close >= vwap):
+                self._last_context_rejection = "wrong_side_of_vwap"
+            elif abs(momentum) < MOMENTUM_MIN_PCT:
+                self._last_context_rejection = "momentum_below_threshold"
+            elif or_low <= close <= or_high:
+                self._last_context_rejection = "inside_opening_range"
+            else:
+                self._last_context_rejection = "directional_setup_not_confirmed"
+        if direction:
+            self._last_context_rejection = ""
         return {
             "direction": direction,
             "ltp": close,
@@ -234,6 +283,9 @@ class ScalpChainEngine:
             "median_volume": median_volume,
             "volume_ok": volume_ok,
             "candle_count": len(parsed),
+            "candle_age_s": round(candle_age_s, 2),
+            "candle_source": "angel_one_websocket_v2",
+            "data_frequency": "FIVE_MINUTE",
         }
 
     def _chain_confirmation(self, symbol: str, direction: str, chain: dict[str, Any]) -> dict[str, Any] | None:
@@ -328,8 +380,11 @@ class ScalpChainEngine:
 
     def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         symbols, gainers, losers, gainer_symbols, loser_symbols = self._ranked_universe()
-        candidates = []
+        candidates: list[dict[str, Any]] = []
+        early_rejections: dict[str, int] = {}
+        early_rejected_symbols: dict[str, str] = {}
         for symbol in symbols:
+            self._last_context_rejection = ""
             ctx = self._underlying_context(symbol)
             if ctx and ctx.get("direction"):
                 tick = self.stream.latest_tick_for_symbol(symbol, max_age_s=15.0) or {}
@@ -337,8 +392,21 @@ class ScalpChainEngine:
                 ltp = float(tick.get("ltp") or ctx.get("ltp") or 0)
                 day_change_pct = ((ltp - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
                 candidates.append({"symbol": symbol, **ctx, "day_change_pct": day_change_pct})
+            else:
+                reason = self._last_context_rejection or "directional_setup_not_confirmed"
+                early_rejections[reason] = early_rejections.get(reason, 0) + 1
+                if len(early_rejected_symbols) < 20:
+                    early_rejected_symbols[symbol] = reason
         candidates.sort(key=lambda x: abs(float(x.get("day_change_pct") or 0)), reverse=True)
-        return candidates[:TOP_N], {"ranked_universe": len(symbols), "gainers": gainers, "losers": losers, "gainer_symbols": gainer_symbols, "loser_symbols": loser_symbols}
+        return candidates[:TOP_N], {
+            "ranked_universe": len(symbols),
+            "gainers": gainers,
+            "losers": losers,
+            "gainer_symbols": gainer_symbols,
+            "loser_symbols": loser_symbols,
+            "early_rejections": early_rejections,
+            "early_rejected_symbols": early_rejected_symbols,
+        }
 
     def _enter(self, candidate: dict[str, Any], confirmation: dict[str, Any], chain: dict[str, Any]) -> None:
         symbol = candidate["symbol"]
@@ -492,7 +560,7 @@ class ScalpChainEngine:
         candidates, ranking_stats = self._candidate_contexts()
         stats.update(ranking_stats)
         stats["candidates"] = len(candidates)
-        rejection_counts: dict[str, int] = {}
+        rejection_counts: dict[str, int] = dict(ranking_stats.get("early_rejections") or {})
         for candidate in candidates:
             if candidate["symbol"] in blocked:
                 rejection_counts["fo_ban_period"] = rejection_counts.get("fo_ban_period", 0) + 1
@@ -519,9 +587,13 @@ class ScalpChainEngine:
         self._last_run_stats = stats
         self._last_run_at = time.monotonic()
         logger.info(
-            "SCALP_REFRESH candidates=%d chain_checked=%d chain_unavailable=%d confirmation_failed=%d entries=%d rejections=%s",
-            stats["candidates"], stats["chain_checked"], stats["chain_unavailable"],
-            stats["confirmation_failed"], stats["entries"], stats["top_rejections"],
+            "SCALP_REFRESH ranked=%d gainers=%d losers=%d candidates=%d chain_checked=%d "
+            "chain_unavailable=%d confirmation_failed=%d entries=%d early_rejections=%s "
+            "early_rejected_symbols=%s rejections=%s",
+            stats["ranked_universe"], stats["gainers"], stats["losers"], stats["candidates"],
+            stats["chain_checked"], stats["chain_unavailable"], stats["confirmation_failed"],
+            stats["entries"], stats.get("early_rejections", {}),
+            stats.get("early_rejected_symbols", {}), stats["top_rejections"],
         )
 
     def live(self) -> dict[str, Any]:

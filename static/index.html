@@ -545,6 +545,11 @@
             <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800"><div><span class="mono font-bold text-white" x-text="t.symbol"></span><span class="ml-2 text-[10px] text-gray-500" x-text="(t.signal_label || t.signal) + ' · ' + t.direction"></span></div><span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span></div>
             <div class="grid grid-cols-4 gap-px bg-gray-800 text-center"><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">Entry</div><div class="mono text-xs" x-text="'₹' + fmt2(t.entry)"></div></div><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">Current</div><div class="mono text-xs" :class="pnlClass(t)" x-text="'₹' + fmt2(t.currentLTP)"></div></div><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">TG1 / TG2</div><div class="mono text-xs text-green-400" x-text="fmt2(t.tg1) + ' / ' + fmt2(t.tg2)"></div></div><div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600">SL</div><div class="mono text-xs text-red-400" x-text="fmt2(t.sl)"></div></div></div>
             <div class="px-4 py-2 text-[10px] text-gray-500 flex flex-wrap gap-x-3"><span x-text="'P&L ' + ((pnlClass(t) === 'text-green-400' ? '+' : '') + (((t.currentLTP - t.entry) / t.entry * 100) * (t.direction === 'SELL' ? -1 : 1)).toFixed(2) + '%')"></span><span x-text="'Opened ' + hm(t.captured_at_ist)"></span><span x-show="t.closed_at_ist" x-text="'Closed ' + hm(t.closed_at_ist)"></span></div>
+            <div x-show="t.monitor_status" class="mx-3 mb-3 rounded border px-3 py-2"
+                 :class="t.monitor_status === 'STRONG' ? 'border-green-900 bg-green-950/30' : t.monitor_status === 'WEAKENING' ? 'border-amber-800 bg-amber-950/30' : t.monitor_status === 'EXIT SIGNAL' ? 'border-red-800 bg-red-950/30' : 'border-gray-700 bg-gray-800/50'">
+              <div class="text-[10px] font-bold" :class="t.monitor_status === 'STRONG' ? 'text-green-300' : t.monitor_status === 'WEAKENING' ? 'text-amber-300' : t.monitor_status === 'EXIT SIGNAL' ? 'text-red-300' : 'text-gray-300'" x-text="t.monitor_status + (t.monitor_updated_at_ist ? ' · ' + hm(t.monitor_updated_at_ist) : '')"></div>
+              <div class="text-[10px] text-gray-400 mt-1" x-text="t.monitor_message || t.monitor_reason"></div>
+            </div>
           </div>
         </template>
       </div>
@@ -596,6 +601,11 @@
                 <span class="text-[10px] text-gray-500" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal)"></span>
               </div>
               <span class="badge" :class="statusClass(t.status)" x-text="statusLabel(t)"></span>
+            </div>
+            <div x-show="t.monitor_status" class="mx-3 mt-3 rounded border px-3 py-2"
+                 :class="t.monitor_status === 'STRONG' ? 'border-green-900 bg-green-950/30' : t.monitor_status === 'WEAKENING' ? 'border-amber-800 bg-amber-950/30' : t.monitor_status === 'EXIT SIGNAL' ? 'border-red-800 bg-red-950/30' : 'border-gray-700 bg-gray-800/50'">
+              <div class="text-[10px] font-bold" :class="t.monitor_status === 'STRONG' ? 'text-green-300' : t.monitor_status === 'WEAKENING' ? 'text-amber-300' : t.monitor_status === 'EXIT SIGNAL' ? 'text-red-300' : 'text-gray-300'" x-text="t.monitor_status + (t.monitor_updated_at_ist ? ' · ' + hm(t.monitor_updated_at_ist) : '')"></div>
+              <div class="text-[10px] text-gray-400 mt-1" x-text="t.monitor_message || t.monitor_reason"></div>
             </div>
             <div class="grid grid-cols-5 gap-px bg-gray-800 text-center">
               <div class="bg-gray-900 px-2 py-2.5"><div class="text-[9px] text-gray-600 uppercase tracking-wider">Entry</div>
