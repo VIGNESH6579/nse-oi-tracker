@@ -181,7 +181,7 @@ def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
             "oi_window": {"history_minutes": 30, "window_signal": "LONG_BUILDUP", "streak": 5, "h15": {"oi_pct": 1.0}},
             "intraday_context": {"available": True, "vwap": 102.0, "or_high": 104.0, "or_low": 99.0, "or_complete": True,
                                   "day_open": 100.0, "last_minute": 9 * 60 + 55, "session_volume": 30000,
-                                  "source": "angel_one_5m_ohlcv", "data_frequency": "FIVE_MINUTE", "candle_count": 12, "candle_fresh": True, "candle_age_s": 120, "invalid_candles": 0},
+                                  "source": "angel_one_5m_ohlcv", "data_frequency": "FIVE_MINUTE", "candle_count": 12, "candle_fresh": True, "candle_age_s": 30, "invalid_candles": 0},
             "technical_context": {"atr14": 5.0, "ema20": 101, "ema50": 99, "validation_ready": True}}
     bad = {**good, "symbol": "BAN"}
     bars = {s: [{"trade_date": "2026-09-18", "close": 99.5, "volume": 50000}] * 12 for s in ("OKAY", "BAN")}
