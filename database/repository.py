@@ -1053,8 +1053,6 @@ class SignalRepository:
         for symbol, price in (extra_prices or {}).items():
             if symbol and float(price or 0) > 0:
                 prices.setdefault(str(symbol).upper(), float(price))
-        if not prices:
-            return 0
         observed_at = as_ist(observed_at)
         trade_date = ist_trade_date(observed_at)
         updated = 0
@@ -1072,10 +1070,29 @@ class SignalRepository:
             for event in events:
                 symbol = str(event["symbol"]).upper()
                 price = prices.get(symbol)
-                if price is None:
-                    continue
                 payload = json.loads(str(event["payload_json"] or "{}"))
                 signal = signal_by_symbol.get(symbol, {})
+                if price is None:
+                    previous_status = str(payload.get("monitor_status") or "")
+                    monitor_status = "DATA STALE"
+                    monitor_reason = "No fresh price for this symbol in the latest monitor cycle"
+                    payload.update({
+                        "monitor_status": monitor_status,
+                        "monitor_reason": monitor_reason,
+                        "monitor_updated_at_ist": observed_at.isoformat(timespec="seconds"),
+                        "monitor_weak_count": 0,
+                        "monitor_message": f"{symbol} — DATA STALE: {monitor_reason}. Wait for fresh data before deciding.",
+                    })
+                    if monitor_status != previous_status:
+                        history = list(payload.get("monitor_history") or [])
+                        history.append({"status": monitor_status, "reason": monitor_reason,
+                                        "at_ist": observed_at.isoformat(timespec="seconds")})
+                        payload["monitor_history"] = history[-10:]
+                    connection.execute(
+                        "UPDATE signal_events SET payload_json = ? WHERE id = ?",
+                        (json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), event["id"]),
+                    )
+                    continue
                 missing = {str(x) for x in (signal.get("missing_confirmations") or [])}
                 oi_diag = signal.get("oi_window_diagnostics") or {}
                 price_age = signal.get("price_age_s")
@@ -1086,6 +1103,8 @@ class SignalRepository:
 
                 stale = bool(signal.get("stale_price")) or (price_age is not None and price_age > 90)
                 weak_reasons = []
+                if not signal:
+                    weak_reasons.append("current OI candidate/confirmation is absent from the latest scan")
                 for reason, label in (
                     ("oi_window_disagrees", "OI window no longer agrees with the signal"),
                     ("persistence_short", "OI agreement persistence has weakened"),
