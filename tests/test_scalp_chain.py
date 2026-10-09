@@ -24,7 +24,7 @@ def test_ban_list_unavailable_does_not_block_scalp_refresh(monkeypatch):
     monkeypatch.setattr(scalp, "ban_info", lambda: {"ban_list_ok": False})
     monkeypatch.setattr(scalp, "banned_symbols", lambda: set())
     called = {"candidates": 0}
-    monkeypatch.setattr(engine, "_candidate_contexts", lambda: called.__setitem__("candidates", called["candidates"] + 1) or [])
+    monkeypatch.setattr(engine, "_candidate_contexts", lambda: called.__setitem__("candidates", called["candidates"] + 1) or ([], {}))
     engine.refresh()
     assert called["candidates"] == 1
     assert engine._last_error == "fo_ban_list_unavailable"
@@ -42,9 +42,11 @@ def test_dynamic_ranking_uses_top_gainers_and_losers(monkeypatch):
     engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), FakeRepo())
     monkeypatch.setattr(scalp, "cached_universe", lambda: {"AAA", "BBB", "CCC", "DDD"})
     monkeypatch.setattr(scalp, "RANK_TOP_N", 1)
-    ranked, stats = engine._ranked_universe()
+    ranked, gainers, losers, gainer_symbols, loser_symbols = engine._ranked_universe()
     assert ranked == ["AAA", "BBB"]
-    assert stats == {"ranked_universe": 4, "gainers": 1, "losers": 1}
+    assert (gainers, losers) == (1, 1)
+    assert gainer_symbols == ["AAA"]
+    assert loser_symbols == ["BBB"]
 
 
 
