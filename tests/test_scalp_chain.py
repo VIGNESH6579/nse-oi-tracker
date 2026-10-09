@@ -101,4 +101,5 @@ def test_documented_scalp_env_names_take_precedence(monkeypatch):
     assert scalp.ENTRY_END == "14:55"
     assert scalp.MAX_HOLD_MINUTES == 8
     assert scalp.MAX_CONCURRENT == 2
+    monkeypatch.undo()
     importlib.reload(scalp)
