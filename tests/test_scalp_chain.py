@@ -84,3 +84,21 @@ def test_candidate_contexts_reports_early_rejections(monkeypatch):
     assert candidates == []
     assert stats["early_rejections"] == {"insufficient_candle_count": 2}
     assert stats["early_rejected_symbols"] == {"AAA": "insufficient_candle_count", "BBB": "insufficient_candle_count"}
+
+
+def test_documented_scalp_env_names_take_precedence(monkeypatch):
+    monkeypatch.setenv("SCALP_ENTRY_START", "09:35")
+    monkeypatch.setenv("ENTRY_START", "09:30")
+    monkeypatch.setenv("SCALP_ENTRY_END", "14:55")
+    monkeypatch.setenv("ENTRY_END", "15:00")
+    monkeypatch.setenv("SCALP_MAX_HOLD_MINUTES", "8")
+    monkeypatch.setenv("MAX_HOLD_MINUTES", "10")
+    monkeypatch.setenv("SCALP_MAX_OPEN", "2")
+    monkeypatch.setenv("SCALP_MAX_CONCURRENT", "3")
+    import importlib
+    importlib.reload(scalp)
+    assert scalp.ENTRY_START == "09:35"
+    assert scalp.ENTRY_END == "14:55"
+    assert scalp.MAX_HOLD_MINUTES == 8
+    assert scalp.MAX_CONCURRENT == 2
+    importlib.reload(scalp)
