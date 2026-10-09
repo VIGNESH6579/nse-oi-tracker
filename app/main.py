@@ -950,7 +950,7 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
     banned = banned_symbols()
     ban_available = bool(ban_info().get("ban_list_ok"))
     bias = _market_bias_cached()
-    out, missing_counts, failed_symbols = [], {}, {}
+    out, missing_counts, failed_symbols, oi_window_details = [], {}, {}, {}
     for signal in signals:
         symbol = str(signal.get("symbol") or "")
         tech = signal.get("technical_context") or {}
@@ -968,6 +968,8 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
         )
         if gate["missing_confirmations"]:
             failed_symbols[symbol] = gate["missing_confirmations"][:4]
+            if any(reason in gate["missing_confirmations"] for reason in ("oi_window_disagrees", "persistence_short")):
+                oi_window_details[symbol] = gate.get("oi_window_diagnostics") or {}
         for reason in gate["missing_confirmations"]:
             missing_counts[reason] = missing_counts.get(reason, 0) + 1
         merged = {**signal, **gate}
@@ -979,7 +981,14 @@ def _apply_confirmation_gate(signals: list[dict], bars_by_symbol: dict) -> list[
             logger.debug("Could not attach trade plan to %s", symbol, exc_info=True)
         out.append(merged)
     passed = sum(1 for item in out if item.get("actionable"))
-    _gate_stats.update(passed=passed, failed=len(out) - passed, top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]), failed_symbols=dict(list(failed_symbols.items())[:10]), at=now.isoformat(timespec="seconds"))
+    _gate_stats.update(
+        passed=passed,
+        failed=len(out) - passed,
+        top_missing=dict(sorted(missing_counts.items(), key=lambda kv: -kv[1])[:6]),
+        failed_symbols=dict(list(failed_symbols.items())[:10]),
+        oi_window_details=dict(list(oi_window_details.items())[:10]),
+        at=now.isoformat(timespec="seconds"),
+    )
     return out
 
 
@@ -1508,7 +1517,6 @@ async def sources():
             "mode": "read_only_quotes_and_candles" if angel_market_data else "disabled",
             "order_execution": False,
             "health": angel_market_data.health() if angel_market_data else {"state": "disabled", "last_error_code": "", "retry_at": None},
-            "stream": angel_stream.health(),
             "stream": angel_stream.health(),
         },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
