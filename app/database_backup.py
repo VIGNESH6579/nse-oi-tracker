@@ -126,7 +126,7 @@ def _github_url(repo: str, path: str, branch: str) -> str:
 def _decode_github_snapshot_item(item: dict) -> bytes | None:
     encoded = item.get("content", "") if isinstance(item, dict) else ""
     if encoded:
-        return base64.b64decode(encoded.replace("\\n", ""))
+        return base64.b64decode("".join(encoded.split()))
     download_url = item.get("download_url") if isinstance(item, dict) else None
     return _request(download_url, token=_github_config()[1]) if download_url else None
 
