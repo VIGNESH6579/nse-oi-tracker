@@ -47,8 +47,6 @@ services:
         value: "10"
       - key: SCALP_MAX_OPEN
         value: "3"
-      - key: SCALP_ENABLED
-        value: "1"
       - key: SCALP_RANK_TOP_N
         value: "20"
       - key: NSE_OI_SPURTS_RETRY_S
