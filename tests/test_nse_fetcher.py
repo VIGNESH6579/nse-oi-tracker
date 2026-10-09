@@ -8,9 +8,17 @@ import app.nse_fetcher as nse_fetcher
 
 
 
+def _force_nse_fallback(module, monkeypatch):
+    # These tests exercise NSE fallback enrichment, not the production Angel-primary path.
+    monkeypatch.setattr(module, "_angel_fno_oi_rows", lambda: [])
+    monkeypatch.setattr(module, "_LAST_NSE_SPURTS_AT", 0)
+    monkeypatch.setattr(module, "NSE_OI_SPURTS_RETRY_S", 0)
+
+
 def test_fetch_all_fno_oi_change_enriches_second_snapshot(monkeypatch):
 
     module = importlib.reload(nse_fetcher)
+    _force_nse_fallback(module, monkeypatch)
 
     payloads = iter([
 
