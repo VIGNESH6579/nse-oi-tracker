@@ -69,6 +69,7 @@ def test_proxy_is_applied_to_archive_requests(monkeypatch):
     monkeypatch.setattr(nse_fetcher.cffi_requests, "Session", FakeSession)
     session = nse_fetcher.NSESession()
     session._sess = session._new_session()
+    monkeypatch.setattr(session, "_ensure", lambda: None)
     assert session.get_archive_text("https://nse.test/file.csv", "https://nse.test/") == '"csv"'
     assert seen["session_proxies"] == {
         "http": "socks5h://proxy.example:1080",
