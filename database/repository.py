@@ -1034,17 +1034,21 @@ class SignalRepository:
 
     def update_open_events(self, signals: Iterable[dict[str, Any]], observed_at: datetime,
                            extra_prices: dict[str, float] | None = None) -> int:
-        """Monitor same-day open events against live prices.
+        """Monitor open paper events for price exits and confirmation deterioration.
 
-        Prices come from the published signals AND ``extra_prices`` (so a trade keeps being
-        monitored after its symbol leaves the signal list). After TG1 the stop moves to
-        entry (breakeven): TG1 followed by a reversal closes as BE_EXIT (+0.5R), not SL_HIT.
-        Stops fill at the worse of level and observed price; targets fill at the level.
+        Confirmation monitoring is advisory: one weak observation never auto-closes a
+        position. Two consecutive weak observations produce an EXIT SIGNAL warning.
+        Existing stop/target fills and end-of-day flat rules remain authoritative.
         """
+        signal_rows = [dict(signal) for signal in signals]
+        signal_by_symbol = {
+            str(signal.get("symbol") or "").upper(): signal
+            for signal in signal_rows if signal.get("symbol")
+        }
         prices = {
-            str(signal.get("symbol") or "").upper(): float(signal.get("ltp") or 0)
-            for signal in signals
-            if signal.get("symbol") and float(signal.get("ltp") or 0) > 0
+            symbol: float(signal.get("ltp") or 0)
+            for symbol, signal in signal_by_symbol.items()
+            if float(signal.get("ltp") or 0) > 0
         }
         for symbol, price in (extra_prices or {}).items():
             if symbol and float(price or 0) > 0:
@@ -1057,16 +1061,85 @@ class SignalRepository:
         with self._connect() as connection:
             events = connection.execute(
                 """
-                SELECT id, symbol, direction, entry, stop_loss, target_1, target_2, max_target_hit
+                SELECT id, symbol, direction, entry, stop_loss, target_1, target_2,
+                       max_target_hit, payload_json
                 FROM signal_events
-                WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE' AND status IN ('OPEN', 'TG1_HIT')
+                WHERE trade_date = ? AND archived = 0 AND tier = 'TRADE'
+                  AND status IN ('OPEN', 'TG1_HIT')
                 """,
                 (trade_date,),
             ).fetchall()
             for event in events:
-                price = prices.get(str(event["symbol"]))
+                symbol = str(event["symbol"]).upper()
+                price = prices.get(symbol)
                 if price is None:
                     continue
+                payload = json.loads(str(event["payload_json"] or "{}"))
+                signal = signal_by_symbol.get(symbol, {})
+                missing = {str(x) for x in (signal.get("missing_confirmations") or [])}
+                oi_diag = signal.get("oi_window_diagnostics") or {}
+                price_age = signal.get("price_age_s")
+                try:
+                    price_age = float(price_age) if price_age is not None else None
+                except (TypeError, ValueError):
+                    price_age = None
+
+                stale = bool(signal.get("stale_price")) or (price_age is not None and price_age > 90)
+                weak_reasons = []
+                for reason, label in (
+                    ("oi_window_disagrees", "OI window no longer agrees with the signal"),
+                    ("persistence_short", "OI agreement persistence has weakened"),
+                    ("wrong_side_of_vwap", "price is on the wrong side of VWAP"),
+                    ("stale_5m_candles", "five-minute candles are stale"),
+                    ("real_5m_candles_unavailable", "fresh five-minute candles are unavailable"),
+                    ("opening_range_incomplete", "opening range is incomplete"),
+                ):
+                    if reason in missing:
+                        weak_reasons.append(label)
+                if signal and signal.get("signal") and str(signal.get("signal")).upper() != str(payload.get("signal") or "").upper():
+                    weak_reasons.append("OI classification changed from the entry signal")
+                try:
+                    confidence = int(signal.get("confidence") or 0)
+                except (TypeError, ValueError):
+                    confidence = 0
+                if signal and confidence and confidence < 60:
+                    weak_reasons.append(f"confidence fell to {confidence}")
+                weak_count = int(payload.get("monitor_weak_count") or 0)
+                previous_status = str(payload.get("monitor_status") or "STRONG")
+                if stale:
+                    monitor_status = "DATA STALE"
+                    monitor_reason = "Live price is stale; signal strength cannot be verified"
+                    weak_count = 0
+                elif weak_reasons:
+                    weak_count += 1
+                    monitor_status = "EXIT SIGNAL" if weak_count >= 2 else "WEAKENING"
+                    monitor_reason = "; ".join(weak_reasons[:3])
+                else:
+                    weak_count = 0
+                    monitor_status = "STRONG"
+                    monitor_reason = "No monitored confirmation deterioration"
+                if monitor_status != previous_status:
+                    history = list(payload.get("monitor_history") or [])
+                    history.append({
+                        "status": monitor_status,
+                        "reason": monitor_reason,
+                        "at_ist": observed_at.isoformat(timespec="seconds"),
+                    })
+                    payload["monitor_history"] = history[-10:]
+                payload.update({
+                    "monitor_status": monitor_status,
+                    "monitor_reason": monitor_reason,
+                    "monitor_updated_at_ist": observed_at.isoformat(timespec="seconds"),
+                    "monitor_weak_count": weak_count,
+                    "monitor_message": (
+                        f"{symbol} — {monitor_status}: {monitor_reason}. "
+                        + ("Review/exit the paper position under your rules." if monitor_status == "EXIT SIGNAL"
+                           else "Recheck on the next scan." if monitor_status == "WEAKENING"
+                           else "Fresh data is needed before judging the signal." if monitor_status == "DATA STALE"
+                           else "Confirmation remains aligned.")
+                    ),
+                })
+
                 direction = str(event["direction"])
                 entry, stop = float(event["entry"]), float(event["stop_loss"])
                 t1, t2 = float(event["target_1"]), float(event["target_2"])
@@ -1086,19 +1159,25 @@ class SignalRepository:
                     status = "BE_EXIT" if armed else "SL_HIT"
                 else:
                     connection.execute(
-                        "UPDATE signal_events SET current_price = ?, max_target_hit = ?, status = ? WHERE id = ?",
-                        (price, max_hit, "TG1_HIT" if max_hit else "OPEN", event["id"]),
+                        "UPDATE signal_events SET current_price = ?, max_target_hit = ?, status = ?, payload_json = ? WHERE id = ?",
+                        (price, max_hit, "TG1_HIT" if max_hit else "OPEN",
+                         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), event["id"]),
                     )
                     continue
                 result_r = _closed_r(status, direction, entry, stop, t1, t2, exit_price, armed or hit2)
+                payload["monitor_status"] = "EXIT SIGNAL"
+                payload["monitor_reason"] = "Configured stop/target exit triggered"
+                payload["monitor_updated_at_ist"] = observed_at.isoformat(timespec="seconds")
+                payload["monitor_message"] = f"{symbol} — EXIT SIGNAL: {payload['monitor_reason']}."
                 connection.execute(
                     """
                     UPDATE signal_events
                     SET current_price = ?, exit_price = ?, max_target_hit = ?, status = ?, result = ?,
-                        result_r = ?, result_source = 'live_monitor', closed_at_ist = ?
+                        result_r = ?, result_source = 'live_monitor', closed_at_ist = ?, payload_json = ?
                     WHERE id = ?
                     """,
-                    (price, exit_price, max_hit, status, status, result_r, observed_at.isoformat(), event["id"]),
+                    (price, exit_price, max_hit, status, status, result_r, observed_at.isoformat(),
+                     json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str), event["id"]),
                 )
                 updated += 1
         return updated
