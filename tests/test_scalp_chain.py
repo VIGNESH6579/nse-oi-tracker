@@ -45,3 +45,40 @@ def test_dynamic_ranking_uses_top_gainers_and_losers(monkeypatch):
     ranked, stats = engine._ranked_universe()
     assert ranked == ["AAA", "BBB"]
     assert stats == {"ranked_universe": 4, "gainers": 1, "losers": 1}
+
+
+
+def test_underlying_context_accepts_timestamp_ms_normalized_to_ist(monkeypatch):
+    from datetime import datetime
+    candles = [
+        {"timestamp_ms": 1791518100000, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100},
+        {"timestamp_ms": 1791518400000, "open": 100, "high": 102, "low": 100, "close": 101, "volume": 100},
+        {"timestamp_ms": 1791520500000, "open": 102, "high": 103, "low": 102, "close": 103, "volume": 100},
+        {"timestamp_ms": 1791520800000, "open": 103, "high": 105, "low": 103, "close": 104, "volume": 100},
+    ]
+
+    class CandleStream(RankingStream):
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return candles[-limit:]
+
+    engine = scalp.ScalpChainEngine(FakeMarket(), CandleStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: datetime.fromisoformat("2026-10-09T10:00:00+05:30"))
+    ctx = engine._underlying_context("AAA")
+    assert ctx is not None
+    assert ctx["data_frequency"] == "FIVE_MINUTE"
+    assert ctx["candle_source"] == "angel_one_websocket_v2"
+    assert ctx["direction"] == "BUY"
+
+
+def test_candidate_contexts_reports_early_rejections(monkeypatch):
+    class EmptyCandleStream(RankingStream):
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return []
+
+    engine = scalp.ScalpChainEngine(FakeMarket(), EmptyCandleStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "cached_universe", lambda: {"AAA", "BBB"})
+    monkeypatch.setattr(engine, "_underlying_context", lambda symbol: setattr(engine, "_last_context_rejection", "insufficient_candle_count") or None)
+    candidates, stats = engine._candidate_contexts()
+    assert candidates == []
+    assert stats["early_rejections"] == {"insufficient_candle_count": 2}
+    assert stats["early_rejected_symbols"] == {"AAA": "insufficient_candle_count", "BBB": "insufficient_candle_count"}
