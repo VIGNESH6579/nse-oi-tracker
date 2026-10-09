@@ -41,10 +41,12 @@ This repository includes a `render.yaml` Blueprint. After connecting the
 repository in Render, it deploys the FastAPI web service and redeploys on each
 commit to `main`. The health check is `/api/health` and Render supplies `PORT`.
 
-Render's Free web service is appropriate for a live demo, not durable history:
-it spins down after idle time and its local filesystem (including SQLite) is
-lost on restart, redeploy, or spin-down. Use a paid persistent disk or a
-durable external database before treating history as production data.
+Render Free has an ephemeral local filesystem, so the running SQLite file can
+be lost on restart, redeploy, or spin-down. This deployment is configured to
+upload and restore a compressed SQLite snapshot through the private
+`nse-oi-data` GitHub repository. Verify `snapshot_backend=github`,
+`snapshot_last_error=null`, and a nonzero `snapshot_bytes` in `/api/health`;
+the snapshot is the durability layer, not a Render persistent disk.
 
 ## Core API
 
