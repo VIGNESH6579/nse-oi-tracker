@@ -129,7 +129,8 @@ class OIWindow:
             if not points or len(points) < 2:
                 return {"points": len(points or ()), "history_minutes": 0.0, "window_signal": None}
             out: dict[str, Any] = {"points": len(points),
-                                   "history_minutes": round((points[-1][0] - points[0][0]).total_seconds() / 60, 1)}
+                                   "history_minutes": round((points[-1][0] - points[0][0]).total_seconds() / 60, 1),
+                                   "source": self._source.get(symbol)}
             for minutes in HORIZONS:
                 out[f"h{minutes}"] = self._horizon(points, minutes)
             first = self._first[symbol]
