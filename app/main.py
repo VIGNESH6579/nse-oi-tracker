@@ -1049,11 +1049,20 @@ async def scheduled_self_test(stage: str) -> None:
 
 
 async def scheduled_readiness_recheck() -> None:
-    """Re-run post-open readiness and keep the public startup state synchronized."""
+    """Re-test readiness every five minutes, including off-hours recovery.
+
+    A transient Angel login rejection during a rolling deploy can open the
+    authentication circuit breaker. If readiness checks only run while the
+    market is open, an overnight BLOCKED state can persist until 09:05 even
+    after Angel recovers. Use the lighter pre-open probes while the market is
+    closed so the service can recover without another restart.
+    """
     global _startup_state, _startup_error, _startup_ready_at_ist
-    if not is_market_open() or is_trading_holiday(now_ist().date()) is True:
+    now = now_ist()
+    if is_trading_holiday(now.date()) is True:
         return
-    await scheduled_self_test("post_open")
+    stage = "post_open" if is_market_open() else "pre_open"
+    await scheduled_self_test(stage)
     verdict = self_test.readiness()
     if verdict == "READY":
         _startup_state = "READY"
@@ -1061,11 +1070,11 @@ async def scheduled_readiness_recheck() -> None:
         _startup_ready_at_ist = now_ist().isoformat()
     elif verdict == "DEGRADED":
         _startup_state = "DEGRADED"
-        _startup_error = "post-open self-test degraded; core scanner remains active"
+        _startup_error = f"{stage} self-test degraded; core scanner remains available"
         _startup_ready_at_ist = None
     elif verdict == "BLOCKED":
         _startup_state = "BLOCKED"
-        _startup_error = "post-open self-test core failure"
+        _startup_error = f"{stage} self-test core failure"
         _startup_ready_at_ist = None
 
 
