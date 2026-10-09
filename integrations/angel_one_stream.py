@@ -72,6 +72,7 @@ class _Candle:
     volume: int
     ticks: int
     last_volume: int | None = None
+    last_observed_at: float = 0.0
     source: str = "angel_one_websocket_v2"
 
 
@@ -182,6 +183,7 @@ class LocalFiveMinuteBuilder:
             candle.high = max(candle.high, tick.ltp)
             candle.low = min(candle.low, tick.ltp)
             candle.close = tick.ltp
+            candle.last_observed_at = tick.received_at
             candle.ticks += 1
             row = self._as_dict(candle, key=key, tick=tick)
             row["completed_previous"] = completed_previous
@@ -201,7 +203,7 @@ class LocalFiveMinuteBuilder:
             "ticks": candle.ticks,
             "source": candle.source,
             "volume_valid": self._volume_valid.get(key, True),
-            "observed_at": tick.received_at,
+            "observed_at": candle.last_observed_at or tick.received_at,
         }
 
     def recent(self, exchange_type: int, token: str, *, limit: int = 12) -> list[dict[str, Any]]:
