@@ -1,5 +1,7 @@
+import base64
 import gzip
 import io
+import json
 import sqlite3
 
 from app import database_backup
@@ -55,3 +57,30 @@ def test_restore_temp_file_is_created_on_target_filesystem(monkeypatch, tmp_path
     assert seen["dir"] == target_dir
     with sqlite3.connect(target) as connection:
         assert connection.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0] == 1
+
+
+def test_github_snapshot_upload_does_not_replace_deeper_remote_history(monkeypatch, tmp_path):
+    candidate = tmp_path / "candidate.sqlite3"
+    remote = tmp_path / "remote.sqlite3"
+    _db(candidate, bars=1)
+    _db(remote, bars=1)
+    with sqlite3.connect(remote) as connection:
+        connection.execute(
+            "INSERT INTO daily_equity_bars VALUES ('2026-09-16','NIFTY',1,2,0.5,1.5,0)"
+        )
+
+    remote_stream = io.BytesIO()
+    with gzip.GzipFile(fileobj=remote_stream, mode="wb") as out:
+        out.write(remote.read_bytes())
+    remote_payload = remote_stream.getvalue()
+    monkeypatch.setattr(database_backup, "_github_config", lambda: ("VIGNESH6579/nse-oi-data", "token", "data"))
+    monkeypatch.setattr(
+        database_backup, "_request",
+        lambda url, **kwargs: json.dumps({"content": base64.b64encode(remote_payload).decode("ascii")}).encode(),
+    )
+    uploaded = []
+    monkeypatch.setattr(database_backup, "_github_put", lambda *args, **kwargs: uploaded.append(args))
+
+    assert database_backup.upload_github_snapshot(candidate) is True
+    assert uploaded == []
+    assert database_backup.last_snapshot_info()["snapshot_bytes"] == len(remote_payload)
