@@ -56,6 +56,11 @@ def price_env(tmp_path, monkeypatch):
     monkeypatch.setattr(nse_fetcher, "_price_snapshots", nse_fetcher.OrderedDict())
     monkeypatch.setattr(nse_fetcher, "_INDEX_PREVIOUS_CLOSES", {})
     monkeypatch.setattr(nse_fetcher, "_INDEX_PREVIOUS_CLOSES_AT", 0.0)
+    # This fixture verifies the NSE parsing/day-relative fallback in isolation.
+    # Production still prefers Angel NFO futures and throttles NSE to fallback.
+    monkeypatch.setattr(nse_fetcher, "_angel_fno_oi_rows", lambda: [])
+    monkeypatch.setattr(nse_fetcher, "_LAST_NSE_SPURTS_AT", 0)
+    monkeypatch.setattr(nse_fetcher, "NSE_OI_SPURTS_RETRY_S", 0)
     return database
 
 
