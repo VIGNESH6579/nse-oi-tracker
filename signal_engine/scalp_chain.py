@@ -23,11 +23,11 @@ from integrations.angel_one_stream import AngelOneMarketStream
 logger = logging.getLogger(__name__)
 
 MODE = "scalp_chain"
-ENTRY_START = os.getenv("ENTRY_START", "09:30")
-ENTRY_END = os.getenv("ENTRY_END", "15:00")
-MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "10"))
+ENTRY_START = os.getenv("SCALP_ENTRY_START", os.getenv("ENTRY_START", "09:30"))
+ENTRY_END = os.getenv("SCALP_ENTRY_END", os.getenv("ENTRY_END", "15:00"))
+MAX_HOLD_MINUTES = int(os.getenv("SCALP_MAX_HOLD_MINUTES", os.getenv("MAX_HOLD_MINUTES", "10")))
 ABSOLUTE_EXIT = os.getenv("SCALP_ABSOLUTE_EXIT", "15:15")
-MAX_CONCURRENT = int(os.getenv("SCALP_MAX_CONCURRENT", "3"))
+MAX_CONCURRENT = int(os.getenv("SCALP_MAX_OPEN", os.getenv("SCALP_MAX_CONCURRENT", "3")))
 OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
 OPTION_TARGET_PCT = float(os.getenv("SCALP_OPTION_TARGET_PCT", "20"))
 CHAIN_TTL_S = float(os.getenv("SCALP_CHAIN_TTL_S", "20"))
