@@ -51,10 +51,10 @@ def test_dynamic_ranking_uses_top_gainers_and_losers(monkeypatch):
 def test_underlying_context_accepts_timestamp_ms_normalized_to_ist(monkeypatch):
     from datetime import datetime
     candles = [
-        {"timestamp_ms": 1791518100000, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100},
-        {"timestamp_ms": 1791518400000, "open": 100, "high": 102, "low": 100, "close": 101, "volume": 100},
-        {"timestamp_ms": 1791520500000, "open": 102, "high": 103, "low": 102, "close": 103, "volume": 100},
-        {"timestamp_ms": 1791520800000, "open": 103, "high": 105, "low": 103, "close": 104, "volume": 100},
+        {"timestamp_ms": 1791517500000, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100},
+        {"timestamp_ms": 1791517800000, "open": 100, "high": 102, "low": 100, "close": 101, "volume": 100},
+        {"timestamp_ms": 1791519900000, "open": 102, "high": 103, "low": 102, "close": 103, "volume": 100},
+        {"timestamp_ms": 1791520200000, "open": 103, "high": 105, "low": 103, "close": 104, "volume": 100},
     ]
 
     class CandleStream(RankingStream):
