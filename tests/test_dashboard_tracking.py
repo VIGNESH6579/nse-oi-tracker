@@ -76,7 +76,11 @@ def test_market_context_refresh_button_has_timeout_loading_and_visible_error_sta
 def test_market_context_refreshes_on_the_same_60s_cycle_as_signals():
     """Previously fetchMarketOverview() ran only at page load and on manual click, so the four
     index CMPs (and VIX) went stale immediately while everything else kept refreshing."""
-    assert "Promise.all([this.fetchSignals(), this.fetchMarketOverview()]).then(() => this.startTimer())" in INDEX
+    # Both modes refresh signals and market context together; scalp mode also
+    # refreshes its separate option-chain layer before starting the shared timer.
+    assert "await Promise.all([this.fetchSignals(), this.fetchMarketOverview()])" in INDEX
+    assert "await Promise.all([this.fetchScalp(), this.fetchSignals(), this.fetchMarketOverview()])" in INDEX
+    assert "this.startTimer();" in INDEX
     assert "marketOverviewFetchedAt" in INDEX and "(stale)" in INDEX
 
 
