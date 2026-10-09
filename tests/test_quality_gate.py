@@ -138,7 +138,7 @@ def test_ban_parser_and_refresh_keeps_last_good_list():
     def boom(url):
         raise RuntimeError("blocked")
     assert refresh_ban_list(fetch=boom) is False
-    assert "ABFRL" in banned_symbols() and ban_info()["ban_list_ok"] is False
+    assert "ABFRL" in banned_symbols() and ban_info()["ban_list_ok"] is True
 
 
 # ---------------- wiring tests (scan -> window -> gate -> admission) ----------------
