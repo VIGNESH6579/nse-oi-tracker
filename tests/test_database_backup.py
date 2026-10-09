@@ -32,3 +32,26 @@ def test_snapshot_upload_failure_is_non_blocking(monkeypatch, tmp_path):
     def fail(*args, **kwargs): raise OSError("bucket down")
     monkeypatch.setattr(database_backup, "_request", fail)
     assert database_backup.upload_database_snapshot(db) is False
+
+
+def test_restore_temp_file_is_created_on_target_filesystem(monkeypatch, tmp_path):
+    source = tmp_path / "source.sqlite3"
+    target_dir = tmp_path / "target-dir"
+    target = target_dir / "restored.sqlite3"
+    _db(source, bars=1, events=1)
+    payload = io.BytesIO()
+    with gzip.GzipFile(fileobj=payload, mode="wb") as out:
+        out.write(source.read_bytes())
+
+    original = database_backup.tempfile.NamedTemporaryFile
+    seen = {}
+
+    def tracked_tempfile(*args, **kwargs):
+        seen["dir"] = kwargs.get("dir")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(database_backup.tempfile, "NamedTemporaryFile", tracked_tempfile)
+    assert database_backup._restore_payload(target, payload.getvalue()) is True
+    assert seen["dir"] == target_dir
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0] == 1

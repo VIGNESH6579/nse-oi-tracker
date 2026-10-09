@@ -203,7 +203,13 @@ def upload_database_snapshot(database_path: Path) -> bool:
 
 
 def _restore_payload(database_path: Path, payload: bytes) -> bool:
-    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as temporary:
+    # Render can mount /tmp and the project/data directory on different
+    # filesystems. os.replace() is atomic only within one filesystem, so the
+    # restore temp file must live beside the destination database.
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=database_path.parent, suffix=".restore.sqlite3", delete=False
+    ) as temporary:
         temporary_path = Path(temporary.name)
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(payload)) as source, open(temporary_path, "wb") as target:
@@ -212,7 +218,6 @@ def _restore_payload(database_path: Path, payload: bytes) -> bool:
             result = connection.execute("PRAGMA integrity_check").fetchone()
             if not result or result[0] != "ok":
                 return False
-        database_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(temporary_path, database_path)
         return True
     finally:
