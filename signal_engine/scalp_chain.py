@@ -212,7 +212,7 @@ class ScalpChainEngine:
                 op, hi, lo, close = (float(candle[k]) for k in ("open", "high", "low", "close"))
                 if min(op, hi, lo, close) <= 0 or hi < max(op, close, lo) or lo > min(op, close, hi):
                     continue
-                if candle.get("data_frequency", "FIVE_MINUTE") != "FIVE_MINUTE":
+                if candle.get("data_frequency") != "FIVE_MINUTE":
                     continue
                 parsed.append(candle)
             except (KeyError, TypeError, ValueError, OverflowError):
@@ -221,8 +221,13 @@ class ScalpChainEngine:
             self._last_context_rejection = "insufficient_valid_today_5m_candles"
             return None
         parsed.sort(key=lambda x: x["_parsed_time"])
-        latest_stamp = parsed[-1]["_parsed_time"]
-        candle_age_s = max(0.0, (now_ist() - latest_stamp).total_seconds())
+        latest = parsed[-1]
+        latest_stamp = latest["_parsed_time"]
+        try:
+            observed_at = float(latest.get("observed_at") or latest_stamp.timestamp())
+        except (TypeError, ValueError):
+            observed_at = latest_stamp.timestamp()
+        candle_age_s = max(0.0, now_ist().timestamp() - observed_at)
         if candle_age_s > 360:
             self._last_context_rejection = "stale_5m_candles"
             return None
