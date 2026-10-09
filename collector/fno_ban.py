@@ -111,9 +111,17 @@ def refresh_ban_list(fetch=_fetch) -> bool:
     except Exception:
         logger.warning("Verified NSE ban relay unavailable or stale", exc_info=True)
     with _lock:
+        # A failed refresh must not invalidate a non-empty last-good cache.
+        # The scanner can safely continue using the last published ban list;
+        # only a process with no usable cached list is genuinely unavailable.
+        if _state["symbols"]:
+            _state["ok"] = True
+            _state["source"] = _state.get("source") or "last_good_cache"
+            logger.warning("FNO_BAN_LIST_REFRESH_FAILED: retaining last-good list (%d symbols)", len(_state["symbols"]))
+            return True
         _state["ok"] = False
         _state["source"] = None
-    logger.warning("FNO_BAN_LIST_UNAVAILABLE: keeping previous list (%d symbols)", len(_state["symbols"]))
+    logger.warning("FNO_BAN_LIST_UNAVAILABLE: no last-good list available")
     return False
 
 
