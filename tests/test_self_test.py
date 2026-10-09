@@ -195,3 +195,29 @@ def test_scalp_failure_is_not_core_blocker(tmp_path):
     result = st.run_stage("post_open", probes, NOW)
     assert result["verdict"] == "DEGRADED"
     assert "scalp_chain" in result["failed"]
+
+
+def test_readiness_recheck_can_recover_after_hours_without_restart(monkeypatch):
+    import asyncio
+    import app.main as main
+
+    called = []
+
+    async def fake_self_test(stage):
+        called.append(stage)
+
+    monkeypatch.setattr(main, "is_market_open", lambda: False)
+    monkeypatch.setattr(main, "is_trading_holiday", lambda day: False)
+    monkeypatch.setattr(main, "now_ist", lambda: NOW.replace(hour=21, minute=35))
+    monkeypatch.setattr(main, "scheduled_self_test", fake_self_test)
+    monkeypatch.setattr(main.self_test, "readiness", lambda: "READY")
+    monkeypatch.setattr(main, "_startup_state", "BLOCKED")
+    monkeypatch.setattr(main, "_startup_error", "startup self-test verdict=BLOCKED")
+    monkeypatch.setattr(main, "_startup_ready_at_ist", None)
+
+    asyncio.run(main.scheduled_readiness_recheck())
+
+    assert called == ["pre_open"]
+    assert main._startup_state == "READY"
+    assert main._startup_error is None
+    assert main._startup_ready_at_ist is not None
