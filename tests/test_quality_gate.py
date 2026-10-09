@@ -175,6 +175,7 @@ def test_scan_feeds_window_for_every_symbol_and_attaches_context(monkeypatch):
 def test_apply_gate_in_main_and_admission(monkeypatch, tmp_path):
     import app.main as main
     monkeypatch.setattr(main, "banned_symbols", lambda: frozenset({"BAN"}))
+    monkeypatch.setattr(main, "ban_info", lambda: {"ban_list_ok": True, "size": 1})
     monkeypatch.setattr(main, "_market_bias_cached", lambda: "BULL")
     monkeypatch.setattr(main, "now_ist", lambda: datetime(2026, 9, 21, 10, 0, tzinfo=IST))
     good = {"symbol": "OKAY", "signal": "LONG_BUILDUP", "signal_direction": "BUY", "ltp": 104.5, "confidence": 90,
