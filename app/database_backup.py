@@ -123,6 +123,38 @@ def _github_url(repo: str, path: str, branch: str) -> str:
     return f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
 
 
+def _decode_github_snapshot_item(item: dict) -> bytes | None:
+    encoded = item.get("content", "") if isinstance(item, dict) else ""
+    if encoded:
+        return base64.b64decode("".join(encoded.split()))
+    download_url = item.get("download_url") if isinstance(item, dict) else None
+    return _request(download_url, token=_github_config()[1]) if download_url else None
+
+
+def _snapshot_history_quality(payload: bytes) -> tuple[int, int, str]:
+    """Return (minimum bars per symbol, total bars, latest date) for a gzipped DB."""
+    with tempfile.NamedTemporaryFile(suffix=".snapshot-check.sqlite3", delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as source, open(temporary_path, "wb") as target:
+            shutil.copyfileobj(source, target)
+        with sqlite3.connect(temporary_path) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_equity_bars'"
+            ).fetchone()
+            if not exists:
+                return 0, 0, ""
+            total, latest = connection.execute(
+                "SELECT COUNT(*), COALESCE(MAX(trade_date), '') FROM daily_equity_bars"
+            ).fetchone()
+            counts = [int(row[0]) for row in connection.execute(
+                "SELECT COUNT(*) FROM daily_equity_bars GROUP BY symbol"
+            ).fetchall()]
+        return (min(counts) if counts else 0, int(total or 0), str(latest or ""))
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def _github_put(repo: str, path: str, branch: str, token: str, payload: bytes, message: str) -> None:
     url = _github_url(repo, path, branch)
     for attempt in range(2):
@@ -154,6 +186,36 @@ def upload_github_snapshot(database_path: Path, now: datetime | None = None) -> 
     try:
         payload = _compress_database(Path(database_path))
         current = now or datetime.now(timezone.utc)
+        # Rolling Render deploys briefly overlap: an old instance can shut down
+        # after the new instance has uploaded a richer database. Never let a
+        # smaller/older local DB replace a remote snapshot with deeper history.
+        url = _github_url(repo, "working.sqlite3.gz", branch)
+        try:
+            item = json.loads(_request(url, token=token, headers={"Accept": "application/vnd.github+json"}) or b"{}")
+            remote_payload = _decode_github_snapshot_item(item) if isinstance(item, dict) else None
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                remote_payload = None
+            else:
+                raise
+        if remote_payload:
+            local_min, local_total, local_latest = _snapshot_history_quality(payload)
+            remote_min, remote_total, remote_latest = _snapshot_history_quality(remote_payload)
+            regresses = (
+                local_min < remote_min
+                or local_total < remote_total
+                or local_latest < remote_latest
+            )
+            if regresses:
+                _last_successful_snapshot_at = current
+                _last_snapshot_bytes = len(remote_payload)
+                _last_snapshot_error = None
+                logger.warning(
+                    "Skipping regressive GitHub snapshot; keeping remote history "
+                    "local=(min_bars=%d,total=%d,latest=%s) remote=(min_bars=%d,total=%d,latest=%s)",
+                    local_min, local_total, local_latest, remote_min, remote_total, remote_latest,
+                )
+                return True
         _github_put(repo, "working.sqlite3.gz", branch, token, payload, "chore: update durable SQLite snapshot")
         _last_successful_snapshot_at = current
         _last_snapshot_error = None
