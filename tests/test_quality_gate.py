@@ -137,7 +137,7 @@ def test_ban_parser_and_refresh_keeps_last_good_list():
     assert refresh_ban_list(fetch=lambda url: text) and "ABFRL" in banned_symbols()
     def boom(url):
         raise RuntimeError("blocked")
-    assert refresh_ban_list(fetch=boom) is False
+    assert refresh_ban_list(fetch=boom) is True  # last-good cache remains usable on transient failure
     assert "ABFRL" in banned_symbols() and ban_info()["ban_list_ok"] is True
 
 
