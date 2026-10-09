@@ -131,12 +131,13 @@ def test_gate_extension_ban_gap_and_counter_trend():
     assert "not_a_buildup_entry" in evaluate_gate(**g)["missing_confirmations"]
 
 
-def test_ban_parser_and_refresh_keeps_last_good_list():
+def test_ban_parser_and_refresh_keeps_last_good_list(monkeypatch):
     text = "Securities in Ban For Trade Date 19-SEP-2026:\n1,ABFRL\n2,M&M\n3,BAJAJ-AUTO\nTotal,\n"
     assert parse_ban_csv(text) == frozenset({"ABFRL", "M&M", "BAJAJ-AUTO"})
     assert refresh_ban_list(fetch=lambda url: text) and "ABFRL" in banned_symbols()
     def boom(url):
         raise RuntimeError("blocked")
+    monkeypatch.setattr("collector.fno_ban._fetch_verified_relay", lambda: (_ for _ in ()).throw(RuntimeError("relay blocked")))
     assert refresh_ban_list(fetch=boom) is True  # last-good cache remains usable on transient failure
     assert "ABFRL" in banned_symbols() and ban_info()["ban_list_ok"] is True
 
