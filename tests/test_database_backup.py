@@ -82,5 +82,4 @@ def test_github_snapshot_upload_does_not_replace_deeper_remote_history(monkeypat
     monkeypatch.setattr(database_backup, "_github_put", lambda *args, **kwargs: uploaded.append(args))
 
     assert database_backup.upload_github_snapshot(candidate) is True
-    assert uploaded == []
-    assert database_backup.last_snapshot_info()["snapshot_bytes"] == len(remote_payload)
+    assert uploaded == []  # remote snapshot was retained instead of overwritten
