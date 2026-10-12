@@ -31,6 +31,8 @@ MAX_CONCURRENT = int(os.getenv("SCALP_MAX_OPEN", os.getenv("SCALP_MAX_CONCURRENT
 OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
 OPTION_TARGET_PCT = float(os.getenv("SCALP_OPTION_TARGET_PCT", "20"))
 CHAIN_TTL_S = float(os.getenv("SCALP_CHAIN_TTL_S", "20"))
+HIST_CANDLE_TTL_S = float(os.getenv("SCALP_HIST_CANDLE_TTL_S", "300"))
+HIST_CANDLE_MAX_CALLS_PER_REFRESH = max(0, int(os.getenv("SCALP_HIST_CANDLE_MAX_CALLS_PER_REFRESH", "2")))
 TOP_N = int(os.getenv("SCALP_CHAIN_TOP_N", os.getenv("SCALP_TOP_N", "5")))
 RANK_TOP_N = int(os.getenv("SCALP_RANK_TOP_N", "20"))
 MIN_OPTION_OI = int(os.getenv("SCALP_MIN_OPTION_OI", "10000"))
@@ -79,12 +81,19 @@ class ScalpChainEngine:
         self.repository = repository
         self.universe = self._load_universe()
         self._chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._historical_candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._historical_fetches_this_refresh = 0
+        self._historical_fetch_count = 0
+        self._historical_fetch_failures = 0
         self._previous_chain: dict[str, dict[str, Any]] = {}
         self._open: dict[str, dict[str, Any]] = {}
         self._last_run_at = 0.0
         self._last_error = ""
         self._last_ban_warning_at = 0.0
         self._last_context_rejection = ""
+        self._last_monitor_at_ist: str | None = None
+        self._unpriced_close_count = 0
+        self._last_exit_pnl_status: str | None = None
         self._last_run_stats: dict[str, Any] = {
             "candidates": 0, "chain_checked": 0, "chain_unavailable": 0,
             "confirmation_failed": 0, "entries": 0, "ban_list_unavailable": False,
@@ -113,7 +122,16 @@ class ScalpChainEngine:
             "open_scalps": len(self._open),
             "chain_cache_symbols": len(self._chain_cache),
             "chain_ok": bool(self._chain_cache),
+            "historical_candle_cache_symbols": len(self._historical_candle_cache),
+            "historical_fetch_count": self._historical_fetch_count,
+            "historical_fetch_failures": self._historical_fetch_failures,
+            "historical_fetches_this_refresh": self._historical_fetches_this_refresh,
             "last_error": self._last_error,
+            "last_monitor_at_ist": self._last_monitor_at_ist,
+            "unpriced_close_count": self._unpriced_close_count,
+            "last_exit_pnl_status": self._last_exit_pnl_status,
+            "stop_loss_pct": OPTION_STOP_PCT,
+            "target_pct": OPTION_TARGET_PCT,
             "max_hold_minutes": MAX_HOLD_MINUTES,
             "entry_window": f"{ENTRY_START}-{ENTRY_END} IST",
             "last_run": self._last_run_stats,
@@ -138,13 +156,16 @@ class ScalpChainEngine:
         except Exception:
             logger.exception("Could not restore open paper scalps")
 
-    def _chain(self, symbol: str, *, spot: float) -> dict[str, Any] | None:
+    def _chain(self, symbol: str, *, spot: float, force_refresh: bool = False) -> dict[str, Any] | None:
         if self.market_data is None or not self.market_data.configured:
             self._last_error = "angel_not_configured"
             return None
+        if spot <= 0:
+            self._last_error = "underlying_spot_unavailable"
+            return None
         key = symbol.upper()
         cached = self._chain_cache.get(key)
-        if cached and time.monotonic() - cached[0] < CHAIN_TTL_S:
+        if not force_refresh and cached and time.monotonic() - cached[0] < CHAIN_TTL_S:
             return cached[1]
         try:
             chain = self.market_data.option_chain_near_atm(key, spot, strikes_each_side=max(0, min(2, int(os.getenv("SCALP_STRIKES_SIDE", "1")))))
@@ -182,13 +203,51 @@ class ScalpChainEngine:
             logger.warning("Scalp option chain unavailable for %s: %s", key, type(exc).__name__)
             return None
 
-    def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
-        """Return a directional setup only from fresh, timestamped real 5-minute stream bars."""
-        candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
-        if len(candles) < 4:
-            self._last_context_rejection = "insufficient_candle_count"
-            return None
-        today = now_ist().date()
+    def _historical_context_candles(self, symbol: str) -> list[dict[str, Any]]:
+        """Fetch today's real Angel 5-minute OHLCV as a bounded fallback for the WS opening range."""
+        key = symbol.upper()
+        now_mono = time.monotonic()
+        cached = self._historical_candle_cache.get(key)
+        if cached and now_mono - cached[0] < HIST_CANDLE_TTL_S:
+            return cached[1]
+        if self._historical_fetches_this_refresh >= HIST_CANDLE_MAX_CALLS_PER_REFRESH:
+            return []
+        if self.market_data is None or not self.market_data.configured:
+            return []
+
+        self._historical_fetches_this_refresh += 1
+        try:
+            raw = self.market_data.intraday_candles(
+                key, interval="FIVE_MINUTE", exchange="NSE", days=1
+            )
+            candles = []
+            for row in raw or []:
+                candle = dict(row)
+                candle["data_frequency"] = "FIVE_MINUTE"
+                candle["source"] = "angel_one_historical_5m"
+                candle["candle_source"] = "angel_one_historical_5m"
+                candles.append(candle)
+            self._historical_fetch_count += 1
+            self._historical_candle_cache[key] = (time.monotonic(), candles)
+            while len(self._historical_candle_cache) > 80:
+                oldest = next(iter(self._historical_candle_cache))
+                self._historical_candle_cache.pop(oldest, None)
+            if candles:
+                logger.info("SCALP_HISTORICAL_CANDLES symbol=%s bars=%d source=angel_one_historical_5m",
+                            key, len(candles))
+            else:
+                logger.info("SCALP_HISTORICAL_CANDLES_EMPTY symbol=%s", key)
+            return candles
+        except Exception as exc:
+            self._historical_fetch_failures += 1
+            logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s error=%s", key, type(exc).__name__)
+            # Cool down this symbol briefly so a repeated failure does not trigger
+            # another historical request on every 30-second scan.
+            self._historical_candle_cache[key] = (time.monotonic(), [])
+            return []
+
+    @staticmethod
+    def _parse_context_candles(candles: list[dict[str, Any]], today) -> list[dict[str, Any]]:
         parsed: list[dict[str, Any]] = []
         for raw in candles:
             candle = dict(raw)
@@ -196,7 +255,8 @@ class ScalpChainEngine:
             if not stamp_value and candle.get("timestamp_ms"):
                 try:
                     candle["time"] = datetime.fromtimestamp(
-                        float(candle["timestamp_ms"]) / 1000.0, tz=now_ist().tzinfo
+                        float(candle["timestamp_ms"]) / 1000.0,
+                        tz=now_ist().tzinfo,
                     ).isoformat(timespec="seconds")
                     stamp_value = candle["time"]
                 except (TypeError, ValueError, OSError):
@@ -217,10 +277,36 @@ class ScalpChainEngine:
                 parsed.append(candle)
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
+        parsed.sort(key=lambda x: x["_parsed_time"])
+        return parsed
+
+    def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
+        """Use fresh real 5-minute bars; repair missing WS opening ranges with bounded Angel history."""
+        candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
+        today = now_ist().date()
+        parsed = self._parse_context_candles(candles, today)
+
+        def has_opening_range(items: list[dict[str, Any]]) -> bool:
+            return sum(
+                1 for candle in items
+                if 9 * 60 + 15 <= candle["_parsed_time"].hour * 60 + candle["_parsed_time"].minute < 9 * 60 + 30
+            ) >= 2
+
+        # Render cold starts and WS reconnections may subscribe after 09:30.
+        # The local tick-built buffer then cannot contain the opening range. Fetch
+        # only a bounded number of real historical bars, cache them, and never
+        # fabricate an opening range from a later candle.
+        if len(parsed) < 4 or not has_opening_range(parsed):
+            historical = self._historical_context_candles(symbol)
+            if historical:
+                parsed_historical = self._parse_context_candles(historical, today)
+                merged = {c["_parsed_time"]: c for c in parsed_historical}
+                merged.update({c["_parsed_time"]: c for c in parsed})
+                parsed = sorted(merged.values(), key=lambda x: x["_parsed_time"])
+
         if len(parsed) < 4:
             self._last_context_rejection = "insufficient_valid_today_5m_candles"
             return None
-        parsed.sort(key=lambda x: x["_parsed_time"])
         latest = parsed[-1]
         latest_stamp = latest["_parsed_time"]
         try:
@@ -284,7 +370,7 @@ class ScalpChainEngine:
             "volume_ok": volume_ok,
             "candle_count": len(parsed),
             "candle_age_s": round(candle_age_s, 2),
-            "candle_source": "angel_one_websocket_v2",
+            "candle_source": latest.get("candle_source") or latest.get("source") or "angel_one_websocket_v2",
             "data_frequency": "FIVE_MINUTE",
         }
 
@@ -445,15 +531,31 @@ class ScalpChainEngine:
             event["underlying_entry"], event["entry_option_ltp"],
         )
 
-    def _exit_reason(self, position: dict[str, Any], underlying: dict[str, Any], option_ltp: float, now: datetime) -> str | None:
+    def _exit_reason(
+        self,
+        position: dict[str, Any],
+        underlying: dict[str, Any] | None,
+        option_ltp: float,
+        now: datetime,
+    ) -> str | None:
         hold = _minutes_between(position["entry_time_ist"], now)
         if hold >= MAX_HOLD_MINUTES:
             return "TIME"
         direction = position["direction"]
-        if direction == "BUY" and (float(underlying["ltp"]) <= float(underlying["vwap"]) or float(underlying["ltp"]) < float(underlying["or_high"])):
-            return "UNDERLYING_REVERSE"
-        if direction == "SELL" and (float(underlying["ltp"]) >= float(underlying["vwap"]) or float(underlying["ltp"]) > float(underlying["or_low"])):
-            return "UNDERLYING_REVERSE"
+        # Underlying reversal needs valid fresh five-minute context, but the
+        # option-premium risk checks below remain active when that context is
+        # temporarily unavailable.
+        if underlying is not None:
+            if direction == "BUY" and (
+                float(underlying["ltp"]) <= float(underlying["vwap"])
+                or float(underlying["ltp"]) < float(underlying["or_high"])
+            ):
+                return "UNDERLYING_REVERSE"
+            if direction == "SELL" and (
+                float(underlying["ltp"]) >= float(underlying["vwap"])
+                or float(underlying["ltp"]) > float(underlying["or_low"])
+            ):
+                return "UNDERLYING_REVERSE"
         entry = float(position["entry_option_ltp"])
         change_pct = (option_ltp - entry) / entry * 100.0 if entry else 0.0
         if change_pct <= -OPTION_STOP_PCT:
@@ -464,77 +566,190 @@ class ScalpChainEngine:
             return "CLOCK"
         return None
 
+    def _close_paper_position(
+        self,
+        symbol: str,
+        position: dict[str, Any],
+        now: datetime,
+        reason: str,
+        *,
+        underlying: dict[str, Any] | None,
+        tick: dict[str, Any] | None,
+        option_ltp: float | None,
+        quote_note: str | None = None,
+    ) -> None:
+        """Close the paper position without inventing an exit price or P&L."""
+        hold = _minutes_between(position["entry_time_ist"], now)
+        entry_ltp = float(position["entry_option_ltp"])
+        valid_exit = None
+        try:
+            candidate = float(option_ltp) if option_ltp is not None else 0.0
+            if candidate > 0:
+                valid_exit = candidate
+        except (TypeError, ValueError):
+            valid_exit = None
+
+        underlying_exit = None
+        if underlying is not None:
+            try:
+                candidate_underlying = float(underlying.get("ltp") or 0)
+                if candidate_underlying > 0:
+                    underlying_exit = candidate_underlying
+            except (TypeError, ValueError):
+                pass
+        if underlying_exit is None and tick:
+            try:
+                candidate_underlying = float(tick.get("ltp") or 0)
+                if candidate_underlying > 0:
+                    underlying_exit = candidate_underlying
+            except (TypeError, ValueError):
+                pass
+
+        payload: dict[str, Any] = {
+            "pnl_status": "QUOTED_PAPER_EXIT" if valid_exit is not None else "UNPRICED",
+            "exit_quote_source": "angel_one_option_chain" if valid_exit is not None else None,
+            "exit_quote_unavailable": valid_exit is None,
+            "exit_quote_note": quote_note if valid_exit is None else None,
+            "pnl_is_realized": False,
+        }
+        if valid_exit is not None and entry_ltp > 0:
+            payload["pnl_premium_pct"] = round((valid_exit - entry_ltp) / entry_ltp * 100.0, 4)
+        else:
+            payload["pnl_note"] = (
+                "No fresh positive quote for the exact contract at the paper exit; "
+                "exit premium and P&L are intentionally unknown."
+            )
+
+        self.repository.close_scalp(
+            int(position["id"]),
+            exit_time_ist=now.isoformat(),
+            underlying_exit=underlying_exit,
+            exit_option_ltp=valid_exit,
+            hold_minutes=hold,
+            exit_reason=reason,
+            payload=payload,
+        )
+        self._last_exit_pnl_status = str(payload["pnl_status"])
+        if valid_exit is None:
+            self._unpriced_close_count += 1
+        logger.info(
+            "SCALP_EXIT PAPER symbol=%s direction=%s option=%s strike=%s reason=%s "
+            "hold_minutes=%.2f option_ltp=%s pnl_status=%s",
+            symbol, position.get("direction"), position.get("option_type"),
+            position.get("strike"), reason, hold,
+            f"{valid_exit:.2f}" if valid_exit is not None else "UNPRICED",
+            payload["pnl_status"],
+        )
+        self._open.pop(symbol, None)
+
     def _manage_open(self) -> None:
         if not self._open:
             return
         now = now_ist()
+        self._last_monitor_at_ist = now.isoformat()
+        quote_window = _in_window(now, "09:15", "15:30")
+        market_data_ready = bool(self.market_data and self.market_data.configured)
+
         for symbol, position in list(self._open.items()):
-            underlying = self._underlying_context(symbol)
-            if not underlying:
-                continue
             hold = _minutes_between(position["entry_time_ist"], now)
-            if hold >= MAX_HOLD_MINUTES or not _before(now, ABSOLUTE_EXIT):
-                reason = "TIME" if hold >= MAX_HOLD_MINUTES else "CLOCK"
-                exit_ltp = float(position["entry_option_ltp"])
-                self.repository.close_scalp(
-                    int(position["id"]),
-                    exit_time_ist=now.isoformat(),
-                    underlying_exit=float(underlying["ltp"]),
-                    exit_option_ltp=exit_ltp,
-                    hold_minutes=hold,
-                    exit_reason=reason,
-                    payload={"option_quote_unavailable": True},
-                )
-                logger.info(
-                    "SCALP_EXIT PAPER symbol=%s reason=%s hold_minutes=%.2f option_ltp=%.2f",
-                    symbol, reason, hold, exit_ltp,
-                )
-                self._open.pop(symbol, None)
-                continue
-            chain = self._chain(symbol, spot=float(underlying["ltp"]))
-            if not chain:
-                continue
-            option_type = position["option_type"]
-            row = next(
-                (r for r in chain.get("rows", [])
-                 if r.get("option_type") == option_type
-                 and float(r.get("strike") or 0) == float(position["strike"])),
-                None,
+            due_reason = (
+                "TIME" if hold >= MAX_HOLD_MINUTES
+                else "CLOCK" if not _before(now, ABSOLUTE_EXIT)
+                else None
             )
-            if not row:
+
+            underlying = None
+            if due_reason is None:
+                try:
+                    underlying = self._underlying_context(symbol)
+                except Exception as exc:
+                    logger.warning("SCALP_MONITOR_CONTEXT_FAILED symbol=%s error=%s", symbol, type(exc).__name__)
+
+            tick: dict[str, Any] = {}
+            try:
+                tick = self.stream.latest_tick_for_symbol(symbol, max_age_s=15.0) or {}
+            except Exception as exc:
+                logger.warning("SCALP_MONITOR_TICK_FAILED symbol=%s error=%s", symbol, type(exc).__name__)
+
+            spot = 0.0
+            try:
+                spot = float((underlying or {}).get("ltp") or tick.get("ltp") or 0)
+            except (TypeError, ValueError):
+                spot = 0.0
+
+            chain = None
+            # Option marks must come from a current-session query. Never use a cached
+            # chain or an after-hours value as the supposed hard-flat exit price.
+            if market_data_ready and quote_window and spot > 0:
+                chain = self._chain(symbol, spot=spot, force_refresh=due_reason is not None)
+
+            option_ltp: float | None = None
+            if chain and str(chain.get("expiry") or "").replace(" ", "").upper() == str(position.get("expiry") or "").replace(" ", "").upper():
+                row = next(
+                    (
+                        r for r in chain.get("rows", [])
+                        if r.get("option_type") == position["option_type"]
+                        and float(r.get("strike") or 0) == float(position["strike"])
+                    ),
+                    None,
+                )
+                try:
+                    candidate = float((row or {}).get("ltp") or 0)
+                    if candidate > 0:
+                        option_ltp = candidate
+                except (TypeError, ValueError):
+                    option_ltp = None
+
+            if option_ltp is not None:
+                entry_ltp = float(position["entry_option_ltp"])
+                position["_last_option_ltp"] = option_ltp
+                position["_last_option_quote_at_ist"] = now.isoformat()
+                position["_last_pnl_pct"] = round((option_ltp - entry_ltp) / entry_ltp * 100.0, 3) if entry_ltp else None
+
+            if due_reason is not None:
+                quote_note = None
+                if not quote_window:
+                    quote_note = "exit deadline was handled outside the regular market quote window"
+                elif not market_data_ready:
+                    quote_note = "Angel One market data was unavailable"
+                elif spot <= 0:
+                    quote_note = "no fresh underlying spot was available to query the option chain"
+                elif chain is None:
+                    quote_note = f"option chain unavailable: {self._last_error or 'no response'}"
+                elif option_ltp is None:
+                    quote_note = "exact strike, option side, and expiry had no positive quote"
+                self._close_paper_position(
+                    symbol, position, now, due_reason, underlying=underlying,
+                    tick=tick, option_ltp=option_ltp, quote_note=quote_note,
+                )
                 continue
-            option_ltp = float(row.get("ltp") or 0)
-            if option_ltp <= 0:
+
+            # If the quote is unavailable, leave the paper position open for another
+            # monitoring cycle; do not substitute the entry price. A fresh option mark
+            # still allows premium stop/target checks if candle context is missing.
+            if option_ltp is None:
                 continue
             reason = self._exit_reason(position, underlying, option_ltp, now)
-            if not reason:
-                continue
-            hold = _minutes_between(position["entry_time_ist"], now)
-            entry_ltp = float(position["entry_option_ltp"])
-            pnl_pct = ((option_ltp - entry_ltp) / entry_ltp * 100.0) if entry_ltp else 0.0
-            self.repository.close_scalp(
-                int(position["id"]),
-                exit_time_ist=now.isoformat(),
-                underlying_exit=float(underlying["ltp"]),
-                exit_option_ltp=option_ltp,
-                hold_minutes=hold,
-                exit_reason=reason,
-                payload={"pnl_premium_pct": pnl_pct},
-            )
-            logger.info(
-                "SCALP_EXIT PAPER symbol=%s direction=%s option=%s strike=%s reason=%s hold_minutes=%.2f option_ltp=%.2f",
-                symbol, position["direction"], option_type, position["strike"], reason, hold, option_ltp,
-            )
-            self._open.pop(symbol, None)
+            if reason:
+                self._close_paper_position(
+                    symbol, position, now, reason, underlying=underlying,
+                    tick=tick, option_ltp=option_ltp,
+                )
 
     def refresh(self) -> None:
         now = now_ist()
-        if not self.market_data or not self.market_data.configured:
-            self._last_error = "angel_not_configured"
+        self._historical_fetches_this_refresh = 0
+        # Open positions must be monitored before any entry-window or feed-readiness
+        # early return. This makes TIME and 15:15 CLOCK exits fail-safe.
+        if self._open:
+            self._manage_open()
+        if not _before(now, ABSOLUTE_EXIT):
             return
         if not _in_window(now, "09:15", "15:15"):
             return
-        self._manage_open()
+        if not self.market_data or not self.market_data.configured:
+            self._last_error = "angel_not_configured"
+            return
         if not _in_window(now, ENTRY_START, ENTRY_END):
             return
         if len(self._open) >= MAX_CONCURRENT:
@@ -601,9 +816,21 @@ class ScalpChainEngine:
         open_rows = []
         for position in self._open.values():
             hold = _minutes_between(position["entry_time_ist"], now)
+            entry_ltp = float(position["entry_option_ltp"])
+            stop_ltp = round(entry_ltp * (1.0 - OPTION_STOP_PCT / 100.0), 2) if entry_ltp > 0 else None
+            target_ltp = round(entry_ltp * (1.0 + OPTION_TARGET_PCT / 100.0), 2) if entry_ltp > 0 else None
             open_rows.append({
                 **position,
                 "hold_minutes": round(hold, 2),
+                "stop_loss": stop_ltp,
+                "target": target_ltp,
+                "stop_loss_option_ltp": stop_ltp,
+                "target_option_ltp": target_ltp,
+                "current_option_ltp": position.get("_last_option_ltp"),
+                "current_option_quote_at_ist": position.get("_last_option_quote_at_ist"),
+                "pnl_pct": position.get("_last_pnl_pct"),
+                "pnl_status": "QUOTED" if position.get("_last_option_ltp") is not None else "WAITING_FOR_QUOTE",
+                "risk_reward_ratio": round(OPTION_TARGET_PCT / OPTION_STOP_PCT, 3) if OPTION_STOP_PCT > 0 else None,
                 "status": "OPEN",
             })
         recent = self.repository.scalp_events_for_date(now.date().isoformat())[:30]

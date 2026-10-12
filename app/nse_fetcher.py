@@ -445,10 +445,12 @@ def _angel_fno_oi_rows() -> list[dict]:
     try:
         fallback = _angel_fno.fno_quotes()
     except Exception:
-        logger.exception("Angel One NFO futures OI failed")
-        return list(_LAST_ANGEL_OI_ROWS)
+        # Never serve the previous successful batch as if it were a current scan.
+        logger.exception("Angel One NFO futures OI failed; refusing cached rows")
+        return []
     if not fallback:
-        return list(_LAST_ANGEL_OI_ROWS)
+        logger.warning("Angel One NFO futures OI returned no current rows")
+        return []
     rows = [
         {
             "symbol": symbol,
@@ -491,9 +493,12 @@ def fetch_all_fno_oi_change() -> list[dict]:
             logger.warning("NSE OI spurts unavailable (throttled retry in %.0fs)", NSE_OI_SPURTS_RETRY_S)
             data = None
     if not data:
+        # angel_rows is from this invocation; _LAST_ANGEL_OI_ROWS is retained
+        # only for diagnostics and must not be treated as a live-feed fallback.
         if angel_rows:
             return angel_rows
-        return list(_LAST_ANGEL_OI_ROWS)
+        logger.warning("No fresh OI rows from Angel One or NSE; failing closed")
+        return []
     rows = data.get("data", [])
     enriched_rows: list[dict] = []
     with _price_snapshot_lock:

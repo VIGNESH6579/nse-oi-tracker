@@ -17,6 +17,9 @@ class FakeRepo:
     def open_scalps(self, trade_date):
         return []
 
+    def scalp_events_for_date(self, trade_date):
+        return []
+
 
 def test_ban_list_unavailable_does_not_block_scalp_refresh(monkeypatch):
     engine = scalp.ScalpChainEngine(FakeMarket(), FakeStream(), FakeRepo())
@@ -103,3 +106,150 @@ def test_documented_scalp_env_names_take_precedence(monkeypatch):
     assert scalp.MAX_CONCURRENT == 2
     monkeypatch.undo()
     importlib.reload(scalp)
+
+
+
+class ExitRepo(FakeRepo):
+    def __init__(self):
+        self.closed = []
+
+    def close_scalp(self, event_id, **kwargs):
+        self.closed.append({"id": event_id, **kwargs})
+
+
+class ExitStream(RankingStream):
+    def latest_tick_for_symbol(self, symbol, max_age_s=15.0):
+        return {"ltp": 100.0}
+
+
+def _open_position(engine, entry_time="2026-10-07T10:00:00+05:30"):
+    engine._open["AAA"] = {
+        "id": 10,
+        "symbol": "AAA",
+        "direction": "BUY",
+        "strike": 100.0,
+        "option_type": "CE",
+        "expiry": "27OCT2026",
+        "entry_time_ist": entry_time,
+        "underlying_entry": 100.0,
+        "entry_option_ltp": 5.0,
+        "chain_snapshot_id": "test",
+    }
+
+
+def test_max_hold_exit_without_option_quote_is_unpriced_not_breakeven(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:11:00+05:30")
+    repo = ExitRepo()
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), repo)
+    _open_position(engine)
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    monkeypatch.setattr(scalp, "MAX_HOLD_MINUTES", 10)
+    monkeypatch.setattr(engine, "_underlying_context", lambda symbol: None)
+    monkeypatch.setattr(engine, "_chain", lambda symbol, *, spot, force_refresh=False: None)
+
+    engine._manage_open()
+
+    assert len(repo.closed) == 1
+    event = repo.closed[0]
+    assert event["exit_reason"] == "TIME"
+    assert event["exit_option_ltp"] is None
+    assert event["underlying_exit"] == 100.0
+    assert event["payload"]["pnl_status"] == "UNPRICED"
+    assert event["payload"]["exit_quote_unavailable"] is True
+    assert "pnl_premium_pct" not in event["payload"]
+    assert engine._open == {}
+
+
+def test_hard_flat_closes_even_without_underlying_context_or_chain_quote(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T15:15:04+05:30")
+    repo = ExitRepo()
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), repo)
+    _open_position(engine, entry_time="2026-10-07T15:10:00+05:30")
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    monkeypatch.setattr(scalp, "MAX_HOLD_MINUTES", 10)
+    monkeypatch.setattr(engine, "_underlying_context", lambda symbol: None)
+    monkeypatch.setattr(engine, "_chain", lambda symbol, *, spot, force_refresh=False: None)
+
+    engine.refresh()
+
+    assert len(repo.closed) == 1
+    assert repo.closed[0]["exit_reason"] == "CLOCK"
+    assert repo.closed[0]["exit_option_ltp"] is None
+    assert repo.closed[0]["payload"]["pnl_status"] == "UNPRICED"
+    assert engine._open == {}
+
+
+def test_max_hold_uses_exact_contract_quote_when_available(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:11:00+05:30")
+    repo = ExitRepo()
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), repo)
+    _open_position(engine)
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    monkeypatch.setattr(scalp, "MAX_HOLD_MINUTES", 10)
+    monkeypatch.setattr(engine, "_underlying_context", lambda symbol: None)
+    chain = {"expiry": "27OCT2026", "rows": [{"strike": 100.0, "option_type": "CE", "ltp": 6.25}]}
+    seen = {}
+    def fake_chain(symbol, *, spot, force_refresh=False):
+        seen["force_refresh"] = force_refresh
+        return chain
+    monkeypatch.setattr(engine, "_chain", fake_chain)
+
+    engine._manage_open()
+
+    event = repo.closed[0]
+    assert seen["force_refresh"] is True
+    assert event["exit_option_ltp"] == 6.25
+    assert event["payload"]["pnl_status"] == "QUOTED_PAPER_EXIT"
+    assert event["payload"]["pnl_premium_pct"] == 25.0
+
+
+def test_live_paper_position_has_nonzero_option_risk_levels(monkeypatch):
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: datetime.fromisoformat("2026-10-07T10:01:00+05:30"))
+    _open_position(engine, entry_time="2026-10-07T10:00:00+05:30")
+
+    result = engine.live()
+    pos = result["open"][0]
+    assert pos["stop_loss"] == round(5.0 * (1 - scalp.OPTION_STOP_PCT / 100), 2)
+    assert pos["target"] == round(5.0 * (1 + scalp.OPTION_TARGET_PCT / 100), 2)
+    assert pos["pnl_status"] == "WAITING_FOR_QUOTE"
+
+
+
+def test_underlying_context_recovers_missing_opening_range_from_real_history(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
+    raw_candles = [
+        {"time": "2026-10-07T09:15:00+05:30", "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "volume": 100},
+        {"time": "2026-10-07T09:20:00+05:30", "open": 100.0, "high": 101.0, "low": 100.0, "close": 100.5, "volume": 100},
+        {"time": "2026-10-07T09:25:00+05:30", "open": 100.5, "high": 101.0, "low": 100.4, "close": 100.8, "volume": 100},
+        {"time": "2026-10-07T09:30:00+05:30", "open": 100.8, "high": 101.2, "low": 100.7, "close": 101.0, "volume": 100},
+        {"time": "2026-10-07T09:35:00+05:30", "open": 101.0, "high": 101.1, "low": 100.9, "close": 101.0, "volume": 100},
+        {"time": "2026-10-07T09:55:00+05:30", "open": 103.0, "high": 104.0, "low": 102.9, "close": 103.5, "volume": 120},
+        {"time": "2026-10-07T10:00:00+05:30", "open": 103.5, "high": 105.0, "low": 103.4, "close": 104.5, "volume": 130},
+    ]
+
+    class HistoryMarket(FakeMarket):
+        def __init__(self):
+            self.calls = []
+
+        def intraday_candles(self, symbol, *, interval="FIVE_MINUTE", exchange="NSE", days=1):
+            self.calls.append((symbol, interval, exchange, days))
+            return raw_candles
+
+    class EmptyStream:
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return []
+
+    market = HistoryMarket()
+    engine = scalp.ScalpChainEngine(market, EmptyStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+
+    ctx = engine._underlying_context("AAA")
+
+    assert ctx is not None
+    assert ctx["direction"] == "BUY"
+    assert ctx["candle_source"] == "angel_one_historical_5m"
+    assert ctx["data_frequency"] == "FIVE_MINUTE"
+    assert len(market.calls) == 1
+    assert engine._underlying_context("AAA")["direction"] == "BUY"
+    assert len(market.calls) == 1  # cached; no repeated historical calls

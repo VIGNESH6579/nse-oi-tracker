@@ -123,3 +123,40 @@ def test_absolute_price_change_does_not_mask_percent_change_fallback(monkeypatch
     assert second[0]["price_source"] == "rolling_minute_fallback"
 
 
+
+
+
+def test_angel_futures_error_does_not_reuse_previous_batch(monkeypatch):
+    module = importlib.reload(nse_fetcher)
+    module._LAST_ANGEL_OI_ROWS = [{"symbol": "ABC", "ltp": 100.0, "oi": 500000}]
+
+    class BrokenAngel:
+        configured = True
+        def fno_quotes(self):
+            raise RuntimeError("simulated transient feed failure")
+
+    monkeypatch.setattr(module, "_angel_fno", BrokenAngel())
+    monkeypatch.setattr(module, "_LAST_NSE_SPURTS_AT", 0)
+    monkeypatch.setattr(module, "NSE_OI_SPURTS_RETRY_S", 0)
+    monkeypatch.setattr(module._nse, "get", lambda *args, **kwargs: None)
+
+    assert module._angel_fno_oi_rows() == []
+    assert module.fetch_all_fno_oi_change() == []
+
+
+def test_angel_futures_empty_batch_does_not_reuse_previous_batch(monkeypatch):
+    module = importlib.reload(nse_fetcher)
+    module._LAST_ANGEL_OI_ROWS = [{"symbol": "ABC", "ltp": 100.0, "oi": 500000}]
+
+    class EmptyAngel:
+        configured = True
+        def fno_quotes(self):
+            return {}
+
+    monkeypatch.setattr(module, "_angel_fno", EmptyAngel())
+    monkeypatch.setattr(module, "_LAST_NSE_SPURTS_AT", 0)
+    monkeypatch.setattr(module, "NSE_OI_SPURTS_RETRY_S", 0)
+    monkeypatch.setattr(module._nse, "get", lambda *args, **kwargs: None)
+
+    assert module._angel_fno_oi_rows() == []
+    assert module.fetch_all_fno_oi_change() == []

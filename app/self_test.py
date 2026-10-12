@@ -49,8 +49,10 @@ def build_probes(stage: str, *, angel, repository, universe: Callable[[], set[st
         return len(good) == len(SAMPLE), f"{len(good)}/{len(SAMPLE)} rows with oi>0 and ltp>0; next_month_oi_added={rolled}"
 
     def daily_candles():
-        candles = angel.daily_candles("NIFTY", days=10)
-        return len(candles) >= 3, f"{len(candles)} NIFTY daily candles"
+        # Probe a liquid listed equity. Some broker instrument masters do not map
+        # the "NIFTY" alias for ONE_DAY candles, which can create a false failure.
+        candles = angel.daily_candles("RELIANCE", days=10)
+        return len(candles) >= 3, f"{len(candles)} RELIANCE daily candles"
 
     def bars_coverage():
         symbols = universe()

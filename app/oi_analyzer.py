@@ -83,7 +83,12 @@ from utils.time import now_ist
 oi_window = OIWindow()
 _feed_symbols: set[str] = set()      # every underlying the OI feed reported (F&O truth for today)
 _NON_STOCK = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI"}
-_last_scan_stats: dict = {"rows": 0, "parsed": 0, "candidates": 0}
+_last_scan_stats: dict = {
+    "rows": 0, "parsed": 0, "candidates": 0, "published": 0,
+    "rejected_low_confidence": 0, "rejected_low_oi": 0,
+    "rejected_unstable": 0, "window_candidates": 0,
+    "oi_source": "no_scan_yet", "scanned_at_ist": None,
+}
 
 
 def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
@@ -390,7 +395,13 @@ def scan_all_fno_realtime() -> list[dict]:
 
     if not rows:
         _last_scan_data_status = "UNAVAILABLE"
-        logger.info("No data returned (market closed or NSE temporarily unavailable)")
+        _last_scan_stats.update({
+            "rows": 0, "parsed": 0, "candidates": 0, "published": 0,
+            "rejected_low_confidence": 0, "rejected_low_oi": 0,
+            "rejected_unstable": 0, "window_candidates": 0,
+            "oi_source": "unavailable", "scanned_at_ist": now_ist().isoformat(),
+        })
+        logger.warning("OI scan unavailable: no live rows from Angel futures or NSE fallback")
         return []
 
     _last_scan_data_status = "RECEIVED"
@@ -400,6 +411,10 @@ def scan_all_fno_realtime() -> list[dict]:
 
     scan_time = now_ist()
     parsed_count = 0
+    rejected_low_confidence = 0
+    rejected_low_oi = 0
+    rejected_unstable = 0
+    stable_candidates = 0
     tracked: dict[str, tuple] = {}
     for row in rows:
         # Feed EVERY raw row (incl. currently neutral ones, which _parse_row drops) so
@@ -408,13 +423,14 @@ def scan_all_fno_realtime() -> list[dict]:
         if seen_row:
             tracked[seen_row[0]] = seen_row[1:]
         result = _parse_row(row)
-        if result is not None:
-            parsed_count += 1
-        if (
-            result is None
-            or result["confidence"] < PUBLISH_MIN_CONFIDENCE
-            or result["oi"] < PUBLISH_MIN_OI_ABSOLUTE
-        ):
+        if result is None:
+            continue
+        parsed_count += 1
+        if result["confidence"] < PUBLISH_MIN_CONFIDENCE:
+            rejected_low_confidence += 1
+            continue
+        if result["oi"] < PUBLISH_MIN_OI_ABSOLUTE:
+            rejected_low_oi += 1
             continue
         if result["symbol"] in seen:
             continue
@@ -425,6 +441,7 @@ def scan_all_fno_realtime() -> list[dict]:
         count = previous_count + 1 if previous_direction == direction else 1
         _signal_stability[symbol] = (direction, count)
         if count < QUALITY_REQUIRED_SCANS:
+            rejected_unstable += 1
             continue
         result["quality_gate"] = "CONFIRMED_TWO_SCAN_DIRECTION"
         result["stability_scans"] = count
@@ -432,15 +449,47 @@ def scan_all_fno_realtime() -> list[dict]:
         window_ctx["streak"] = oi_window.note_agreement(symbol, window_ctx.get("window_signal") == result["signal"], scan_time)
         result["oi_window"] = window_ctx
         results.append(result)
-    # Sort strongest first and expose only a small quality feed.
+        stable_candidates += 1
+    # Window candidates are independent 15/30-minute build-ups; count them separately
+    # so operators can tell which quality path produced a published row.
+    before_windows = len(results)
     try:
         results.extend(_window_candidates(tracked, {r["symbol"] for r in results}, scan_time))
     except Exception:
         logger.exception("Window candidate generation failed; day-change candidates unaffected")
+    window_candidates = len(results) - before_windows
     results.sort(key=lambda r: (-r["confidence"], -r["strength"], r["symbol"]))
     results = results[:QUALITY_MAX_SIGNALS]
-    _last_scan_stats.update(rows=len(rows), parsed=parsed_count, candidates=len(results),
-                            oi_source="angel_futures" if any(r.get("_data_source") for r in rows[:5]) else "nse_oi_spurts")
+    angel_source_rows = [
+        row for row in rows
+        if str(row.get("_data_source") or "").lower().startswith("angel")
+    ]
+    if angel_source_rows:
+        source_values = {str(row.get("_data_source") or "").lower() for row in angel_source_rows}
+        if any("full quote" in source for source in source_values):
+            active_oi_source = "angel_one_full_quote_overlay"
+        elif len(angel_source_rows) >= max(1, len(rows) // 2):
+            active_oi_source = "angel_futures"
+        else:
+            active_oi_source = "mixed"
+    else:
+        active_oi_source = "nse_oi_spurts"
+    _last_scan_stats.update({
+        "rows": len(rows),
+        "parsed": parsed_count,
+        "candidates": len(results),
+        "published": len(results),
+        "stable_day_change_candidates": stable_candidates,
+        "window_candidates": window_candidates,
+        "rejected_low_confidence": rejected_low_confidence,
+        "rejected_low_oi": rejected_low_oi,
+        "rejected_unstable": rejected_unstable,
+        "oi_source": active_oi_source,
+        "scanned_at_ist": scan_time.isoformat(),
+        "confidence_threshold": PUBLISH_MIN_CONFIDENCE,
+        "minimum_absolute_oi": PUBLISH_MIN_OI_ABSOLUTE,
+        "required_stability_scans": QUALITY_REQUIRED_SCANS,
+    })
 
     high   = sum(1 for r in results if r["confidence_tier"] == "HIGH")
     medium = sum(1 for r in results if r["confidence_tier"] == "MEDIUM")
