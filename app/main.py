@@ -191,6 +191,18 @@ def bhavcopy_backfill_required(
     return str(latest_trade_date) < expected_latest_bhavcopy_date(now).isoformat()
 
 
+def index_history_backfill_required(
+    summary: dict[str, object],
+    now: datetime | None = None,
+) -> bool:
+    """Treat non-empty but outdated index history as a refill requirement."""
+    bars = int(summary.get("bars") or 0)
+    latest_trade_date = summary.get("latest_trade_date")
+    if bars == 0 or not latest_trade_date:
+        return True
+    return str(latest_trade_date) < expected_latest_bhavcopy_date(now).isoformat()
+
+
 def _refresh_signals() -> list[dict]:
     """Fetch, persist, and cache one signal scan in a worker thread."""
     global _last_good_signals, _last_good_signals_at
@@ -1494,7 +1506,7 @@ async def health():
         ),
         "daily_history_target_bars": DAILY_HISTORY_TARGET_BARS,
         "daily_index_data": daily_index_data,
-        "index_backfill_required": daily_index_data.get("bars", 0) == 0,
+        "index_backfill_required": index_history_backfill_required(daily_index_data, now),
     }
 
 
