@@ -125,6 +125,11 @@ class SignalRepository:
                 (json.dumps(payload, separators=(",", ":")), int(row["id"])),
             )
 
+    def repair_scalp_event_integrity(self) -> None:
+        """Run data migrations after restoring a durable snapshot over the live database."""
+        with self._connect() as connection:
+            self._repair_scalp_event_integrity(connection)
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
