@@ -194,3 +194,56 @@ def test_confirmed_signal_monitor_marks_stale_price_without_closing_event(tmp_pa
     assert events[0]["status"] == "OPEN"
     assert events[0]["monitor_status"] == "DATA STALE"
     assert "cannot be verified" in events[0]["monitor_reason"]
+
+
+
+def test_post_restore_repair_invalidates_unquoted_exit_and_closes_prior_session_open(tmp_path):
+    import json
+
+    from utils.time import ist_trade_date
+
+    repository = SignalRepository(tmp_path / "post-restore.sqlite3")
+    now = datetime.now(IST)
+    today = ist_trade_date(now)
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+
+    with repository._connect() as connection:
+        connection.execute(
+            """INSERT INTO scalp_events (
+                trade_date, mode, symbol, direction, strike, option_type, expiry,
+                entry_time_ist, exit_time_ist, underlying_entry, underlying_exit,
+                entry_option_ltp, exit_option_ltp, hold_minutes, exit_reason, status,
+                rule_ids_json, chain_snapshot_id, payload_json
+            ) VALUES (?, 'scalp_chain', 'DABUR', 'SELL', 380, 'PE', '27OCT2026',
+                      ?, ?, 381.7, 381.35, 5.05, 5.05, 10.4, 'TIME', 'CLOSED',
+                      '[]', 'legacy-quote-missing', ?)""",
+            (today, now.isoformat(), now.isoformat(), json.dumps({"option_quote_unavailable": True})),
+        )
+        connection.execute(
+            """INSERT INTO scalp_events (
+                trade_date, mode, symbol, direction, strike, option_type, expiry,
+                entry_time_ist, underlying_entry, entry_option_ltp, status,
+                rule_ids_json, chain_snapshot_id, payload_json
+            ) VALUES (?, 'scalp_chain', 'OLDOPEN', 'BUY', 100, 'CE', '27OCT2026',
+                      ?, 100, 5, 'OPEN', '[]', 'old-session-open', '{}')""",
+            (yesterday, now.isoformat()),
+        )
+
+    # This is the migration call required after restoring an old SQLite snapshot.
+    repository.repair_scalp_event_integrity()
+
+    today_rows = repository.scalp_events_for_date(today)
+    fake_breakeven = next(row for row in today_rows if row["symbol"] == "DABUR")
+    fake_payload = json.loads(fake_breakeven["payload_json"])
+    assert fake_breakeven["exit_option_ltp"] is None
+    assert fake_payload["pnl_status"] == "UNPRICED"
+    assert fake_payload["legacy_exit_price_invalidated"] is True
+
+    with repository._connect() as connection:
+        old_open = connection.execute(
+            "SELECT status, exit_option_ltp, exit_reason, payload_json FROM scalp_events WHERE symbol='OLDOPEN'"
+        ).fetchone()
+    assert old_open["status"] == "CLOSED"
+    assert old_open["exit_option_ltp"] is None
+    assert old_open["exit_reason"] == "SESSION_ROLLOVER_UNPRICED"
+    assert json.loads(old_open["payload_json"])["session_rollover_unpriced"] is True

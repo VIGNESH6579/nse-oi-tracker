@@ -253,3 +253,30 @@ def test_underlying_context_recovers_missing_opening_range_from_real_history(mon
     assert len(market.calls) == 1
     assert engine._underlying_context("AAA")["direction"] == "BUY"
     assert len(market.calls) == 1  # cached; no repeated historical calls
+
+
+
+def test_reload_open_positions_after_database_restore(monkeypatch):
+    class MutableRepo(FakeRepo):
+        def __init__(self):
+            self.rows = []
+
+        def open_scalps(self, trade_date):
+            return list(self.rows)
+
+    now = datetime.fromisoformat("2026-10-07T10:00:00+05:30")
+    repo = MutableRepo()
+    engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), repo)
+    assert engine._open == {}
+
+    repo.rows = [{
+        "id": 42, "symbol": "AAA", "direction": "BUY", "strike": 100.0,
+        "option_type": "CE", "expiry": "27OCT2026",
+        "entry_time_ist": now.isoformat(), "underlying_entry": 100.0,
+        "entry_option_ltp": 5.0, "chain_snapshot_id": "restored-row",
+    }]
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    engine.reload_open_positions()
+
+    assert "AAA" in engine._open
+    assert engine._open["AAA"]["id"] == 42

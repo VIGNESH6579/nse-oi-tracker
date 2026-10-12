@@ -156,6 +156,11 @@ class ScalpChainEngine:
         except Exception:
             logger.exception("Could not restore open paper scalps")
 
+    def reload_open_positions(self) -> None:
+        """Re-read today's persisted paper positions after a database restore."""
+        self._open.clear()
+        self._load_open_events()
+
     def _chain(self, symbol: str, *, spot: float, force_refresh: bool = False) -> dict[str, Any] | None:
         if self.market_data is None or not self.market_data.configured:
             self._last_error = "angel_not_configured"

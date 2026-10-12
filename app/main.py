@@ -1277,6 +1277,12 @@ async def lifespan(app: FastAPI):
     post_restore_summary = repository.daily_equity_bar_summary()
     if int(post_restore_summary.get("min_bars") or 0) < DAILY_HISTORY_TARGET_BARS:
         await asyncio.to_thread(restore_bundled_seed, settings.database_path)
+    # SignalRepository was constructed at module import, before this ephemeral
+    # Render filesystem may have been replaced with the durable snapshot. Re-run
+    # data-dependent cleanup and reload paper positions against the restored DB.
+    await asyncio.to_thread(repository.repair_scalp_event_integrity)
+    await asyncio.to_thread(scalp_engine.reload_open_positions)
+    logger.info("Post-restore scalp integrity checked and open paper positions reloaded")
     angel_stream.start()
     if render_startup_backfill_enabled():
         # Network work at startup only on Render (never in tests/dev).
