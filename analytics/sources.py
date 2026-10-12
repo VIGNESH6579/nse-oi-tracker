@@ -49,7 +49,7 @@ def public_source_inventory(
     if not angel_configured:
         angel_status = "NOT_CONFIGURED"
     elif live_angel_oi and oi_rows_available:
-        angel_status = "ACTIVE"
+        angel_status = "ACTIVE" if market_open else "RECEIVED_MARKET_CLOSED"
     elif oi_data_status == "UNAVAILABLE":
         angel_status = "CONFIGURED_NO_LIVE_OI_ROWS"
     else:
