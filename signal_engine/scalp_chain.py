@@ -15,7 +15,7 @@ from datetime import datetime, time as dt_time
 from typing import Any
 
 from collector.fno_ban import banned_symbols, ban_info
-from collector.universe import cached_universe
+from collector.universe import cached_universe, universe_source
 from utils.time import now_ist
 from integrations.angel_one_market_data import AngelOneMarketData, AngelUnavailable
 from integrations.angel_one_stream import AngelOneMarketStream
@@ -38,15 +38,6 @@ RANK_TOP_N = int(os.getenv("SCALP_RANK_TOP_N", "20"))
 MIN_OPTION_OI = int(os.getenv("SCALP_MIN_OPTION_OI", "10000"))
 MIN_OPTION_VOLUME = int(os.getenv("SCALP_MIN_OPTION_VOLUME", "100"))
 MOMENTUM_MIN_PCT = float(os.getenv("SCALP_MOMENTUM_MIN_PCT", "0.20"))
-
-DEFAULT_UNIVERSE = (
-    "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK,SBIN,AXISBANK,KOTAKBANK,"
-    "LT,ITC,ADANIENT,ADANIPORTS,BAJFINANCE,MARUTI,M&M,AXISBANK,"
-    "SUNPHARMA,DRREDDY,APOLLOHOSP,TATASTEEL,JSWSTEEL,HINDALCO,"
-    "TATAMOTORS,EICHERMOT,HEROMOTOCO,BAJAJFINSV,INDUSINDBK,"
-    "BHARTIARTL,TECHM,WIPRO"
-)
-
 
 def _clock(value: str) -> tuple[int, int]:
     hour, minute = value.strip().split(":", 1)
@@ -79,7 +70,7 @@ class ScalpChainEngine:
         self.market_data = market_data
         self.stream = stream
         self.repository = repository
-        self.universe = self._load_universe()
+        self.universe: list[str] = []  # No hard-coded/configured stock-list fallback.
         self._chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._historical_candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._historical_fetches_this_refresh = 0
@@ -101,27 +92,31 @@ class ScalpChainEngine:
         }
         self._load_open_events()
 
-    def _load_universe(self) -> list[str]:
-        raw = os.getenv("SCALP_UNIVERSE", DEFAULT_UNIVERSE)
-        result = []
-        for item in raw.split(","):
-            symbol = item.strip().upper().removesuffix("-EQ")
-            if symbol and symbol not in result:
-                result.append(symbol)
-        return result[:50]
-
     def health(self) -> dict[str, Any]:
+        cache_now = time.monotonic()
+        fresh_chain_cache = [
+            stamp for stamp, _ in self._chain_cache.values()
+            if 0 <= cache_now - stamp < CHAIN_TTL_S
+        ]
+        oldest_chain_age = (
+            round(max(0.0, cache_now - min(stamp for stamp, _ in self._chain_cache.values())), 2)
+            if self._chain_cache else None
+        )
         return {
             "mode": MODE,
             "paper_only": True,
-            "universe_size": len(cached_universe() or set(self.universe)),
-            "fixed_universe_size": len(self.universe),
+            "universe_size": len(cached_universe()),
+            "fixed_universe_size": 0,
+            "universe_source": universe_source() or ("unavailable" if not cached_universe() else "dynamic_registry"),
             "top_n": TOP_N,
             "rank_top_n": RANK_TOP_N,
             "ranking_basis": "live_intraday_pct_change",
             "open_scalps": len(self._open),
             "chain_cache_symbols": len(self._chain_cache),
-            "chain_ok": bool(self._chain_cache),
+            "chain_cache_fresh_symbols": len(fresh_chain_cache),
+            "chain_cache_ttl_s": CHAIN_TTL_S,
+            "chain_cache_oldest_age_s": oldest_chain_age,
+            "chain_ok": bool(fresh_chain_cache),
             "historical_candle_cache_symbols": len(self._historical_candle_cache),
             "historical_fetch_count": self._historical_fetch_count,
             "historical_fetch_failures": self._historical_fetch_failures,
@@ -438,8 +433,9 @@ class ScalpChainEngine:
 
     def _ranked_universe(self) -> tuple[list[str], int, int, list[str], list[str]]:
         """Build the live scalp universe from current F&O gainers and losers."""
-        symbols = sorted(cached_universe() or set(self.universe))
+        symbols = sorted(cached_universe())
         if not symbols:
+            self._last_error = "dynamic_fno_universe_unavailable"
             return [], 0, 0, [], []
         try:
             self.stream.ensure_symbols(symbols)
@@ -768,14 +764,17 @@ class ScalpChainEngine:
             "ranked_universe": 0, "gainers": 0, "losers": 0, "gainer_symbols": [], "loser_symbols": [],
         }
         if not bool(ban_status.get("ban_list_ok")):
-            # A missing ban feed must not freeze this paper-only engine.
+            # Fail closed for new entries when the exchange ban list is unknown.
+            # Existing paper positions were already monitored above and remain managed.
             self._last_error = "fo_ban_list_unavailable"
+            stats["top_rejections"] = {"fo_ban_list_unavailable": 1}
+            self._last_run_stats = stats
+            self._last_run_at = time.monotonic()
             if time.monotonic() - self._last_ban_warning_at >= 300.0:
-                logger.warning("SCALP_BAN_LIST_UNAVAILABLE: continuing with empty ban set")
+                logger.warning("SCALP_BAN_LIST_UNAVAILABLE: blocking new paper entries")
                 self._last_ban_warning_at = time.monotonic()
-            blocked = set()
-        else:
-            blocked = {str(x).upper() for x in banned_symbols()}
+            return
+        blocked = {str(x).upper() for x in banned_symbols()}
 
         candidates, ranking_stats = self._candidate_contexts()
         stats.update(ranking_stats)
