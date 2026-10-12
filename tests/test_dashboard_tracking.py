@@ -113,3 +113,20 @@ def test_live_signal_table_shows_persisted_first_added_time():
 def test_history_shows_server_tracked_current_ltp_separately_from_entry():
     assert "Current LTP" in INDEX
     assert "t.currentLTP" in INDEX
+
+
+
+def test_scalp_dashboard_does_not_color_unknown_exit_as_a_loss():
+    assert "row.exit_option_ltp == null ? 'text-gray-500'" in INDEX
+    assert "row.status === 'OPEN' ? '—' : (row.pnl_status || 'UNPRICED')" in INDEX
+
+
+def test_scalp_dashboard_shows_current_premium_stop_target_and_pnl_status():
+    for field in ("row.current_option_ltp", "row.stop_loss_option_ltp", "row.target_option_ltp", "row.pnl_pct"):
+        assert field in INDEX
+    assert "OPEN · WAITING FOR QUOTE" in INDEX
+
+
+def test_scalp_dashboard_explains_dynamic_ranked_universe_correctly():
+    assert "rank_top_n" in INDEX
+    assert "gainers" in INDEX and "losers" in INDEX

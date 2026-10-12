@@ -21,16 +21,24 @@ class FakeRepo:
         return []
 
 
-def test_ban_list_unavailable_does_not_block_scalp_refresh(monkeypatch):
+def test_ban_list_unavailable_fails_closed_for_new_entries(monkeypatch):
     engine = scalp.ScalpChainEngine(FakeMarket(), FakeStream(), FakeRepo())
     monkeypatch.setattr(scalp, "now_ist", lambda: datetime(2026, 10, 7, 10, 0, tzinfo=IST))
     monkeypatch.setattr(scalp, "ban_info", lambda: {"ban_list_ok": False})
-    monkeypatch.setattr(scalp, "banned_symbols", lambda: set())
     called = {"candidates": 0}
-    monkeypatch.setattr(engine, "_candidate_contexts", lambda: called.__setitem__("candidates", called["candidates"] + 1) or ([], {}))
+    monkeypatch.setattr(
+        engine,
+        "_candidate_contexts",
+        lambda: called.__setitem__("candidates", called["candidates"] + 1) or ([], {}),
+    )
+
     engine.refresh()
-    assert called["candidates"] == 1
+
+    assert called["candidates"] == 0
     assert engine._last_error == "fo_ban_list_unavailable"
+    assert engine._last_run_stats["ban_list_unavailable"] is True
+    assert engine._last_run_stats["top_rejections"] == {"fo_ban_list_unavailable": 1}
+
 
 class RankingStream:
     def __init__(self):
@@ -280,3 +288,27 @@ def test_reload_open_positions_after_database_restore(monkeypatch):
 
     assert "AAA" in engine._open
     assert engine._open["AAA"]["id"] == 42
+
+
+def test_dynamic_universe_unavailable_fails_closed_instead_of_using_fixed_list(monkeypatch):
+    engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "cached_universe", lambda: set())
+
+    ranked, gainers, losers, gainer_symbols, loser_symbols = engine._ranked_universe()
+
+    assert ranked == []
+    assert (gainers, losers, gainer_symbols, loser_symbols) == (0, 0, [], [])
+    assert engine._last_error == "dynamic_fno_universe_unavailable"
+    health = engine.health()
+    assert health["universe_size"] == 0
+    assert health["fixed_universe_size"] == 0
+
+
+def test_expired_option_chain_cache_is_not_reported_as_healthy():
+    engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), FakeRepo())
+    engine._chain_cache["AAA"] = (scalp.time.monotonic() - scalp.CHAIN_TTL_S - 1, {"ok": True})
+
+    health = engine.health()
+
+    assert health["chain_ok"] is False
+    assert health["chain_cache_fresh_symbols"] == 0

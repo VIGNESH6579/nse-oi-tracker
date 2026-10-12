@@ -5,12 +5,38 @@ from __future__ import annotations
 from typing import Any
 
 
+def stream_freshness_status(
+    stream_health: dict[str, Any] | None,
+    *,
+    market_open: bool,
+    max_age_s: float = 60.0,
+) -> str:
+    """Distinguish a connected socket from a stream carrying fresh market ticks."""
+    health = stream_health or {}
+    state = str(health.get("state") or "unknown").lower()
+    if state != "connected":
+        return "DISCONNECTED_OR_DISABLED"
+    if not market_open:
+        return "CONNECTED_MARKET_CLOSED"
+    age = health.get("last_tick_age_s")
+    if age is None:
+        return "CONNECTED_NO_TICK_TIMESTAMP"
+    try:
+        age_s = float(age)
+    except (TypeError, ValueError):
+        return "CONNECTED_NO_TICK_TIMESTAMP"
+    if age_s < 0:
+        return "CONNECTED_NO_TICK_TIMESTAMP"
+    return "LIVE" if age_s <= max_age_s else "STALE_TICKS"
+
+
 def public_source_inventory(
     *,
     oi_source: str = "no_scan_yet",
     oi_data_status: str = "NOT_RUN",
     angel_configured: bool = False,
     stream_health: dict[str, Any] | None = None,
+    market_open: bool = False,
     history_latest_trade_date: str | None = None,
     expected_bhavcopy_date: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -29,12 +55,10 @@ def public_source_inventory(
     else:
         angel_status = "CONFIGURED_AWAITING_VERIFIED_SCAN"
 
-    if stream_state == "connected":
-        stream_status = "CONNECTED"
-    elif not angel_configured:
+    if not angel_configured:
         stream_status = "NOT_CONFIGURED"
     else:
-        stream_status = "DISCONNECTED_OR_DISABLED"
+        stream_status = stream_freshness_status(stream_health, market_open=market_open)
 
     if oi_source == "nse_oi_spurts" and oi_rows_available:
         nse_oi_status = "ACTIVE_FALLBACK"
@@ -54,7 +78,7 @@ def public_source_inventory(
     )
     return [
         {"source": "Angel One NFO futures quotes/OI", "coverage": "Primary live F&O OI and underlying price inputs", "cadence": "market-hours scan", "status": angel_status},
-        {"source": "Angel One WebSocket ticks/5-minute bars", "coverage": "Fresh intraday context and scalp monitoring; read-only", "cadence": "live stream", "status": stream_status, "last_tick_age_s": stream_age},
+        {"source": "Angel One WebSocket ticks/5-minute bars", "coverage": "Fresh intraday context and scalp monitoring; read-only", "cadence": "live stream", "status": stream_status, "last_tick_age_s": stream_age, "freshness_threshold_s": 60},
         {"source": "Angel One stock option chain", "coverage": "Near-ATM stock option CE/PE premiums, OI and volume", "cadence": "bounded on-demand requests", "status": "READ_ONLY_CONFIGURED" if angel_configured else "NOT_CONFIGURED"},
         {"source": "NSE OI spurts", "coverage": "Optional fallback for all-F&O price/OI candidates; not a required live dependency", "cadence": "throttled market-hours fallback", "status": nse_oi_status},
         {"source": "NSE option chain", "coverage": "Optional context only; not required for Angel stock-option entries", "cadence": "best-effort on demand", "status": "BEST_EFFORT_FALLBACK"},
