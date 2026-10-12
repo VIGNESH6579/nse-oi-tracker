@@ -79,3 +79,18 @@ def test_stream_inventory_handles_missing_tick_timestamp_fail_closed():
     )
     stream = next(row for row in rows if row["source"] == "Angel One WebSocket ticks/5-minute bars")
     assert stream["status"] == "CONNECTED_NO_TICK_TIMESTAMP"
+
+
+
+def test_sources_inventory_does_not_label_afterhours_oi_rows_active():
+    from analytics.sources import public_source_inventory
+
+    rows = public_source_inventory(
+        oi_source="angel_futures",
+        oi_data_status="RECEIVED",
+        angel_configured=True,
+        stream_health={"state": "connected", "last_tick_age_s": 30},
+        market_open=False,
+    )
+    by_name = {row["source"]: row for row in rows}
+    assert by_name["Angel One NFO futures quotes/OI"]["status"] == "RECEIVED_MARKET_CLOSED"
