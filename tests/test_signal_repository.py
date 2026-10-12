@@ -237,6 +237,9 @@ def test_post_restore_repair_invalidates_unquoted_exit_and_closes_prior_session_
     fake_payload = json.loads(fake_breakeven["payload_json"])
     assert fake_breakeven["exit_option_ltp"] is None
     assert fake_payload["pnl_status"] == "UNPRICED"
+    assert fake_breakeven["pnl_status"] == "UNPRICED"
+    assert fake_breakeven["pnl_premium_pct"] is None
+    assert fake_breakeven["pnl_note"]
     assert fake_payload["legacy_exit_price_invalidated"] is True
 
     with repository._connect() as connection:
