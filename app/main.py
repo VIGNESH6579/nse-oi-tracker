@@ -47,6 +47,7 @@ from app.oi_analyzer import (
     sample_field_usage,
 )
 from app.nse_fetcher import (
+    configure_shared_angel_client,
     fetch_all_fno_oi_change,
     fetch_market_indices,
     test_nse_connectivity,
@@ -87,6 +88,10 @@ if SIGNAL_MODE not in {"scalp_chain", "swing_oi"}:
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
 angel_market_data = AngelOneMarketData.from_environment()
+# All Angel read-only paths must share the same login session and circuit breaker.
+# Creating a second client in nse_fetcher can trigger two simultaneous login calls
+# on Render startup and provoke the broker's rate-limited 403 response.
+configure_shared_angel_client(angel_market_data)
 angel_stream = AngelOneMarketStream(angel_market_data)
 scalp_engine = ScalpChainEngine(angel_market_data, angel_stream, repository)
 

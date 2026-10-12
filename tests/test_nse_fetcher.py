@@ -160,3 +160,22 @@ def test_angel_futures_empty_batch_does_not_reuse_previous_batch(monkeypatch):
 
     assert module._angel_fno_oi_rows() == []
     assert module.fetch_all_fno_oi_change() == []
+
+
+
+def test_configure_shared_angel_client_replaces_duplicate_client_and_clears_old_rows(monkeypatch):
+    module = importlib.reload(nse_fetcher)
+    module._LAST_ANGEL_OI_ROWS = [{"symbol": "STALE", "ltp": 10, "oi": 1000}]
+
+    class SharedClient:
+        configured = True
+
+        def fno_quotes(self):
+            return {"RELIANCE": {"ltp": 1500.0, "oi": 20000, "source": "angel_futures"}}
+
+    shared = SharedClient()
+    module.configure_shared_angel_client(shared)
+
+    assert module._angel_fno is shared
+    assert module._LAST_ANGEL_OI_ROWS == []
+    assert module._angel_fno_oi_rows()[0]["symbol"] == "RELIANCE"
