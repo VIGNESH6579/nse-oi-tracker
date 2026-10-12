@@ -31,6 +31,8 @@ MAX_CONCURRENT = int(os.getenv("SCALP_MAX_OPEN", os.getenv("SCALP_MAX_CONCURRENT
 OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
 OPTION_TARGET_PCT = float(os.getenv("SCALP_OPTION_TARGET_PCT", "20"))
 CHAIN_TTL_S = float(os.getenv("SCALP_CHAIN_TTL_S", "20"))
+HIST_CANDLE_TTL_S = float(os.getenv("SCALP_HIST_CANDLE_TTL_S", "300"))
+HIST_CANDLE_MAX_CALLS_PER_REFRESH = max(0, int(os.getenv("SCALP_HIST_CANDLE_MAX_CALLS_PER_REFRESH", "2")))
 TOP_N = int(os.getenv("SCALP_CHAIN_TOP_N", os.getenv("SCALP_TOP_N", "5")))
 RANK_TOP_N = int(os.getenv("SCALP_RANK_TOP_N", "20"))
 MIN_OPTION_OI = int(os.getenv("SCALP_MIN_OPTION_OI", "10000"))
@@ -79,6 +81,10 @@ class ScalpChainEngine:
         self.repository = repository
         self.universe = self._load_universe()
         self._chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._historical_candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._historical_fetches_this_refresh = 0
+        self._historical_fetch_count = 0
+        self._historical_fetch_failures = 0
         self._previous_chain: dict[str, dict[str, Any]] = {}
         self._open: dict[str, dict[str, Any]] = {}
         self._last_run_at = 0.0
@@ -116,6 +122,10 @@ class ScalpChainEngine:
             "open_scalps": len(self._open),
             "chain_cache_symbols": len(self._chain_cache),
             "chain_ok": bool(self._chain_cache),
+            "historical_candle_cache_symbols": len(self._historical_candle_cache),
+            "historical_fetch_count": self._historical_fetch_count,
+            "historical_fetch_failures": self._historical_fetch_failures,
+            "historical_fetches_this_refresh": self._historical_fetches_this_refresh,
             "last_error": self._last_error,
             "last_monitor_at_ist": self._last_monitor_at_ist,
             "unpriced_close_count": self._unpriced_close_count,
@@ -193,13 +203,51 @@ class ScalpChainEngine:
             logger.warning("Scalp option chain unavailable for %s: %s", key, type(exc).__name__)
             return None
 
-    def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
-        """Return a directional setup only from fresh, timestamped real 5-minute stream bars."""
-        candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
-        if len(candles) < 4:
-            self._last_context_rejection = "insufficient_candle_count"
-            return None
-        today = now_ist().date()
+    def _historical_context_candles(self, symbol: str) -> list[dict[str, Any]]:
+        """Fetch today's real Angel 5-minute OHLCV as a bounded fallback for the WS opening range."""
+        key = symbol.upper()
+        now_mono = time.monotonic()
+        cached = self._historical_candle_cache.get(key)
+        if cached and now_mono - cached[0] < HIST_CANDLE_TTL_S:
+            return cached[1]
+        if self._historical_fetches_this_refresh >= HIST_CANDLE_MAX_CALLS_PER_REFRESH:
+            return []
+        if self.market_data is None or not self.market_data.configured:
+            return []
+
+        self._historical_fetches_this_refresh += 1
+        try:
+            raw = self.market_data.intraday_candles(
+                key, interval="FIVE_MINUTE", exchange="NSE", days=1
+            )
+            candles = []
+            for row in raw or []:
+                candle = dict(row)
+                candle["data_frequency"] = "FIVE_MINUTE"
+                candle["source"] = "angel_one_historical_5m"
+                candle["candle_source"] = "angel_one_historical_5m"
+                candles.append(candle)
+            self._historical_fetch_count += 1
+            self._historical_candle_cache[key] = (time.monotonic(), candles)
+            while len(self._historical_candle_cache) > 80:
+                oldest = next(iter(self._historical_candle_cache))
+                self._historical_candle_cache.pop(oldest, None)
+            if candles:
+                logger.info("SCALP_HISTORICAL_CANDLES symbol=%s bars=%d source=angel_one_historical_5m",
+                            key, len(candles))
+            else:
+                logger.info("SCALP_HISTORICAL_CANDLES_EMPTY symbol=%s", key)
+            return candles
+        except Exception as exc:
+            self._historical_fetch_failures += 1
+            logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s error=%s", key, type(exc).__name__)
+            # Cool down this symbol briefly so a repeated failure does not trigger
+            # another historical request on every 30-second scan.
+            self._historical_candle_cache[key] = (time.monotonic(), [])
+            return []
+
+    @staticmethod
+    def _parse_context_candles(candles: list[dict[str, Any]], today) -> list[dict[str, Any]]:
         parsed: list[dict[str, Any]] = []
         for raw in candles:
             candle = dict(raw)
@@ -207,7 +255,8 @@ class ScalpChainEngine:
             if not stamp_value and candle.get("timestamp_ms"):
                 try:
                     candle["time"] = datetime.fromtimestamp(
-                        float(candle["timestamp_ms"]) / 1000.0, tz=now_ist().tzinfo
+                        float(candle["timestamp_ms"]) / 1000.0,
+                        tz=now_ist().tzinfo,
                     ).isoformat(timespec="seconds")
                     stamp_value = candle["time"]
                 except (TypeError, ValueError, OSError):
@@ -228,10 +277,36 @@ class ScalpChainEngine:
                 parsed.append(candle)
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
+        parsed.sort(key=lambda x: x["_parsed_time"])
+        return parsed
+
+    def _underlying_context(self, symbol: str) -> dict[str, Any] | None:
+        """Use fresh real 5-minute bars; repair missing WS opening ranges with bounded Angel history."""
+        candles = self.stream.recent_candles_for_symbol(symbol, limit=80)
+        today = now_ist().date()
+        parsed = self._parse_context_candles(candles, today)
+
+        def has_opening_range(items: list[dict[str, Any]]) -> bool:
+            return sum(
+                1 for candle in items
+                if 9 * 60 + 15 <= candle["_parsed_time"].hour * 60 + candle["_parsed_time"].minute < 9 * 60 + 30
+            ) >= 2
+
+        # Render cold starts and WS reconnections may subscribe after 09:30.
+        # The local tick-built buffer then cannot contain the opening range. Fetch
+        # only a bounded number of real historical bars, cache them, and never
+        # fabricate an opening range from a later candle.
+        if len(parsed) < 4 or not has_opening_range(parsed):
+            historical = self._historical_context_candles(symbol)
+            if historical:
+                parsed_historical = self._parse_context_candles(historical, today)
+                merged = {c["_parsed_time"]: c for c in parsed_historical}
+                merged.update({c["_parsed_time"]: c for c in parsed})
+                parsed = sorted(merged.values(), key=lambda x: x["_parsed_time"])
+
         if len(parsed) < 4:
             self._last_context_rejection = "insufficient_valid_today_5m_candles"
             return None
-        parsed.sort(key=lambda x: x["_parsed_time"])
         latest = parsed[-1]
         latest_stamp = latest["_parsed_time"]
         try:
@@ -295,7 +370,7 @@ class ScalpChainEngine:
             "volume_ok": volume_ok,
             "candle_count": len(parsed),
             "candle_age_s": round(candle_age_s, 2),
-            "candle_source": "angel_one_websocket_v2",
+            "candle_source": latest.get("candle_source") or latest.get("source") or "angel_one_websocket_v2",
             "data_frequency": "FIVE_MINUTE",
         }
 
@@ -663,6 +738,7 @@ class ScalpChainEngine:
 
     def refresh(self) -> None:
         now = now_ist()
+        self._historical_fetches_this_refresh = 0
         # Open positions must be monitored before any entry-window or feed-readiness
         # early return. This makes TIME and 15:15 CLOCK exits fail-safe.
         if self._open:

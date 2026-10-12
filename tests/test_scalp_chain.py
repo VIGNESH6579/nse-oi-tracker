@@ -17,6 +17,9 @@ class FakeRepo:
     def open_scalps(self, trade_date):
         return []
 
+    def scalp_events_for_date(self, trade_date):
+        return []
+
 
 def test_ban_list_unavailable_does_not_block_scalp_refresh(monkeypatch):
     engine = scalp.ScalpChainEngine(FakeMarket(), FakeStream(), FakeRepo())
