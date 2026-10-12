@@ -655,6 +655,30 @@ async def ingest_daily_index_bars() -> int:
         return 0
 
 
+async def scheduled_index_history_repair() -> None:
+    """Retry stale index history once before the session; keep the work bounded."""
+    now = now_ist()
+    if now.weekday() >= 5 or is_trading_holiday(now.date()) is True:
+        return
+    before = await asyncio.to_thread(repository.daily_index_bar_summary)
+    if not index_history_backfill_required(before, now):
+        return
+    logger.warning(
+        "INDEX_HISTORY_STALE before open latest=%s expected=%s; attempting bounded Angel refill",
+        before.get("latest_trade_date"), expected_latest_bhavcopy_date(now).isoformat(),
+    )
+    await ingest_daily_index_bars()
+    after = await asyncio.to_thread(repository.daily_index_bar_summary)
+    if index_history_backfill_required(after, now):
+        logger.warning(
+            "INDEX_HISTORY_STILL_STALE latest=%s expected=%s",
+            after.get("latest_trade_date"), expected_latest_bhavcopy_date(now).isoformat(),
+        )
+        return
+    await asyncio.to_thread(upload_database_snapshot, settings.database_path)
+    logger.info("INDEX_HISTORY_REPAIRED latest=%s bars=%s", after.get("latest_trade_date"), after.get("bars"))
+
+
 async def scheduled_bhavcopy_ingestion() -> None:
     """Ingest daily data, re-grade estimated exits with official closes, snapshot."""
     stored = await ingest_daily_bhavcopy()
@@ -1214,6 +1238,15 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_index_history_repair,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=55, timezone=IST),
+        id="preopen-index-history-repair",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
     )
     scheduler.add_job(
         scheduled_bhavcopy_ingestion,
