@@ -1699,7 +1699,7 @@ async def oi_signals(
         "data_warning": (
             "Latest OI refresh returned no live rows; any visible observation must not be treated as a new entry."
             if data_status == "UNAVAILABLE" and results
-            else "No live OI rows were received, so no fresh signal can be computed."
+            else "NSE upstream returned no OI rows; no fresh signal can be computed right now."
             if data_status == "UNAVAILABLE"
             else None
         ),

@@ -213,3 +213,43 @@ def test_live_paper_position_has_nonzero_option_risk_levels(monkeypatch):
     assert pos["stop_loss"] == round(5.0 * (1 - scalp.OPTION_STOP_PCT / 100), 2)
     assert pos["target"] == round(5.0 * (1 + scalp.OPTION_TARGET_PCT / 100), 2)
     assert pos["pnl_status"] == "WAITING_FOR_QUOTE"
+
+
+
+def test_underlying_context_recovers_missing_opening_range_from_real_history(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
+    raw_candles = [
+        {"time": "2026-10-07T09:15:00+05:30", "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "volume": 100},
+        {"time": "2026-10-07T09:20:00+05:30", "open": 100.0, "high": 101.0, "low": 100.0, "close": 100.5, "volume": 100},
+        {"time": "2026-10-07T09:25:00+05:30", "open": 100.5, "high": 101.0, "low": 100.4, "close": 100.8, "volume": 100},
+        {"time": "2026-10-07T09:30:00+05:30", "open": 100.8, "high": 101.2, "low": 100.7, "close": 101.0, "volume": 100},
+        {"time": "2026-10-07T09:35:00+05:30", "open": 101.0, "high": 101.1, "low": 100.9, "close": 101.0, "volume": 100},
+        {"time": "2026-10-07T09:55:00+05:30", "open": 103.0, "high": 104.0, "low": 102.9, "close": 103.5, "volume": 120},
+        {"time": "2026-10-07T10:00:00+05:30", "open": 103.5, "high": 105.0, "low": 103.4, "close": 104.5, "volume": 130},
+    ]
+
+    class HistoryMarket(FakeMarket):
+        def __init__(self):
+            self.calls = []
+
+        def intraday_candles(self, symbol, *, interval="FIVE_MINUTE", exchange="NSE", days=1):
+            self.calls.append((symbol, interval, exchange, days))
+            return raw_candles
+
+    class EmptyStream:
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return []
+
+    market = HistoryMarket()
+    engine = scalp.ScalpChainEngine(market, EmptyStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+
+    ctx = engine._underlying_context("AAA")
+
+    assert ctx is not None
+    assert ctx["direction"] == "BUY"
+    assert ctx["candle_source"] == "angel_one_historical_5m"
+    assert ctx["data_frequency"] == "FIVE_MINUTE"
+    assert len(market.calls) == 1
+    assert engine._underlying_context("AAA")["direction"] == "BUY"
+    assert len(market.calls) == 1  # cached; no repeated historical calls
