@@ -1543,6 +1543,7 @@ async def sources():
             oi_data_status=last_scan_data_status(),
             angel_configured=angel_market_data is not None,
             stream_health=stream_health,
+            market_open=is_market_open(),
             history_latest_trade_date=daily_history.get("latest_trade_date"),
             expected_bhavcopy_date=expected_latest_bhavcopy_date().isoformat(),
         ),
