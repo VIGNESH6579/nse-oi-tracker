@@ -649,7 +649,23 @@ class SignalRepository:
                 "SELECT * FROM scalp_events WHERE trade_date=? ORDER BY entry_time_ist DESC",
                 (trade_date,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            event = dict(row)
+            try:
+                payload = json.loads(str(event.get("payload_json") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            event["pnl_status"] = payload.get("pnl_status") or (
+                "OPEN" if event.get("status") == "OPEN"
+                else "QUOTED_PAPER_EXIT" if event.get("exit_option_ltp") is not None
+                else "UNPRICED"
+            )
+            event["pnl_premium_pct"] = payload.get("pnl_premium_pct")
+            event["pnl_note"] = payload.get("pnl_note") or payload.get("exit_quote_note")
+            event["exit_quote_source"] = payload.get("exit_quote_source")
+            events.append(event)
+        return events
 
     def backtest_events(self, start_date: str, end_date: str, tier: str | None = "TRADE") -> list[dict[str, Any]]:
         """Return stored candidate events, including archive, for transparent analysis."""
