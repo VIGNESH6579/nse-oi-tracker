@@ -361,6 +361,22 @@ class NSESession:
 # ?? Singleton ??????????????????????????????????????????????????????????????????
 _nse = NSESession()
 _angel_fno = AngelOneMarketData.from_environment()
+
+
+def configure_shared_angel_client(client: AngelOneMarketData | None) -> None:
+    """Use the application's single Angel client for futures OI, quotes, and WebSocket.
+
+    Separate clients can issue simultaneous loginByPassword calls during a Render
+    cold start. Angel's login endpoint is rate-limited; a duplicate login can trip
+    the broker's 403/circuit-breaker path even when the same credentials worked
+    earlier in the day. The FastAPI app injects its shared client here.
+    """
+    global _angel_fno, _LAST_ANGEL_OI_ROWS
+    _angel_fno = client
+    # Cached observations cannot be carried between client swaps or sessions.
+    _LAST_ANGEL_OI_ROWS = []
+
+
 _price_snapshots: OrderedDict[str, float] = OrderedDict()
 _price_snapshot_lock = RLock()
 MAX_PRICE_SNAPSHOTS = 1_000
