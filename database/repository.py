@@ -72,6 +72,59 @@ class SignalRepository:
         connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
+    @staticmethod
+    def _repair_scalp_event_integrity(connection: sqlite3.Connection) -> None:
+        """Remove false break-even marks and prevent paper scalps leaking across sessions."""
+        # Earlier code copied the entry premium into exits whenever the max-hold timer
+        # fired, then marked the quote unavailable. Those values are not observed exits.
+        rows = connection.execute(
+            "SELECT id, payload_json FROM scalp_events WHERE status='CLOSED' AND exit_option_ltp IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"] or "{}"))
+            except (TypeError, ValueError):
+                continue
+            if payload.get("option_quote_unavailable") is True:
+                payload["pnl_status"] = "UNPRICED"
+                payload["legacy_exit_price_invalidated"] = True
+                payload["pnl_note"] = (
+                    "Legacy exit used entry premium as a placeholder because the contract quote was unavailable; "
+                    "the reported zero P&L has been invalidated."
+                )
+                connection.execute(
+                    "UPDATE scalp_events SET exit_option_ltp=NULL, payload_json=? WHERE id=?",
+                    (json.dumps(payload, separators=(",", ":")), int(row["id"])),
+                )
+
+        # An OPEN paper position from an earlier trading date cannot be restored as
+        # a live position. Its exit price is unknown, so close its record without
+        # fabricating an exit time, premium, or P&L.
+        today = ist_trade_date()
+        old_open = connection.execute(
+            "SELECT id, payload_json FROM scalp_events WHERE status='OPEN' AND trade_date < ?",
+            (today,),
+        ).fetchall()
+        for row in old_open:
+            try:
+                payload = json.loads(str(row["payload_json"] or "{}"))
+            except (TypeError, ValueError):
+                payload = {}
+            payload.update({
+                "pnl_status": "UNPRICED",
+                "exit_quote_unavailable": True,
+                "session_rollover_unpriced": True,
+                "pnl_note": "Prior-session paper position had no verifiable exit mark.",
+            })
+            connection.execute(
+                """UPDATE scalp_events
+                   SET status='CLOSED', exit_time_ist=NULL, underlying_exit=NULL,
+                       exit_option_ltp=NULL, hold_minutes=NULL,
+                       exit_reason='SESSION_ROLLOVER_UNPRICED', payload_json=?
+                   WHERE id=?""",
+                (json.dumps(payload, separators=(",", ":")), int(row["id"])),
+            )
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
@@ -272,6 +325,7 @@ class SignalRepository:
                     ON participant_oi_reports(report_date DESC);
                 """
             )
+            self._repair_scalp_event_integrity(connection)
             columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(signal_events)").fetchall()
@@ -557,8 +611,8 @@ class SignalRepository:
             )
             return int(cur.lastrowid)
 
-    def close_scalp(self, event_id: int, *, exit_time_ist: str, underlying_exit: float,
-                    exit_option_ltp: float, hold_minutes: float, exit_reason: str,
+    def close_scalp(self, event_id: int, *, exit_time_ist: str, underlying_exit: float | None,
+                    exit_option_ltp: float | None, hold_minutes: float, exit_reason: str,
                     payload: dict[str, Any] | None = None) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -568,7 +622,9 @@ class SignalRepository:
                        payload_json=?
                    WHERE id=?""",
                 (
-                    exit_time_ist, float(underlying_exit), float(exit_option_ltp),
+                    exit_time_ist,
+                    float(underlying_exit) if underlying_exit is not None else None,
+                    float(exit_option_ltp) if exit_option_ltp is not None else None,
                     float(hold_minutes), str(exit_reason),
                     json.dumps(payload or {}, separators=(",", ":")), int(event_id),
                 ),

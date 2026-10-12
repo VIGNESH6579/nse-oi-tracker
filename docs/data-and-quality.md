@@ -20,3 +20,10 @@ buildup only, not in ban, fresh price, >=10 min OI history, 15-min window agrees
 persistence >= 4 scans, price on the right side of VWAP and beyond the opening range, session volume
 >= 1.2x expected pace (1.8x on gap days), not extended (<=1.0 ATR from open, <=1.5 ATR from VWAP), ATR available.
 The gate **fails closed**: missing data blocks the signal and shows up in `/api/health` -> `data_quality.gate_last_scan`.
+
+
+## Interpreting quiet scans and paper exits
+
+A scan that returns no published OI candidates is not proof of a broken feed or proof that the market has no opportunities. Inspect `/api/oi-signals` → `scan_diagnostics` for raw row count, parsed directional candidates, publication/stability rejections, the actual OI source, and the reason no quality signal was published. Do not weaken confidence, absolute-OI, stability, candle-freshness, volume, VWAP, or opening-range gates just to force a signal.
+
+For `scalp_chain`, open positions expose explicit option-premium stop/target levels and a freshness status for the latest option quote. A time or hard-flat exit with no current quote is closed as `UNPRICED`; its option exit and P&L are null, not copied from the entry. This system is paper-only and quoted marks do not model real fills or slippage.

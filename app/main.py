@@ -80,7 +80,7 @@ from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
 
-APP_VERSION = "4.5.1"
+APP_VERSION = "4.5.2"
 SIGNAL_MODE = os.getenv("SIGNAL_MODE", "scalp_chain").strip().lower()
 if SIGNAL_MODE not in {"scalp_chain", "swing_oi"}:
     SIGNAL_MODE = "scalp_chain"
@@ -503,12 +503,14 @@ async def scheduled_refresh() -> None:
         logger.exception("Scheduled swing OI refresh failed")
 
 async def scheduled_scalp_refresh() -> None:
-    """Run the Angel option-chain paper scalper on its bounded 30-second cadence."""
+    """Monitor paper scalps on schedule; the engine itself gates market-hour entries."""
     global _scheduler_heartbeat_at_ist
     _scheduler_heartbeat_at_ist = now_ist().isoformat()
-    if SIGNAL_MODE != "scalp_chain" or not is_market_open():
+    if SIGNAL_MODE != "scalp_chain":
         return
     try:
+        # The monitor must still close same-day positions as unpriced when a restart/feed
+        # outage carries the engine beyond 15:15 or the market is already closed.
         await asyncio.to_thread(scalp_engine.refresh)
     except Exception:
         logger.exception("Scheduled scalp-chain refresh failed")
@@ -1422,6 +1424,8 @@ async def health():
         "uptime_s":      round(max(0.0, (now - _started_at).total_seconds()), 2),
         "data_source":   oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet",
         "price_source":  "angel_one_quotes" if angel_market_data else "nse_oi_feed",
+        "oi_scan_diagnostics": dict(oi_engine._last_scan_stats),
+        "scalp_engine": scalp_engine.health() if SIGNAL_MODE == "scalp_chain" else {"mode": SIGNAL_MODE, "paper_only": True},
         "last_scan_at":  effective_last_scan_at,
         "scan_age_s":    round(scan_age, 2) if scan_age is not None else None,
         "atr_coverage_pct": coverage["atr_coverage_pct"],
@@ -1519,14 +1523,24 @@ async def admin_self_test(stage: str = Query("pre_open"), x_debug_token: str = H
 @app.get("/api/sources")
 async def sources():
     """Declared public-data coverage; unavailable sources are never implied live."""
+    angel_health = angel_market_data.health() if angel_market_data else {"state": "disabled", "last_error_code": "", "retry_at": None}
+    stream_health = angel_stream.health()
+    daily_history = repository.daily_equity_bar_summary()
     return {
-        "sources": public_source_inventory(),
+        "sources": public_source_inventory(
+            oi_source=str(oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet"),
+            oi_data_status=last_scan_data_status(),
+            angel_configured=angel_market_data is not None,
+            stream_health=stream_health,
+            history_latest_trade_date=daily_history.get("latest_trade_date"),
+            expected_bhavcopy_date=expected_latest_bhavcopy_date().isoformat(),
+        ),
         "angel_one_market_data": {
             "configured": angel_market_data is not None,
             "mode": "read_only_quotes_and_candles" if angel_market_data else "disabled",
             "order_execution": False,
-            "health": angel_market_data.health() if angel_market_data else {"state": "disabled", "last_error_code": "", "retry_at": None},
-            "stream": angel_stream.health(),
+            "health": angel_health,
+            "stream": stream_health,
         },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
     }
@@ -1639,12 +1653,34 @@ async def oi_signals(
     high   = sum(1 for r in cached if r.get("confidence_tier") == "HIGH")
     medium = sum(1 for r in cached if r.get("confidence_tier") == "MEDIUM")
     status = get_market_status()
-    active_source = (
-        "angel_one_read_only_overlay"
-        if any(r.get("realtime_source") == "angel_one_read_only" for r in cached)
-        else "nse_public_feed"
-    )
+    oi_source = str(oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet")
+    if oi_source == "angel_futures":
+        active_source = "angel_one_nfo_futures"
+    elif oi_source == "angel_one_full_quote_overlay":
+        active_source = "angel_one_full_quote_overlay"
+    elif oi_source == "mixed":
+        active_source = "mixed_angel_and_nse"
+    elif oi_source == "nse_oi_spurts":
+        active_source = "nse_public_feed_fallback"
+    else:
+        active_source = "unavailable"
     data_status = last_scan_data_status()
+    scan_stats = dict(oi_engine._last_scan_stats)
+    confirmation_blockers: dict[str, int] = {}
+    for signal_row in cached:
+        for reason in (signal_row.get("missing_confirmations") or signal_row.get("missing_factors") or []):
+            key = str(reason)
+            confirmation_blockers[key] = confirmation_blockers.get(key, 0) + 1
+    if status != MARKET_STATUS_OPEN:
+        no_signal_reason = "MARKET_CLOSED"
+    elif data_status == "UNAVAILABLE":
+        no_signal_reason = "REQUIRED_LIVE_OI_DATA_UNAVAILABLE"
+    elif not cached and int(scan_stats.get("rows") or 0) > 0:
+        no_signal_reason = "NO_CANDIDATE_PASSED_PUBLICATION_AND_STABILITY_FILTERS"
+    elif not cached:
+        no_signal_reason = "NO_DIRECTIONAL_CANDIDATE_FROM_CURRENT_SCAN"
+    else:
+        no_signal_reason = None
 
     return {
         "market_open":       status == MARKET_STATUS_OPEN,
@@ -1661,14 +1697,24 @@ async def oi_signals(
         "data_status":       data_status,
         "signal_scope":      "OI_OBSERVATION_ONLY",
         "data_warning": (
-
-            "NSE upstream returned no OI rows; no signal can be computed right now."
-            if data_status == "UNAVAILABLE" and not results else None
+            "Latest OI refresh returned no live rows; any visible observation must not be treated as a new entry."
+            if data_status == "UNAVAILABLE" and results
+            else "No live OI rows were received, so no fresh signal can be computed."
+            if data_status == "UNAVAILABLE"
+            else None
         ),
         "primary_market_data_source": active_source,
-        "oi_source": oi_engine._last_scan_stats.get("oi_source") or "no_scan_yet",
+        "oi_source": oi_source,
         "angel_one_configured": angel_market_data is not None,
-        "nse_public_feed_is_fallback": active_source == "nse_public_feed" and angel_market_data is not None,
+        "nse_public_feed_is_fallback": oi_source == "nse_oi_spurts",
+        "scan_diagnostics": {
+            **scan_stats,
+            "published_signals": len(cached),
+            "actionable_signals": sum(1 for row in cached if row.get("actionable")),
+            "no_trade_signals": sum(1 for row in cached if not row.get("actionable")),
+            "confirmation_blockers": confirmation_blockers,
+            "why_no_quality_signal": no_signal_reason,
+        },
         "refresh_supported": True,
         "timestamp":         now_ist().strftime("%H:%M:%S"),
         "last_refresh_at_ist": _last_refresh_at_ist,
