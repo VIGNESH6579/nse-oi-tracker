@@ -755,6 +755,9 @@ class ScalpChainEngine:
             return
         if len(self._open) >= MAX_CONCURRENT:
             return
+        # Clear an earlier transient error before this eligible scan; any new
+        # failure below will set it again so the dashboard never shows stale errors.
+        self._last_error = ""
         ban_status = ban_info()
         stats: dict[str, Any] = {
             "candidates": 0, "chain_checked": 0, "chain_unavailable": 0,
