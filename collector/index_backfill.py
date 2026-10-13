@@ -18,7 +18,11 @@ INDEX_TYPES = {
 
 
 def backfill_index_bars(repository, *, days=60, max_downloads=60, angel_client=None):
-    end = now_ist().date() - timedelta(days=1)
+    now = now_ist()
+    # Before/through the live session, only request completed prior-day bars.
+    # After the close, include today so the 18:30/23:15 repair can actually
+    # recover the current session instead of filtering it out by construction.
+    end = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
     start = end - timedelta(days=days * 2)
     stored = 0
     sources = set()
