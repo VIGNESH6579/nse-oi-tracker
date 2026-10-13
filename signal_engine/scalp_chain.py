@@ -323,7 +323,7 @@ class ScalpChainEngine:
         # operationally different from a successful historical response missing
         # the 09:15-09:25 bars, and should be visible as such in scan diagnostics.
         if not has_opening_range(parsed):
-            cached_history = self._historical_candle_cache.get(key)
+            cached_history = self._historical_candle_cache.get(symbol.upper())
             if cached_history is None and self._historical_fetches_this_refresh >= HIST_CANDLE_MAX_CALLS_PER_REFRESH:
                 self._last_context_rejection = "historical_fetch_budget_deferred"
                 return None
