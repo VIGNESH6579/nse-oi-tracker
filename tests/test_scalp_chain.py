@@ -145,7 +145,7 @@ def _open_position(engine, entry_time="2026-10-07T10:00:00+05:30"):
     }
 
 
-def test_max_hold_exit_without_option_quote_is_unpriced_not_breakeven(monkeypatch):
+def test_missing_option_quote_does_not_force_elapsed_time_exit(monkeypatch):
     now = datetime.fromisoformat("2026-10-07T10:11:00+05:30")
     repo = ExitRepo()
     engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), repo)
@@ -157,15 +157,8 @@ def test_max_hold_exit_without_option_quote_is_unpriced_not_breakeven(monkeypatc
 
     engine._manage_open()
 
-    assert len(repo.closed) == 1
-    event = repo.closed[0]
-    assert event["exit_reason"] == "TIME"
-    assert event["exit_option_ltp"] is None
-    assert event["underlying_exit"] == 100.0
-    assert event["payload"]["pnl_status"] == "UNPRICED"
-    assert event["payload"]["exit_quote_unavailable"] is True
-    assert "pnl_premium_pct" not in event["payload"]
-    assert engine._open == {}
+    assert repo.closed == []
+    assert "AAA" in engine._open
 
 
 def test_hard_flat_closes_even_without_underlying_context_or_chain_quote(monkeypatch):
@@ -187,7 +180,7 @@ def test_hard_flat_closes_even_without_underlying_context_or_chain_quote(monkeyp
     assert engine._open == {}
 
 
-def test_max_hold_uses_exact_contract_quote_when_available(monkeypatch):
+def test_elapsed_time_and_target_do_not_close_while_momentum_persists(monkeypatch):
     now = datetime.fromisoformat("2026-10-07T10:11:00+05:30")
     repo = ExitRepo()
     engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), repo)
@@ -204,11 +197,11 @@ def test_max_hold_uses_exact_contract_quote_when_available(monkeypatch):
 
     engine._manage_open()
 
-    event = repo.closed[0]
-    assert seen["force_refresh"] is True
-    assert event["exit_option_ltp"] == 6.25
-    assert event["payload"]["pnl_status"] == "QUOTED_PAPER_EXIT"
-    assert event["payload"]["pnl_premium_pct"] == 25.0
+    assert seen["force_refresh"] is False
+    assert repo.closed == []
+    assert "AAA" in engine._open
+    assert engine._open["AAA"]["_trailing_armed"] is True
+    assert engine._open["AAA"]["_peak_option_ltp"] == 6.25
 
 
 def test_live_paper_position_has_nonzero_option_risk_levels(monkeypatch):
@@ -312,3 +305,67 @@ def test_expired_option_chain_cache_is_not_reported_as_healthy():
 
     assert health["chain_ok"] is False
     assert health["chain_cache_fresh_symbols"] == 0
+
+
+def test_momentum_weakness_requires_two_consecutive_weak_observations(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:30:00+05:30")
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), ExitRepo())
+    _open_position(engine, entry_time="2026-10-07T10:00:00+05:30")
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    weak = {"ltp": 99.5, "vwap": 100.0, "or_high": 101.0, "or_low": 98.0, "momentum_pct": -0.25}
+
+    assert engine._exit_reason(engine._open["AAA"], weak, 5.50, now) is None
+    assert engine._open["AAA"]["_weak_signal_count"] == 1
+    assert engine._exit_reason(engine._open["AAA"], weak, 5.45, now) == "MOMENTUM_WEAK"
+
+
+def test_trailing_exit_requires_profit_retrace_and_weak_momentum(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:30:00+05:30")
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), ExitRepo())
+    _open_position(engine, entry_time="2026-10-07T10:00:00+05:30")
+    position = engine._open["AAA"]
+    position["_peak_option_ltp"] = 6.50
+    position["_trailing_armed"] = True
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    weak = {"ltp": 99.5, "vwap": 100.0, "or_high": 101.0, "or_low": 98.0, "momentum_pct": -0.25}
+
+    assert engine._exit_reason(position, weak, 5.65, now) == "TRAILING_MOMENTUM_WEAK"
+
+
+def test_ranked_universe_interleaves_strong_gainers_and_losers(monkeypatch):
+    stream = RankingStream()
+    stream.ticks = {
+        "GAIN_BIG": {"ltp": 120, "close": 100},
+        "LOSS_BIG": {"ltp": 80, "close": 100},
+        "GAIN_SMALL": {"ltp": 102, "close": 100},
+        "LOSS_SMALL": {"ltp": 98, "close": 100},
+    }
+    engine = scalp.ScalpChainEngine(FakeMarket(), stream, FakeRepo())
+    monkeypatch.setattr(scalp, "cached_universe", lambda: set(stream.ticks))
+    monkeypatch.setattr(scalp, "RANK_TOP_N", 2)
+
+    ranked, gainers, losers, _, _ = engine._ranked_universe()
+
+    assert ranked == ["GAIN_BIG", "LOSS_BIG", "GAIN_SMALL", "LOSS_SMALL"]
+    assert (gainers, losers) == (2, 2)
+
+
+def test_opening_range_budget_deferral_is_not_misreported_as_missing_range(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
+    candles = [
+        {"time": f"2026-10-07T09:{minute:02d}:00+05:30", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100,
+         "data_frequency": "FIVE_MINUTE", "candle_source": "angel_one_websocket_v2"}
+        for minute in (35, 40, 45, 50, 55)
+    ]
+
+    class NoOpeningRangeStream(RankingStream):
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return candles[-limit:]
+
+    engine = scalp.ScalpChainEngine(FakeMarket(), NoOpeningRangeStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    monkeypatch.setattr(scalp, "HIST_CANDLE_MAX_CALLS_PER_REFRESH", 2)
+    engine._historical_fetches_this_refresh = 2
+
+    assert engine._underlying_context("AAA") is None
+    assert engine._last_context_rejection == "historical_fetch_budget_deferred"

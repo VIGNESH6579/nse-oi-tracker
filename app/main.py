@@ -656,7 +656,7 @@ async def ingest_daily_index_bars() -> int:
 
 
 async def scheduled_index_history_repair() -> None:
-    """Retry stale index history once before the session; keep the work bounded."""
+    """Repair stale index history in one bounded attempt, pre-open or after close."""
     now = now_ist()
     if now.weekday() >= 5 or is_trading_holiday(now.date()) is True:
         return
@@ -1255,6 +1255,17 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+    )
+    # The daily index ingest can run before the provider publishes the final bar.
+    # Recheck after it has completed and make one bounded repair attempt if stale.
+    scheduler.add_job(
+        scheduled_index_history_repair,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=30, timezone=IST),
+        id="postclose-index-history-repair",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
     )
     scheduler.add_job(
         scheduled_durable_snapshot,
