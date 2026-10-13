@@ -94,3 +94,25 @@ def test_index_backfill_skips_known_blocked_nse_fallback_after_angel_403(monkeyp
     assert len([c for c in calls if c[0] == "nse"]) == 0
     assert result["stored"] == 0
     assert repository.saved == []
+
+
+def test_after_close_index_backfill_includes_current_trade_date(monkeypatch):
+    from datetime import datetime
+    monkeypatch.setattr(
+        index_backfill,
+        "now_ist",
+        lambda: datetime(2026, 10, 13, 18, 30, tzinfo=IST),
+    )
+
+    class Angel:
+        def daily_candles(self, symbol, days, exchange):
+            return [
+                {"time": "2026-10-12T00:00:00+05:30", "open": 100, "high": 101, "low": 99, "close": 100},
+                {"time": "2026-10-13T00:00:00+05:30", "open": 101, "high": 103, "low": 100, "close": 102},
+            ]
+
+    repository = FakeRepository()
+    result = index_backfill.backfill_index_bars(repository, days=2, angel_client=Angel())
+
+    assert result["stored"] == 8
+    assert {row["trade_date"] for row in repository.saved} == {"2026-10-12", "2026-10-13"}
