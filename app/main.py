@@ -1271,7 +1271,7 @@ async def lifespan(app: FastAPI):
     # early post-close retry, perform one final bounded check before rollover.
     scheduler.add_job(
         scheduled_index_history_repair,
-        CronTrigger(day_of_week="mon-fri", hour=23, minute=15, timezone=IST),
+        CronTrigger(day_of_week="mon-fri", hour=23, minute=30, timezone=IST),
         id="late-index-history-repair",
         replace_existing=True,
         max_instances=1,
