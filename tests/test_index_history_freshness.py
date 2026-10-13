@@ -72,3 +72,27 @@ def test_preopen_index_repair_skips_current_history(monkeypatch):
     asyncio.run(main.scheduled_index_history_repair())
 
     assert called["ingest"] == 0
+
+
+def test_late_after_hours_index_repair_can_recover_current_trade_date(monkeypatch):
+    now = datetime(2026, 10, 13, 23, 15, tzinfo=IST)
+    summaries = iter([
+        {"bars": 176, "symbols": 4, "latest_trade_date": "2026-10-12"},
+        {"bars": 180, "symbols": 4, "latest_trade_date": "2026-10-13"},
+    ])
+    called = {"ingest": 0, "snapshot": 0}
+    monkeypatch.setattr(main, "now_ist", lambda: now)
+    monkeypatch.setattr(main, "is_trading_holiday", lambda day: False)
+    monkeypatch.setattr(main, "expected_latest_bhavcopy_date", lambda observed=None: date(2026, 10, 13))
+    monkeypatch.setattr(main.repository, "daily_index_bar_summary", lambda: next(summaries))
+
+    async def fake_ingest():
+        called["ingest"] += 1
+        return 4
+
+    monkeypatch.setattr(main, "ingest_daily_index_bars", fake_ingest)
+    monkeypatch.setattr(main, "upload_database_snapshot", lambda path: called.__setitem__("snapshot", called["snapshot"] + 1))
+
+    asyncio.run(main.scheduled_index_history_repair())
+
+    assert called == {"ingest": 1, "snapshot": 1}
