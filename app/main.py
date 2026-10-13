@@ -664,7 +664,7 @@ async def scheduled_index_history_repair() -> None:
     if not index_history_backfill_required(before, now):
         return
     logger.warning(
-        "INDEX_HISTORY_STALE before open latest=%s expected=%s; attempting bounded Angel refill",
+        "INDEX_HISTORY_STALE latest=%s expected=%s; attempting bounded Angel refill",
         before.get("latest_trade_date"), expected_latest_bhavcopy_date(now).isoformat(),
     )
     await ingest_daily_index_bars()
@@ -1262,6 +1262,17 @@ async def lifespan(app: FastAPI):
         scheduled_index_history_repair,
         CronTrigger(day_of_week="mon-fri", hour=18, minute=30, timezone=IST),
         id="postclose-index-history-repair",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+    )
+    # If the index provider is still missing today's completed bar after the
+    # early post-close retry, perform one final bounded check before rollover.
+    scheduler.add_job(
+        scheduled_index_history_repair,
+        CronTrigger(day_of_week="mon-fri", hour=23, minute=15, timezone=IST),
+        id="late-index-history-repair",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

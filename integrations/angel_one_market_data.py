@@ -74,6 +74,9 @@ class AngelOneMarketData:
         self._last_quote_at = 0.0
         self._breaker_until = 0.0
         self._hist_lock = threading.Lock()
+        # Serialize the complete historical HTTP request, not just the wait before
+        # it. Otherwise a slow request can overlap the next caller and trigger 403s.
+        self._hist_request_lock = threading.Lock()
         self._last_hist_at = 0.0
         self._hist_block_until = 0.0
         self._hist_consecutive_403 = 0
@@ -580,77 +583,78 @@ class AngelOneMarketData:
         instrument = self.instrument(symbol, exchange=exchange)
         if not instrument:
             return []
-        self._hist_wait()
-        # Angel expects IST wall-clock times. The old naive datetime.now() used the
-        # server's UTC clock, so intraday requests covered the wrong window (often
-        # yesterday's session) and any "session VWAP" was built from stale candles.
-        end = now_ist().replace(second=0, microsecond=0, tzinfo=None)
-        if interval != "ONE_DAY" and days <= 1:
-            start = end.replace(hour=9, minute=15)      # today's session only
-            if start >= end:
-                start = end - timedelta(minutes=10)
-        else:
-            start = end - timedelta(days=max(1, days))
-        payload = {
-            "exchange": exchange.upper(),
-            "symboltoken": instrument.token,
-            "interval": interval,
-            "fromdate": start.strftime("%Y-%m-%d %H:%M"),
-            "todate": end.strftime("%Y-%m-%d %H:%M"),
-        }
-        # Angel answers 403/429 ("exceeding access rate") when a short rate window is
-        # exceeded. That window is about a second, so retry once after a brief pause
-        # instead of immediately blacking out every candle call for the rest of the scan.
-        # Only if the retry ALSO fails do we cool down, escalating on repeated failures.
-        retries = max(0, int(os.getenv("ANGEL_HIST_RETRIES", "1")))
-        for attempt in range(retries + 1):
-            if attempt:
-                time.sleep(float(os.getenv("ANGEL_HIST_RETRY_WAIT_S", "5.0")))
-                self._hist_wait()
-            response = requests.post(
-                f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
-                headers=self._headers(),
-                json=payload,
-                timeout=self.timeout,
-            )
-            if getattr(response, "status_code", 200) not in (403, 429):
-                self._hist_consecutive_403 = 0
-                break
-            if attempt < retries:
-                continue
-            self._hist_consecutive_403 += 1
-            base = float(os.getenv("ANGEL_HIST_COOLDOWN_S", "60"))
-            cap = float(os.getenv("ANGEL_HIST_COOLDOWN_MAX_S", "300"))
-            cooldown = min(cap, base * (2 ** (self._hist_consecutive_403 - 1)))
-            self._hist_block_until = time.monotonic() + cooldown
-            snippet = " ".join(str(getattr(response, "text", "") or "").split())[:120]
-            raise RuntimeError(f"HTTP {response.status_code} from Angel candle API: {snippet or 'empty body'}")
-        response.raise_for_status()
-        body = response.json()
-        if not body.get("status") and "invalid token" in str(body.get("message") or "").lower():
-            logger.warning("Angel candle JWT rejected; forcing a fresh read-only login and retrying once")
-            self._login(force=True)
-            response = requests.post(
-                f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
-                headers=self._headers(),
-                json=payload,
-                timeout=self.timeout,
-            )
+        with self._hist_request_lock:
+            self._hist_wait()
+            # Angel expects IST wall-clock times. The old naive datetime.now() used the
+            # server's UTC clock, so intraday requests covered the wrong window (often
+            # yesterday's session) and any "session VWAP" was built from stale candles.
+            end = now_ist().replace(second=0, microsecond=0, tzinfo=None)
+            if interval != "ONE_DAY" and days <= 1:
+                start = end.replace(hour=9, minute=15)      # today's session only
+                if start >= end:
+                    start = end - timedelta(minutes=10)
+            else:
+                start = end - timedelta(days=max(1, days))
+            payload = {
+                "exchange": exchange.upper(),
+                "symboltoken": instrument.token,
+                "interval": interval,
+                "fromdate": start.strftime("%Y-%m-%d %H:%M"),
+                "todate": end.strftime("%Y-%m-%d %H:%M"),
+            }
+            # Angel answers 403/429 ("exceeding access rate") when a short rate window is
+            # exceeded. That window is about a second, so retry once after a brief pause
+            # instead of immediately blacking out every candle call for the rest of the scan.
+            # Only if the retry ALSO fails do we cool down, escalating on repeated failures.
+            retries = max(0, int(os.getenv("ANGEL_HIST_RETRIES", "1")))
+            for attempt in range(retries + 1):
+                if attempt:
+                    time.sleep(float(os.getenv("ANGEL_HIST_RETRY_WAIT_S", "5.0")))
+                    self._hist_wait()
+                response = requests.post(
+                    f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
+                    headers=self._headers(),
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if getattr(response, "status_code", 200) not in (403, 429):
+                    self._hist_consecutive_403 = 0
+                    break
+                if attempt < retries:
+                    continue
+                self._hist_consecutive_403 += 1
+                base = float(os.getenv("ANGEL_HIST_COOLDOWN_S", "60"))
+                cap = float(os.getenv("ANGEL_HIST_COOLDOWN_MAX_S", "300"))
+                cooldown = min(cap, base * (2 ** (self._hist_consecutive_403 - 1)))
+                self._hist_block_until = time.monotonic() + cooldown
+                snippet = " ".join(str(getattr(response, "text", "") or "").split())[:120]
+                raise RuntimeError(f"HTTP {response.status_code} from Angel candle API: {snippet or 'empty body'}")
             response.raise_for_status()
             body = response.json()
-        if not body.get("status"):
-            raise RuntimeError(f"Angel One candle request failed: {body.get('message', 'unknown error')}")
-        candles = []
-        for row in body.get("data") or []:
-            if len(row) < 6:
-                continue
-            candles.append({
-                "time": row[0], "open": float(row[1]), "high": float(row[2]),
-                "low": float(row[3]), "close": float(row[4]), "volume": float(row[5]),
-                "source": "angel_one_read_only",
-            })
-        return candles
-
+            if not body.get("status") and "invalid token" in str(body.get("message") or "").lower():
+                logger.warning("Angel candle JWT rejected; forcing a fresh read-only login and retrying once")
+                self._login(force=True)
+                response = requests.post(
+                    f"{BASE_URL}/rest/secure/angelbroking/historical/v1/getCandleData",
+                    headers=self._headers(),
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                body = response.json()
+            if not body.get("status"):
+                raise RuntimeError(f"Angel One candle request failed: {body.get('message', 'unknown error')}")
+            candles = []
+            for row in body.get("data") or []:
+                if len(row) < 6:
+                    continue
+                candles.append({
+                    "time": row[0], "open": float(row[1]), "high": float(row[2]),
+                    "low": float(row[3]), "close": float(row[4]), "volume": float(row[5]),
+                    "source": "angel_one_read_only",
+                })
+            return candles
+    
 
     def stock_option_chain_snapshot(self, symbol: str, *, strikes_each_side: int = 1, spot: float | None = None) -> dict:
         """Backward-compatible wrapper for the bounded on-demand chain."""
