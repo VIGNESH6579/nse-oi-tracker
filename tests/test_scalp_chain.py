@@ -348,3 +348,24 @@ def test_ranked_universe_interleaves_strong_gainers_and_losers(monkeypatch):
 
     assert ranked == ["GAIN_BIG", "LOSS_BIG", "GAIN_SMALL", "LOSS_SMALL"]
     assert (gainers, losers) == (2, 2)
+
+
+def test_opening_range_budget_deferral_is_not_misreported_as_missing_range(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
+    candles = [
+        {"time": f"2026-10-07T09:{minute:02d}:00+05:30", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100,
+         "data_frequency": "FIVE_MINUTE", "candle_source": "angel_one_websocket_v2"}
+        for minute in (35, 40, 45, 50, 55)
+    ]
+
+    class NoOpeningRangeStream(RankingStream):
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return candles[-limit:]
+
+    engine = scalp.ScalpChainEngine(FakeMarket(), NoOpeningRangeStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    monkeypatch.setattr(scalp, "HIST_CANDLE_MAX_CALLS_PER_REFRESH", 2)
+    engine._historical_fetches_this_refresh = 2
+
+    assert engine._underlying_context("AAA") is None
+    assert engine._last_context_rejection == "historical_fetch_budget_deferred"
