@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 MODE = "scalp_chain"
 ENTRY_START = os.getenv("SCALP_ENTRY_START", os.getenv("ENTRY_START", "09:30"))
 ENTRY_END = os.getenv("SCALP_ENTRY_END", os.getenv("ENTRY_END", "15:00"))
+# Retained only to tolerate older environment files; duration is not an exit rule.
 MAX_HOLD_MINUTES = int(os.getenv("SCALP_MAX_HOLD_MINUTES", os.getenv("MAX_HOLD_MINUTES", "10")))
+TRAIL_DRAWDOWN_PCT = max(1.0, float(os.getenv("SCALP_TRAIL_DRAWDOWN_PCT", "12")))
 ABSOLUTE_EXIT = os.getenv("SCALP_ABSOLUTE_EXIT", "15:15")
 MAX_CONCURRENT = int(os.getenv("SCALP_MAX_OPEN", os.getenv("SCALP_MAX_CONCURRENT", "3")))
 OPTION_STOP_PCT = float(os.getenv("SCALP_OPTION_STOP_PCT", "30"))
@@ -127,7 +129,10 @@ class ScalpChainEngine:
             "last_exit_pnl_status": self._last_exit_pnl_status,
             "stop_loss_pct": OPTION_STOP_PCT,
             "target_pct": OPTION_TARGET_PCT,
-            "max_hold_minutes": MAX_HOLD_MINUTES,
+            "max_hold_minutes": None,
+            "time_exit_enabled": False,
+            "trailing_drawdown_pct": TRAIL_DRAWDOWN_PCT,
+            "exit_policy": "momentum_weakness_or_protective_stop_or_1515_hard_flat",
             "entry_window": f"{ENTRY_START}-{ENTRY_END} IST",
             "last_run": self._last_run_stats,
         }
@@ -240,7 +245,14 @@ class ScalpChainEngine:
             return candles
         except Exception as exc:
             self._historical_fetch_failures += 1
-            logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s error=%s", key, type(exc).__name__)
+            message = str(exc).lower()
+            if "403" in message or "429" in message or "rate" in message or "access rate" in message:
+                failure_reason = "angel_historical_rate_limited"
+            elif isinstance(exc, AngelUnavailable):
+                failure_reason = "angel_client_unavailable"
+            else:
+                failure_reason = "angel_historical_request_failed"
+            logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s reason=%s error=%s", key, failure_reason, type(exc).__name__)
             # Cool down this symbol briefly so a repeated failure does not trigger
             # another historical request on every 30-second scan.
             self._historical_candle_cache[key] = (time.monotonic(), [])
@@ -307,6 +319,17 @@ class ScalpChainEngine:
         if len(parsed) < 4:
             self._last_context_rejection = "insufficient_valid_today_5m_candles"
             return None
+        # Do not mislabel a rate-budget deferral as a broken opening range. It is
+        # operationally different from a successful historical response missing
+        # the 09:15-09:25 bars, and should be visible as such in scan diagnostics.
+        if not has_opening_range(parsed):
+            cached_history = self._historical_candle_cache.get(key)
+            if cached_history is None and self._historical_fetches_this_refresh >= HIST_CANDLE_MAX_CALLS_PER_REFRESH:
+                self._last_context_rejection = "historical_fetch_budget_deferred"
+                return None
+            if cached_history is not None and not cached_history[1]:
+                self._last_context_rejection = "historical_history_unavailable"
+                return None
         latest = parsed[-1]
         latest_stamp = latest["_parsed_time"]
         try:
@@ -461,8 +484,12 @@ class ScalpChainEngine:
                 ranked.append((symbol, pct))
         gainers = sorted((x for x in ranked if x[1] > 0), key=lambda x: x[1], reverse=True)[:RANK_TOP_N]
         losers = sorted((x for x in ranked if x[1] < 0), key=lambda x: x[1])[:RANK_TOP_N]
-        ordered = [s for s, _ in gainers]
-        ordered.extend(s for s, _ in losers if s not in ordered)
+        selected = {symbol: pct for symbol, pct in gainers}
+        selected.update({symbol: pct for symbol, pct in losers})
+        # Evaluate the strongest movers from BOTH sides first. This matters because
+        # historical candles are deliberately rate-limited; a gainers-first walk
+        # could consume the entire history budget before checking any losers.
+        ordered = [symbol for symbol, _ in sorted(selected.items(), key=lambda item: abs(item[1]), reverse=True)]
         return ordered, len(gainers), len(losers), [s for s, _ in gainers], [s for s, _ in losers]
 
     def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -539,32 +566,46 @@ class ScalpChainEngine:
         option_ltp: float,
         now: datetime,
     ) -> str | None:
-        hold = _minutes_between(position["entry_time_ist"], now)
-        if hold >= MAX_HOLD_MINUTES:
-            return "TIME"
-        direction = position["direction"]
-        # Underlying reversal needs valid fresh five-minute context, but the
-        # option-premium risk checks below remain active when that context is
-        # temporarily unavailable.
-        if underlying is not None:
-            if direction == "BUY" and (
-                float(underlying["ltp"]) <= float(underlying["vwap"])
-                or float(underlying["ltp"]) < float(underlying["or_high"])
-            ):
-                return "UNDERLYING_REVERSE"
-            if direction == "SELL" and (
-                float(underlying["ltp"]) >= float(underlying["vwap"])
-                or float(underlying["ltp"]) > float(underlying["or_low"])
-            ):
-                return "UNDERLYING_REVERSE"
-        entry = float(position["entry_option_ltp"])
-        change_pct = (option_ltp - entry) / entry * 100.0 if entry else 0.0
-        if change_pct <= -OPTION_STOP_PCT:
-            return "OPTION_STOP"
-        if OPTION_TARGET_PCT > 0 and change_pct >= OPTION_TARGET_PCT:
-            return "OPTION_TARGET"
+        # There is intentionally no elapsed-time exit: keep a paper position while
+        # momentum persists. The protective premium stop and 15:15 hard-flat remain
+        # absolute safety rules.
         if not _before(now, ABSOLUTE_EXIT):
             return "CLOCK"
+        entry = float(position["entry_option_ltp"])
+        change_pct = (option_ltp - entry) / entry * 100.0 if entry > 0 else 0.0
+        if change_pct <= -OPTION_STOP_PCT:
+            return "OPTION_STOP"
+
+        peak = max(float(position.get("_peak_option_ltp") or entry), float(option_ltp or 0))
+        position["_peak_option_ltp"] = peak
+        peak_change_pct = (peak - entry) / entry * 100.0 if entry > 0 else 0.0
+        if OPTION_TARGET_PCT > 0 and peak_change_pct >= OPTION_TARGET_PCT:
+            position["_trailing_armed"] = True
+
+        # A missing/stale underlying context is NOT evidence that momentum weakened.
+        # In that case keep monitoring the exact option quote and protective stop.
+        weak = False
+        if underlying is not None:
+            direction = str(position.get("direction") or "").upper()
+            try:
+                spot = float(underlying.get("ltp") or 0)
+                vwap = float(underlying.get("vwap") or 0)
+                momentum = float(underlying.get("momentum_pct") or 0)
+                or_level = float(underlying.get("or_high") if direction == "BUY" else underlying.get("or_low") or 0)
+                if direction == "BUY":
+                    weak = momentum <= 0 or (vwap > 0 and spot <= vwap) or (or_level > 0 and spot < or_level)
+                elif direction == "SELL":
+                    weak = momentum >= 0 or (vwap > 0 and spot >= vwap) or (or_level > 0 and spot > or_level)
+            except (TypeError, ValueError):
+                weak = False
+            position["_weak_signal_count"] = int(position.get("_weak_signal_count") or 0) + 1 if weak else 0
+            if int(position.get("_weak_signal_count") or 0) >= 2:
+                return "MOMENTUM_WEAK"
+
+        if position.get("_trailing_armed") and peak > 0:
+            drawdown_from_peak_pct = (peak - option_ltp) / peak * 100.0
+            if drawdown_from_peak_pct >= TRAIL_DRAWDOWN_PCT and int(position.get("_weak_signal_count") or 0) >= 1:
+                return "TRAILING_MOMENTUM_WEAK"
         return None
 
     def _close_paper_position(
@@ -652,12 +693,9 @@ class ScalpChainEngine:
         market_data_ready = bool(self.market_data and self.market_data.configured)
 
         for symbol, position in list(self._open.items()):
-            hold = _minutes_between(position["entry_time_ist"], now)
-            due_reason = (
-                "TIME" if hold >= MAX_HOLD_MINUTES
-                else "CLOCK" if not _before(now, ABSOLUTE_EXIT)
-                else None
-            )
+            # Never close merely because a timer elapsed. Only the hard-flat clock
+            # is time-based; all earlier exits are momentum/risk driven.
+            due_reason = "CLOCK" if not _before(now, ABSOLUTE_EXIT) else None
 
             underlying = None
             if due_reason is None:
@@ -741,7 +779,7 @@ class ScalpChainEngine:
         now = now_ist()
         self._historical_fetches_this_refresh = 0
         # Open positions must be monitored before any entry-window or feed-readiness
-        # early return. This makes TIME and 15:15 CLOCK exits fail-safe.
+        # early return so momentum, protective stops and 15:15 hard-flat remain active.
         if self._open:
             self._manage_open()
         if not _before(now, ABSOLUTE_EXIT):
@@ -833,6 +871,10 @@ class ScalpChainEngine:
                 "target": target_ltp,
                 "stop_loss_option_ltp": stop_ltp,
                 "target_option_ltp": target_ltp,
+                "target_behavior": "trailing_activation_not_automatic_exit",
+                "trailing_armed": bool(position.get("_trailing_armed")),
+                "peak_option_ltp": position.get("_peak_option_ltp", entry_ltp),
+                "weak_signal_count": int(position.get("_weak_signal_count") or 0),
                 "current_option_ltp": position.get("_last_option_ltp"),
                 "current_option_quote_at_ist": position.get("_last_option_quote_at_ist"),
                 "pnl_pct": position.get("_last_pnl_pct"),
