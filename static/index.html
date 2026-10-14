@@ -135,7 +135,7 @@
       <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">BUY scalp</b> = bullish underlying + CE confirmation</div>
       <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">SELL scalp</b> = bearish underlying + PE confirmation</div>
       <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">Entry</b> only 09:30–15:00 IST</div>
-      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">Exit</b> max 10 min / hard flat 15:15</div>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg p-2"><b class="text-gray-200">Exit</b> momentum weakness / hard flat 15:15</div>
     </div>
   </section>
   <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
@@ -143,7 +143,7 @@
       <p class="text-[10px] text-gray-500">Underlying OR/VWAP impulse → Angel near-ATM CE/PE confirmation → exit within minutes.</p></div>
       <div class="flex-1"></div>
       <span class="badge bg-blue-950 text-blue-300 border-blue-800">ENTRY 09:30–15:00 IST</span>
-      <span class="badge bg-gray-800 text-gray-300 border-gray-700">MAX HOLD 10m</span>
+      <span class="badge bg-gray-800 text-gray-300 border-gray-700">MOMENTUM-BASED EXIT</span>
       <span class="badge bg-amber-950 text-amber-300 border-amber-800">NO LIVE ORDERS</span>
     </div>
   </section>
@@ -181,7 +181,7 @@
         <td class="px-3 py-2.5 font-bold" :class="row.option_type === 'CE' ? 'text-green-400' : 'text-red-400'" x-text="row.option_type"></td>
         <td class="px-3 py-2.5 text-right mono" x-text="fmt2(row.strike)"></td>
         <td class="px-3 py-2.5 text-right mono" x-text="'₹' + fmt2(row.entry_option_ltp)"></td>
-        <td class="px-3 py-2.5 text-right mono" :class="row.current_option_ltp == null ? 'text-gray-500' : (Number(row.pnl_pct) >= 0 ? 'text-green-400' : 'text-red-400')" x-text="row.current_option_ltp == null ? '—' : '₹' + fmt2(row.current_option_ltp)"></td>
+        <td class="px-3 py-2.5 text-right mono" :class="row.current_option_ltp == null ? 'text-gray-500' : (Number(row.pnl_pct) > 0 ? 'text-green-400' : (Number(row.pnl_pct) < 0 ? 'text-red-400' : 'text-gray-400'))" x-text="row.current_option_ltp == null ? '—' : '₹' + fmt2(row.current_option_ltp)"></td>
         <td class="px-3 py-2.5 text-right mono text-red-300" x-text="row.stop_loss_option_ltp == null ? '—' : '₹' + fmt2(row.stop_loss_option_ltp)"></td>
         <td class="px-3 py-2.5 text-right mono text-green-300" x-text="row.target_option_ltp == null ? '—' : '₹' + fmt2(row.target_option_ltp)"></td>
         <td class="px-3 py-2.5 text-right mono" :class="row.pnl_pct == null ? 'text-gray-500' : (Number(row.pnl_pct) >= 0 ? 'text-green-400' : 'text-red-400')" x-text="row.pnl_pct == null ? '—' : Number(row.pnl_pct).toFixed(2) + '%'"></td>
@@ -201,7 +201,7 @@
         <td class="px-3 py-2 text-right mono" x-text="row.exit_option_ltp != null ? '₹' + fmt2(row.exit_option_ltp) : (row.status === 'OPEN' ? '—' : 'UNPRICED')"></td>
         <td class="px-3 py-2"><span class="badge bg-gray-800 text-gray-300 border-gray-700" x-text="row.exit_reason || 'OPEN'"></span></td>
         <td class="px-3 py-2 text-right mono" x-text="row.hold_minutes != null ? Number(row.hold_minutes).toFixed(1) + 'm' : '—'"></td>
-        <td class="px-3 py-2 text-right mono" :class="row.exit_option_ltp == null ? 'text-gray-500' : (Number(row.exit_option_ltp) >= Number(row.entry_option_ltp) ? 'text-green-400' : 'text-red-400')" x-text="row.exit_option_ltp != null ? (((Number(row.exit_option_ltp)-Number(row.entry_option_ltp))/Number(row.entry_option_ltp)*100).toFixed(2) + '%') : (row.status === 'OPEN' ? '—' : (row.pnl_status || 'UNPRICED'))"></td>
+        <td class="px-3 py-2 text-right mono" :class="row.exit_option_ltp == null ? 'text-gray-500' : (Number(row.exit_option_ltp) > Number(row.entry_option_ltp) ? 'text-green-400' : (Number(row.exit_option_ltp) < Number(row.entry_option_ltp) ? 'text-red-400' : 'text-gray-400'))" x-text="row.exit_option_ltp != null ? (((Number(row.exit_option_ltp)-Number(row.entry_option_ltp))/Number(row.entry_option_ltp)*100).toFixed(2) + '%') : (row.status === 'OPEN' ? '—' : (row.pnl_status || 'UNPRICED'))"></td>
       </tr></template>
     </tbody></table></div>
   </section>
