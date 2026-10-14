@@ -648,7 +648,12 @@ class SignalRepository:
         # archive. Purge prior-day scalp events while retaining daily technical
         # bars and other history required for ATR/EMA and OI confirmation.
         with self._connect() as connection:
-            connection.execute("DELETE FROM scalp_events WHERE trade_date < ?", (trade_date,))
+            connection.execute(
+                """DELETE FROM scalp_events
+                   WHERE trade_date < ? AND status != 'OPEN'
+                     AND COALESCE(exit_reason, '') != 'SESSION_ROLLOVER_UNPRICED'""",
+                (trade_date,),
+            )
             rows = connection.execute(
                 "SELECT * FROM scalp_events WHERE trade_date=? ORDER BY entry_time_ist DESC",
                 (trade_date,),
