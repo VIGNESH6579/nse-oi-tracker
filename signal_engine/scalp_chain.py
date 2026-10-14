@@ -46,6 +46,7 @@ MIN_RELATIVE_VOLUME = max(1.0, float(os.getenv("SCALP_MIN_RELATIVE_VOLUME", "1.2
 MIN_CANDLE_CLOSE_LOCATION = min(0.90, max(0.60, float(os.getenv("SCALP_MIN_CLOSE_LOCATION", "0.65"))))
 MIN_BREAKOUT_BUFFER_PCT = max(0.0, float(os.getenv("SCALP_MIN_BREAKOUT_BUFFER_PCT", "0.05")))
 MIN_PREMIUM_CHANGE_PCT = max(0.0, float(os.getenv("SCALP_MIN_PREMIUM_CHANGE_PCT", "0.25")))
+MAX_OPTION_SPREAD_PCT = max(0.5, float(os.getenv("SCALP_MAX_OPTION_SPREAD_PCT", "3.0")))
 
 def _clock(value: str) -> tuple[int, int]:
     hour, minute = value.strip().split(":", 1)
@@ -198,6 +199,10 @@ class ScalpChainEngine:
                         "ltp": float(leg.get("ltp") or 0),
                         "oi": float(leg.get("oi") or 0),
                         "volume": float(leg.get("volume") or 0),
+                        "best_bid": float(leg.get("best_bid") or 0),
+                        "best_ask": float(leg.get("best_ask") or 0),
+                        "bid_qty": float(leg.get("bid_qty") or 0),
+                        "ask_qty": float(leg.get("ask_qty") or 0),
                         "trading_symbol": leg.get("trading_symbol"),
                     })
             if not rows:
@@ -475,6 +480,16 @@ class ScalpChainEngine:
         previous_premium = float(prev.get("ltp") or 0)
         if current_premium <= 0 or previous_premium <= 0:
             return None
+        best_bid = float(option.get("best_bid") or 0)
+        best_ask = float(option.get("best_ask") or 0)
+        bid_qty = float(option.get("bid_qty") or 0)
+        ask_qty = float(option.get("ask_qty") or 0)
+        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid or bid_qty <= 0 or ask_qty <= 0:
+            return None
+        mid_quote = (best_bid + best_ask) / 2.0
+        spread_pct = (best_ask - best_bid) / mid_quote * 100.0 if mid_quote > 0 else float("inf")
+        if spread_pct > MAX_OPTION_SPREAD_PCT:
+            return None
         premium_change = current_premium - previous_premium
         premium_change_pct = premium_change / previous_premium * 100.0
         opposite_type = "PE" if option_type == "CE" else "CE"
@@ -503,7 +518,12 @@ class ScalpChainEngine:
             "opposite_oi_delta": opposite_oi_delta,
             "option_oi": float(option.get("oi") or 0),
             "option_volume": float(option.get("volume") or 0),
-            "rule": "CHAIN_PREMIUM_RISING_AND_DIRECTIONAL_OI",
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "bid_qty": bid_qty,
+            "ask_qty": ask_qty,
+            "spread_pct": round(spread_pct, 4),
+            "rule": "CHAIN_PREMIUM_RISING_DIRECTIONAL_OI_AND_TIGHT_SPREAD",
         }
 
     def probe_chain(self, symbol: str = "RELIANCE") -> tuple[bool, str]:
@@ -628,9 +648,14 @@ class ScalpChainEngine:
                     "opposite_oi_delta": confirmation.get("opposite_oi_delta"),
                     "oi": confirmation.get("option_oi"),
                     "volume": confirmation.get("option_volume"),
+                    "best_bid": confirmation.get("best_bid"),
+                    "best_ask": confirmation.get("best_ask"),
+                    "bid_qty": confirmation.get("bid_qty"),
+                    "ask_qty": confirmation.get("ask_qty"),
+                    "spread_pct": confirmation.get("spread_pct"),
                     "confirmation_rule": confirmation.get("rule"),
                 },
-                "spread_check": "unavailable_from_current_quote_payload",
+                "spread_check": "passed",
             },
             "rule_ids": [
                 "TIME_WINDOW",
