@@ -393,6 +393,7 @@ def test_chain_confirmation_rejects_falling_directional_oi_even_if_opposite_fall
     }
 
     assert engine._chain_confirmation("AAA", "BUY", current) is None
+    assert engine._last_chain_rejection == "option_oi_not_directional"
 
 
 def test_chain_confirmation_requires_positive_directional_oi_and_premium_follow_through():
@@ -506,3 +507,4 @@ def test_chain_confirmation_rejects_wide_option_spread():
     }
 
     assert engine._chain_confirmation("AAA", "BUY", current) is None
+    assert engine._last_chain_rejection == "option_spread_too_wide"
