@@ -644,7 +644,11 @@ class SignalRepository:
         return [dict(row) for row in rows]
 
     def scalp_events_for_date(self, trade_date: str) -> list[dict[str, Any]]:
+        # Paper scalp history is a same-session operational view, not a long-term
+        # archive. Purge prior-day scalp events while retaining daily technical
+        # bars and other history required for ATR/EMA and OI confirmation.
         with self._connect() as connection:
+            connection.execute("DELETE FROM scalp_events WHERE trade_date < ?", (trade_date,))
             rows = connection.execute(
                 "SELECT * FROM scalp_events WHERE trade_date=? ORDER BY entry_time_ist DESC",
                 (trade_date,),
