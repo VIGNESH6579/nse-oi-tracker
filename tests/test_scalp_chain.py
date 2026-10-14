@@ -508,3 +508,71 @@ def test_chain_confirmation_rejects_wide_option_spread():
 
     assert engine._chain_confirmation("AAA", "BUY", current) is None
     assert engine._last_chain_rejection == "option_spread_too_wide"
+
+
+
+def test_candidate_context_scan_order_rotates_to_share_historical_fetch_budget(monkeypatch):
+    engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "HIST_CANDLE_MAX_CALLS_PER_REFRESH", 2)
+    monkeypatch.setattr(
+        engine,
+        "_ranked_universe",
+        lambda: (["AAA", "BBB", "CCC", "DDD"], 2, 2, ["AAA", "BBB"], ["CCC", "DDD"]),
+    )
+    seen = []
+    def reject(symbol):
+        seen.append(symbol)
+        engine._last_context_rejection = "historical_fetch_budget_deferred"
+        return None
+    monkeypatch.setattr(engine, "_underlying_context", reject)
+
+    engine._candidate_contexts()
+    first = list(seen)
+    seen.clear()
+    engine._candidate_contexts()
+    second = list(seen)
+
+    assert first == ["AAA", "BBB", "CCC", "DDD"]
+    assert second == ["CCC", "DDD", "AAA", "BBB"]
+
+
+def test_invalid_websocket_volume_is_repaired_from_real_historical_candles(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
+    historical = [
+        {"time": "2026-10-07T09:15:00+05:30", "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "volume": 100},
+        {"time": "2026-10-07T09:20:00+05:30", "open": 100.0, "high": 101.0, "low": 100.0, "close": 100.5, "volume": 100},
+        {"time": "2026-10-07T09:25:00+05:30", "open": 100.5, "high": 101.0, "low": 100.4, "close": 100.8, "volume": 100},
+        {"time": "2026-10-07T09:30:00+05:30", "open": 100.8, "high": 101.2, "low": 100.7, "close": 101.0, "volume": 100},
+        {"time": "2026-10-07T09:35:00+05:30", "open": 101.0, "high": 101.1, "low": 100.9, "close": 101.0, "volume": 100},
+        {"time": "2026-10-07T09:55:00+05:30", "open": 103.0, "high": 104.0, "low": 102.9, "close": 103.5, "volume": 120},
+        {"time": "2026-10-07T10:00:00+05:30", "open": 103.5, "high": 105.0, "low": 103.4, "close": 104.5, "volume": 130},
+    ]
+    stream_candles = [
+        {**c, "volume": 0, "volume_valid": False, "data_frequency": "FIVE_MINUTE",
+         "source": "angel_one_websocket_v2", "candle_source": "angel_one_websocket_v2",
+         "observed_at": now.timestamp()}
+        for c in historical
+    ]
+
+    class HistoryMarket(FakeMarket):
+        def __init__(self):
+            self.calls = 0
+        def intraday_candles(self, symbol, *, interval="FIVE_MINUTE", exchange="NSE", days=1):
+            self.calls += 1
+            return historical
+
+    class InvalidVolumeStream:
+        def recent_candles_for_symbol(self, symbol, limit=80):
+            return stream_candles[-limit:]
+
+    market = HistoryMarket()
+    engine = scalp.ScalpChainEngine(market, InvalidVolumeStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+
+    context = engine._underlying_context("AAA")
+
+    assert market.calls == 1
+    assert context is not None and context["direction"] == "BUY"
+    assert context["volume_ok"] is True
+    assert context["volume_source"] == "angel_one_historical_5m"
+    assert context["relative_volume"] >= 1.2
