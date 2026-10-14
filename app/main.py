@@ -1204,7 +1204,9 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         scheduled_scalp_refresh,
-        IntervalTrigger(seconds=30, timezone=IST),
+        # Entry scans can take longer when Angel candle/chain APIs are slow.
+        # Position monitoring remains on its separate 30-second job below.
+        IntervalTrigger(seconds=60, timezone=IST),
         id="scalp-chain-refresh",
         replace_existing=True,
         max_instances=1,
