@@ -188,3 +188,39 @@ def test_option_chain_near_atm_shape(monkeypatch):
     assert out["ok"] is True
     assert out["atm_strike"] == 2500.0
     assert out["chain"] and out["chain"][0]["ce"]["ltp"] > 0 and out["chain"][0]["pe"]["ltp"] > 0
+
+
+
+def test_full_option_quote_preserves_best_bid_ask_depth(monkeypatch):
+    client = AngelOneMarketData(api_key="k", client_code="c", password="p", totp_secret="t")
+    monkeypatch.setattr(client, "_login", lambda: None)
+    monkeypatch.setattr(client, "_headers", lambda: {})
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "status": True,
+                "data": {
+                    "fetched": [{
+                        "symbolToken": "42",
+                        "ltp": 5.5,
+                        "opnInterest": 14000,
+                        "tradeVolume": 500,
+                        "depth": {
+                            "buy": [{"price": 5.45, "quantity": 500, "orders": 2}],
+                            "sell": [{"price": 5.50, "quantity": 600, "orders": 3}],
+                        },
+                    }]
+                },
+            }
+
+    monkeypatch.setattr(angel.requests, "post", lambda *a, **k: Resp())
+    out = client.quotes_by_token(["42"])
+
+    assert out["42"]["best_bid"] == 5.45
+    assert out["42"]["best_ask"] == 5.50
+    assert out["42"]["bid_qty"] == 500
+    assert out["42"]["ask_qty"] == 600
