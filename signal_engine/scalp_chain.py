@@ -83,6 +83,7 @@ class ScalpChainEngine:
         self._chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._historical_candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._historical_fetches_this_refresh = 0
+        self._history_rotation = 0
         self._historical_fetch_count = 0
         self._historical_fetch_failures = 0
         self._previous_chain: dict[str, dict[str, Any]] = {}
@@ -338,16 +339,48 @@ class ScalpChainEngine:
                 if 9 * 60 + 15 <= candle["_parsed_time"].hour * 60 + candle["_parsed_time"].minute < 9 * 60 + 30
             ) >= 2
 
-        # Render cold starts and WS reconnections may subscribe after 09:30.
-        # The local tick-built buffer then cannot contain the opening range. Fetch
-        # only a bounded number of real historical bars, cache them, and never
-        # fabricate an opening range from a later candle.
-        if len(parsed) < 4 or not has_opening_range(parsed):
+        def has_valid_volume_context(items: list[dict[str, Any]]) -> bool:
+            if len(items) < 4:
+                return False
+            prior_valid = [
+                c for c in items[:-1]
+                if float(c.get("volume") or 0) > 0 and c.get("volume_valid") is not False
+            ]
+            latest = items[-1]
+            return (
+                len(prior_valid) >= 3
+                and float(latest.get("volume") or 0) > 0
+                and latest.get("volume_valid") is not False
+            )
+
+        # Cold starts, missing opening ranges, or untrustworthy WS volume trigger
+        # a bounded real-history repair. Never infer volume confirmation from zero
+        # or invalid cumulative-volume deltas.
+        if len(parsed) < 4 or not has_opening_range(parsed) or not has_valid_volume_context(parsed):
             historical = self._historical_context_candles(symbol)
             if historical:
                 parsed_historical = self._parse_context_candles(historical, today)
-                merged = {c["_parsed_time"]: c for c in parsed_historical}
-                merged.update({c["_parsed_time"]: c for c in parsed})
+                merged = {c["_parsed_time"]: dict(c) for c in parsed_historical}
+                for stream_candle in parsed:
+                    stamp = stream_candle["_parsed_time"]
+                    merged_candle = dict(stream_candle)
+                    historical_candle = merged.get(stamp)
+                    stream_volume = float(stream_candle.get("volume") or 0)
+                    if (
+                        historical_candle is not None
+                        and (stream_candle.get("volume_valid") is False or stream_volume <= 0)
+                        and float(historical_candle.get("volume") or 0) > 0
+                    ):
+                        merged_candle["volume"] = float(historical_candle["volume"])
+                        merged_candle["volume_valid"] = historical_candle.get("volume_valid", True)
+                        merged_candle["volume_source"] = "angel_one_historical_5m"
+                    else:
+                        merged_candle["volume_source"] = (
+                            stream_candle.get("volume_source")
+                            or stream_candle.get("source")
+                            or stream_candle.get("candle_source")
+                        )
+                    merged[stamp] = merged_candle
                 parsed = sorted(merged.values(), key=lambda x: x["_parsed_time"])
 
         if len(parsed) < 4:
@@ -467,6 +500,7 @@ class ScalpChainEngine:
             "candle_count": len(parsed),
             "candle_age_s": round(candle_age_s, 2),
             "candle_source": latest.get("candle_source") or latest.get("source") or "angel_one_websocket_v2",
+            "volume_source": latest.get("volume_source") or latest.get("source") or latest.get("candle_source") or "unknown",
             "data_frequency": "FIVE_MINUTE",
         }
 
@@ -607,6 +641,12 @@ class ScalpChainEngine:
 
     def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         symbols, gainers, losers, gainer_symbols, loser_symbols = self._ranked_universe()
+        # Rotate scan order so a tiny historical-fetch budget cannot repeatedly
+        # favor the same highest-ranked names when WS history/volume is incomplete.
+        if symbols:
+            offset = self._history_rotation % len(symbols)
+            symbols = symbols[offset:] + symbols[:offset]
+            self._history_rotation = (offset + max(1, HIST_CANDLE_MAX_CALLS_PER_REFRESH)) % len(symbols)
         candidates: list[dict[str, Any]] = []
         early_rejections: dict[str, int] = {}
         early_rejected_symbols: dict[str, str] = {}
@@ -659,7 +699,7 @@ class ScalpChainEngine:
                         "vwap", "or_high", "or_low", "momentum_pct", "last_volume",
                         "median_volume", "relative_volume", "volume_ok",
                         "candle_close_location", "candle_body_pct", "breakout_distance_pct",
-                        "candle_count", "candle_age_s", "candle_source", "data_frequency",
+                        "candle_count", "candle_age_s", "candle_source", "volume_source", "data_frequency",
                         "day_change_pct",
                     )
                 },
