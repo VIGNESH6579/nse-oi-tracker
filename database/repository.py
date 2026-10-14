@@ -803,6 +803,19 @@ class SignalRepository:
                 else "UNPRICED"
             )
             event["pnl_premium_pct"] = payload.get("pnl_premium_pct")
+            # The dashboard uses pnl_pct for both open and closed rows. Populate
+            # it only from a real quoted exit; never infer a flat/green result when
+            # the exact option contract had no exit quote.
+            pnl_pct = payload.get("pnl_premium_pct")
+            if pnl_pct is None:
+                try:
+                    entry_ltp = float(event.get("entry_option_ltp") or 0)
+                    exit_ltp = float(event.get("exit_option_ltp") or 0)
+                    if entry_ltp > 0 and exit_ltp > 0:
+                        pnl_pct = round((exit_ltp - entry_ltp) / entry_ltp * 100.0, 4)
+                except (TypeError, ValueError):
+                    pnl_pct = None
+            event["pnl_pct"] = float(pnl_pct) if pnl_pct is not None else None
             event["pnl_note"] = payload.get("pnl_note") or payload.get("exit_quote_note")
             event["exit_quote_source"] = payload.get("exit_quote_source")
             events.append(event)
