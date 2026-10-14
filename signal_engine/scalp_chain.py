@@ -111,9 +111,14 @@ class ScalpChainEngine:
             round(max(0.0, cache_now - min(stamp for stamp, _ in self._chain_cache.values())), 2)
             if self._chain_cache else None
         )
+        try:
+            quality_learning = self.repository.scalp_quality_summary()
+        except Exception:
+            quality_learning = {"status": "unavailable"}
         return {
             "mode": MODE,
             "paper_only": True,
+            "quality_learning": quality_learning,
             "universe_size": len(cached_universe()),
             "fixed_universe_size": 0,
             "universe_source": universe_source() or ("unavailable" if not cached_universe() else "dynamic_registry"),
@@ -148,6 +153,11 @@ class ScalpChainEngine:
         try:
             rows = self.repository.open_scalps(now_ist().date().isoformat())
             for row in rows:
+                try:
+                    entry_payload = json.loads(str(row.get("payload_json") or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    entry_payload = {}
+                signal_quality = entry_payload.get("signal_quality")
                 self._open[str(row["symbol"]).upper()] = {
                     "id": int(row["id"]),
                     "symbol": str(row["symbol"]).upper(),
@@ -159,6 +169,7 @@ class ScalpChainEngine:
                     "underlying_entry": float(row["underlying_entry"]),
                     "entry_option_ltp": float(row["entry_option_ltp"]),
                     "chain_snapshot_id": row["chain_snapshot_id"],
+                    "signal_quality": signal_quality if isinstance(signal_quality, dict) else None,
                 }
         except Exception:
             logger.exception("Could not restore open paper scalps")
@@ -1003,9 +1014,14 @@ class ScalpChainEngine:
                 "status": "OPEN",
             })
         recent = self.repository.scalp_events_for_date(now.date().isoformat())[:30]
+        try:
+            quality_learning = self.repository.scalp_quality_summary()
+        except Exception:
+            quality_learning = {"status": "unavailable"}
         return {
             "mode": MODE,
             "paper_only": True,
+            "quality_learning": quality_learning,
             "open": open_rows,
             "recent": recent,
             "updated_at_ist": now.isoformat(),
