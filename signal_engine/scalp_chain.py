@@ -389,7 +389,7 @@ class ScalpChainEngine:
         )
         total_volume = sum(max(0.0, float(c.get("volume") or 0)) for c in parsed)
         vwap = (
-            sum(float(c["close"]) * max(0.0, float(c.get("volume") or 0) for c in parsed) / total_volume
+            sum(float(c["close"]) * max(0.0, float(c.get("volume") or 0)) for c in parsed) / total_volume
             if total_volume > 0 else sum(float(c["close"]) for c in parsed) / len(parsed)
         )
         candle_range = max(0.0, float(recent.get("high") or close) - float(recent.get("low") or close))
@@ -421,6 +421,8 @@ class ScalpChainEngine:
             direction = None
             if not volume_ok:
                 self._last_context_rejection = "volume_not_confirmed"
+            elif (buy_breakout and not candle_shape_buy) or (sell_breakout and not candle_shape_sell):
+                self._last_context_rejection = "breakout_candle_weak"
             elif (close > or_high and close <= vwap) or (close < or_low and close >= vwap):
                 self._last_context_rejection = "wrong_side_of_vwap"
             elif abs(momentum) < MOMENTUM_MIN_PCT:
