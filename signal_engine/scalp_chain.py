@@ -244,18 +244,26 @@ class ScalpChainEngine:
                 logger.info("SCALP_HISTORICAL_CANDLES_EMPTY symbol=%s", key)
             return candles
         except Exception as exc:
-            self._historical_fetch_failures += 1
+            # AngelUnavailable often means the shared client is already in its
+            # provider-wide cooldown. Do not count that as another HTTP failure.
+            # Negative-cache briefly (not the full success TTL) so a recovered
+            # provider can be retried without hammering it every scan.
             message = str(exc).lower()
+            provider_cooldown = isinstance(exc, AngelUnavailable)
             if "403" in message or "429" in message or "rate" in message or "access rate" in message:
                 failure_reason = "angel_historical_rate_limited"
-            elif isinstance(exc, AngelUnavailable):
-                failure_reason = "angel_client_unavailable"
+            elif provider_cooldown:
+                failure_reason = "angel_historical_cooldown"
             else:
                 failure_reason = "angel_historical_request_failed"
+                self._historical_fetch_failures += 1
             logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s reason=%s error=%s", key, failure_reason, type(exc).__name__)
-            # Cool down this symbol briefly so a repeated failure does not trigger
-            # another historical request on every 30-second scan.
-            self._historical_candle_cache[key] = (time.monotonic(), [])
+            negative_ttl = max(30.0, float(os.getenv("SCALP_HIST_FAILURE_TTL_S", "60")))
+            # Cache entries use the normal TTL. Backdate the negative entry so it
+            # expires after negative_ttl rather than holding an empty result for
+            # the full five-minute successful-candle TTL.
+            cache_stamp = time.monotonic() - max(0.0, HIST_CANDLE_TTL_S - negative_ttl)
+            self._historical_candle_cache[key] = (cache_stamp, [])
             return []
 
     @staticmethod
