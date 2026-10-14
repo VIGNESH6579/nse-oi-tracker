@@ -118,7 +118,7 @@ the option premium/OI confirmation. A quiet session with zero entries is valid;
 the health endpoint should expose why candidates were rejected.
 
 - Entry window: 09:30–15:00 IST.
-- Maximum hold: 10 minutes.
+- Hold while momentum remains valid; exit on confirmed momentum weakness or protective stop.
 - Hard exit/no new entries after 15:15 IST.
 - Maximum concurrent paper positions: 3.
 - No live orders or CAS.
