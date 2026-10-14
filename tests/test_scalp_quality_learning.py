@@ -63,6 +63,9 @@ def test_rolling_quality_summary_compares_winners_and_losers_without_daywise_arc
     assert summary["winner_avg_spread_pct"] == 0.8
     assert summary["loser_avg_spread_pct"] == 2.5
     assert summary["pnl_basis"] == "quoted_option_premium_before_costs_not_realized_pnl"
+    today_events = repository.scalp_events_for_date("2026-10-07")
+    assert next(row for row in today_events if row["symbol"] == "WINNER")["pnl_pct"] == 20.0
+    assert next(row for row in today_events if row["symbol"] == "LOSER")["pnl_pct"] == -10.0
 
     # The visible day-history cleanup may delete old detailed events, but the
     # compact 100-trade rolling sample survives for signal-quality evaluation.
