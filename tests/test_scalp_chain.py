@@ -67,7 +67,7 @@ def test_underlying_context_accepts_timestamp_ms_normalized_to_ist(monkeypatch):
         {"timestamp_ms": 1791517500000, "data_frequency": "FIVE_MINUTE", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100},
         {"timestamp_ms": 1791517800000, "data_frequency": "FIVE_MINUTE", "open": 100, "high": 102, "low": 100, "close": 101, "volume": 100},
         {"timestamp_ms": 1791519900000, "data_frequency": "FIVE_MINUTE", "open": 102, "high": 103, "low": 102, "close": 103, "volume": 100},
-        {"timestamp_ms": 1791520200000, "data_frequency": "FIVE_MINUTE", "open": 103, "high": 105, "low": 103, "close": 104, "volume": 100},
+        {"timestamp_ms": 1791520200000, "data_frequency": "FIVE_MINUTE", "open": 103.9, "high": 104.1, "low": 103.8, "close": 104.0, "volume": 150},
     ]
 
     class CandleStream(RankingStream):
@@ -386,7 +386,8 @@ def test_chain_confirmation_rejects_falling_directional_oi_even_if_opposite_fall
     current = {
         "atm_strike": 100.0,
         "rows": [
-            {"strike": 100.0, "option_type": "CE", "ltp": 5.5, "oi": 11000, "volume": 400},
+            {"strike": 100.0, "option_type": "CE", "ltp": 5.5, "oi": 11000, "volume": 400,
+             "best_bid": 5.45, "best_ask": 5.50, "bid_qty": 500, "ask_qty": 500},
             {"strike": 100.0, "option_type": "PE", "ltp": 4.9, "oi": 13000, "volume": 400},
         ],
     }
@@ -405,7 +406,8 @@ def test_chain_confirmation_requires_positive_directional_oi_and_premium_follow_
     current = {
         "atm_strike": 100.0,
         "rows": [
-            {"strike": 100.0, "option_type": "CE", "ltp": 5.5, "oi": 14000, "volume": 400},
+            {"strike": 100.0, "option_type": "CE", "ltp": 5.5, "oi": 14000, "volume": 400,
+             "best_bid": 5.45, "best_ask": 5.50, "bid_qty": 500, "ask_qty": 500},
             {"strike": 100.0, "option_type": "PE", "ltp": 4.9, "oi": 15500, "volume": 400},
         ],
     }
