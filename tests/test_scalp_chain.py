@@ -443,7 +443,10 @@ def test_underlying_context_rejects_breakout_without_relative_volume(monkeypatch
     engine = scalp.ScalpChainEngine(HistoryMarket(), EmptyStream(), FakeRepo())
     monkeypatch.setattr(scalp, "now_ist", lambda: now)
 
-    assert engine._underlying_context("AAA") is None
+    context = engine._underlying_context("AAA")
+    assert context is not None and context["direction"] is None
+    assert context["volume_ok"] is False
+    assert context["relative_volume"] < scalp.MIN_RELATIVE_VOLUME
     assert engine._last_context_rejection == "volume_not_confirmed"
 
 
