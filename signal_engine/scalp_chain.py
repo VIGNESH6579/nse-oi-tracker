@@ -91,6 +91,7 @@ class ScalpChainEngine:
         self._last_error = ""
         self._last_ban_warning_at = 0.0
         self._last_context_rejection = ""
+        self._last_chain_rejection = ""
         self._last_monitor_at_ist: str | None = None
         self._unpriced_close_count = 0
         self._last_exit_pnl_status: str | None = None
@@ -470,36 +471,44 @@ class ScalpChainEngine:
         }
 
     def _chain_confirmation(self, symbol: str, direction: str, chain: dict[str, Any]) -> dict[str, Any] | None:
+        self._last_chain_rejection = ""
         rows = chain.get("rows") or []
         if not rows:
+            self._last_chain_rejection = "option_chain_empty"
             return None
         option_type = "CE" if direction == "BUY" else "PE"
         target = [r for r in rows if r.get("option_type") == option_type and float(r.get("strike") or 0) == float(chain["atm_strike"])]
         if not target:
             target = [r for r in rows if r.get("option_type") == option_type]
         if not target:
+            self._last_chain_rejection = "option_contract_missing"
             return None
         option = min(target, key=lambda r: abs(float(r.get("strike") or 0) - float(chain["atm_strike"])))
         if float(option.get("oi") or 0) < MIN_OPTION_OI or float(option.get("volume") or 0) < MIN_OPTION_VOLUME:
+            self._last_chain_rejection = "option_liquidity_below_minimum"
             return None
         previous = self._previous_chain.get(symbol, {})
         prev_by_key = {(r.get("strike"), r.get("option_type")): r for r in previous.get("rows", [])}
         prev = prev_by_key.get((option.get("strike"), option.get("option_type")))
         if not prev:
+            self._last_chain_rejection = "option_previous_snapshot_missing"
             return None
         current_premium = float(option.get("ltp") or 0)
         previous_premium = float(prev.get("ltp") or 0)
         if current_premium <= 0 or previous_premium <= 0:
+            self._last_chain_rejection = "option_premium_unavailable"
             return None
         best_bid = float(option.get("best_bid") or 0)
         best_ask = float(option.get("best_ask") or 0)
         bid_qty = float(option.get("bid_qty") or 0)
         ask_qty = float(option.get("ask_qty") or 0)
         if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid or bid_qty <= 0 or ask_qty <= 0:
+            self._last_chain_rejection = "option_spread_unavailable"
             return None
         mid_quote = (best_bid + best_ask) / 2.0
         spread_pct = (best_ask - best_bid) / mid_quote * 100.0 if mid_quote > 0 else float("inf")
         if spread_pct > MAX_OPTION_SPREAD_PCT:
+            self._last_chain_rejection = "option_spread_too_wide"
             return None
         premium_change = current_premium - previous_premium
         premium_change_pct = premium_change / previous_premium * 100.0
@@ -514,12 +523,14 @@ class ScalpChainEngine:
         # A falling directional OI value must never pass merely because the
         # opposite side's OI fell faster. Require actual directional OI addition,
         # premium follow-through, and a material (not one-tick) premium increase.
-        if (
-            premium_change_pct < MIN_PREMIUM_CHANGE_PCT
-            or opposite_oi_delta is None
-            or oi_delta <= 0
-            or oi_delta <= opposite_oi_delta
-        ):
+        if premium_change_pct < MIN_PREMIUM_CHANGE_PCT:
+            self._last_chain_rejection = "option_premium_follow_through_weak"
+            return None
+        if opposite_oi_delta is None:
+            self._last_chain_rejection = "option_opposite_oi_unavailable"
+            return None
+        if oi_delta <= 0 or oi_delta <= opposite_oi_delta:
+            self._last_chain_rejection = "option_oi_not_directional"
             return None
         return {
             "option": option,
@@ -972,7 +983,8 @@ class ScalpChainEngine:
                 stats["entries"] += 1
             else:
                 stats["confirmation_failed"] += 1
-                rejection_counts["option_chain_confirmation"] = rejection_counts.get("option_chain_confirmation", 0) + 1
+                reason = self._last_chain_rejection or "option_chain_confirmation"
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
 
         stats["top_rejections"] = dict(sorted(rejection_counts.items(), key=lambda kv: -kv[1])[:8])
         self._last_run_stats = stats
