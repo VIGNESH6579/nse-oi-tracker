@@ -252,6 +252,7 @@ class ScalpChainEngine:
             provider_cooldown = isinstance(exc, AngelUnavailable)
             if "403" in message or "429" in message or "rate" in message or "access rate" in message:
                 failure_reason = "angel_historical_rate_limited"
+                self._historical_fetch_failures += 1
             elif provider_cooldown:
                 failure_reason = "angel_historical_cooldown"
             else:
