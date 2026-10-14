@@ -128,6 +128,23 @@ class SignalRepository:
     def repair_scalp_event_integrity(self) -> None:
         """Run data migrations after restoring a durable snapshot over the live database."""
         with self._connect() as connection:
+            # A GitHub-restored snapshot can predate this compact learning table.
+            # Recreate it after restore, not just during first-time DB initialization.
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS scalp_quality_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_option_ltp REAL NOT NULL,
+                    exit_option_ltp REAL NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    exit_reason TEXT NOT NULL,
+                    signal_quality_json TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scalp_quality_samples_id ON scalp_quality_samples(id DESC)"
+            )
             self._repair_scalp_event_integrity(connection)
 
     def _initialize(self) -> None:
