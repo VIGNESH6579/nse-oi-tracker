@@ -468,7 +468,9 @@ def test_entry_persists_underlying_and_option_quality_evidence(monkeypatch):
         "option": {"strike": 100.0, "option_type": "CE", "ltp": 5.5},
         "premium_change_pct": 2.0, "previous_option_ltp": 5.4,
         "oi_delta": 2000, "opposite_oi_delta": 500, "option_oi": 14000,
-        "option_volume": 400, "rule": "CHAIN_PREMIUM_RISING_AND_DIRECTIONAL_OI",
+        "option_volume": 400, "best_bid": 5.45, "best_ask": 5.50,
+        "bid_qty": 500, "ask_qty": 500, "spread_pct": 0.9132,
+        "rule": "CHAIN_PREMIUM_RISING_DIRECTIONAL_OI_AND_TIGHT_SPREAD",
     }
     chain = {"expiry": "27OCT2026", "atm_strike": 100.0, "rows": []}
 
@@ -478,4 +480,26 @@ def test_entry_persists_underlying_and_option_quality_evidence(monkeypatch):
     assert quality["version"] == "scalp-quality-v2"
     assert quality["underlying"]["relative_volume"] == 1.5
     assert quality["option"]["directional_oi_delta"] == 2000
-    assert quality["spread_check"] == "unavailable_from_current_quote_payload"
+    assert quality["spread_check"] == "passed"
+    assert quality["option"]["spread_pct"] == 0.9132
+
+
+
+def test_chain_confirmation_rejects_wide_option_spread():
+    engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), FakeRepo())
+    engine._previous_chain["AAA"] = {
+        "rows": [
+            {"strike": 100.0, "option_type": "CE", "ltp": 5.0, "oi": 12000, "volume": 300},
+            {"strike": 100.0, "option_type": "PE", "ltp": 5.2, "oi": 15000, "volume": 300},
+        ]
+    }
+    current = {
+        "atm_strike": 100.0,
+        "rows": [
+            {"strike": 100.0, "option_type": "CE", "ltp": 5.5, "oi": 14000, "volume": 400,
+             "best_bid": 5.30, "best_ask": 5.50, "bid_qty": 500, "ask_qty": 500},
+            {"strike": 100.0, "option_type": "PE", "ltp": 4.9, "oi": 15500, "volume": 400},
+        ],
+    }
+
+    assert engine._chain_confirmation("AAA", "BUY", current) is None
