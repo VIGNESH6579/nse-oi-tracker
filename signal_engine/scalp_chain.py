@@ -250,7 +250,9 @@ class ScalpChainEngine:
             # provider can be retried without hammering it every scan.
             message = str(exc).lower()
             provider_cooldown = isinstance(exc, AngelUnavailable)
-            if "403" in message or "429" in message or "rate" in message or "access rate" in message:
+            if not provider_cooldown and (
+                "403" in message or "429" in message or "rate" in message or "access rate" in message
+            ):
                 failure_reason = "angel_historical_rate_limited"
                 self._historical_fetch_failures += 1
             elif provider_cooldown:
