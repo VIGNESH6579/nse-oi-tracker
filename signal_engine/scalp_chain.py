@@ -39,7 +39,14 @@ TOP_N = int(os.getenv("SCALP_CHAIN_TOP_N", os.getenv("SCALP_TOP_N", "5")))
 RANK_TOP_N = int(os.getenv("SCALP_RANK_TOP_N", "20"))
 MIN_OPTION_OI = int(os.getenv("SCALP_MIN_OPTION_OI", "10000"))
 MIN_OPTION_VOLUME = int(os.getenv("SCALP_MIN_OPTION_VOLUME", "100"))
-MOMENTUM_MIN_PCT = float(os.getenv("SCALP_MOMENTUM_MIN_PCT", "0.20"))
+MOMENTUM_MIN_PCT = float(os.getenv("SCALP_MOMENTUM_MIN_PCT", "0.30"))
+# Quality gates are intentionally conservative: fewer entries are preferable to
+# breakouts without confirmed participation or option-side follow-through.
+MIN_RELATIVE_VOLUME = max(1.0, float(os.getenv("SCALP_MIN_RELATIVE_VOLUME", "1.20")))
+MIN_CANDLE_CLOSE_LOCATION = min(0.90, max(0.60, float(os.getenv("SCALP_MIN_CLOSE_LOCATION", "0.65"))))
+MIN_BREAKOUT_BUFFER_PCT = max(0.0, float(os.getenv("SCALP_MIN_BREAKOUT_BUFFER_PCT", "0.05")))
+MIN_PREMIUM_CHANGE_PCT = max(0.0, float(os.getenv("SCALP_MIN_PREMIUM_CHANGE_PCT", "0.25")))
+MAX_OPTION_SPREAD_PCT = max(0.5, float(os.getenv("SCALP_MAX_OPTION_SPREAD_PCT", "3.0")))
 
 def _clock(value: str) -> tuple[int, int]:
     hour, minute = value.strip().split(":", 1)
@@ -76,6 +83,7 @@ class ScalpChainEngine:
         self._chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._historical_candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._historical_fetches_this_refresh = 0
+        self._history_rotation = 0
         self._historical_fetch_count = 0
         self._historical_fetch_failures = 0
         self._previous_chain: dict[str, dict[str, Any]] = {}
@@ -84,6 +92,7 @@ class ScalpChainEngine:
         self._last_error = ""
         self._last_ban_warning_at = 0.0
         self._last_context_rejection = ""
+        self._last_chain_rejection = ""
         self._last_monitor_at_ist: str | None = None
         self._unpriced_close_count = 0
         self._last_exit_pnl_status: str | None = None
@@ -104,9 +113,14 @@ class ScalpChainEngine:
             round(max(0.0, cache_now - min(stamp for stamp, _ in self._chain_cache.values())), 2)
             if self._chain_cache else None
         )
+        try:
+            quality_learning = self.repository.scalp_quality_summary()
+        except Exception:
+            quality_learning = {"status": "unavailable"}
         return {
             "mode": MODE,
             "paper_only": True,
+            "quality_learning": quality_learning,
             "universe_size": len(cached_universe()),
             "fixed_universe_size": 0,
             "universe_source": universe_source() or ("unavailable" if not cached_universe() else "dynamic_registry"),
@@ -141,6 +155,11 @@ class ScalpChainEngine:
         try:
             rows = self.repository.open_scalps(now_ist().date().isoformat())
             for row in rows:
+                try:
+                    entry_payload = json.loads(str(row.get("payload_json") or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    entry_payload = {}
+                signal_quality = entry_payload.get("signal_quality")
                 self._open[str(row["symbol"]).upper()] = {
                     "id": int(row["id"]),
                     "symbol": str(row["symbol"]).upper(),
@@ -152,6 +171,7 @@ class ScalpChainEngine:
                     "underlying_entry": float(row["underlying_entry"]),
                     "entry_option_ltp": float(row["entry_option_ltp"]),
                     "chain_snapshot_id": row["chain_snapshot_id"],
+                    "signal_quality": signal_quality if isinstance(signal_quality, dict) else None,
                 }
         except Exception:
             logger.exception("Could not restore open paper scalps")
@@ -192,6 +212,10 @@ class ScalpChainEngine:
                         "ltp": float(leg.get("ltp") or 0),
                         "oi": float(leg.get("oi") or 0),
                         "volume": float(leg.get("volume") or 0),
+                        "best_bid": float(leg.get("best_bid") or 0),
+                        "best_ask": float(leg.get("best_ask") or 0),
+                        "bid_qty": float(leg.get("bid_qty") or 0),
+                        "ask_qty": float(leg.get("ask_qty") or 0),
                         "trading_symbol": leg.get("trading_symbol"),
                     })
             if not rows:
@@ -315,16 +339,48 @@ class ScalpChainEngine:
                 if 9 * 60 + 15 <= candle["_parsed_time"].hour * 60 + candle["_parsed_time"].minute < 9 * 60 + 30
             ) >= 2
 
-        # Render cold starts and WS reconnections may subscribe after 09:30.
-        # The local tick-built buffer then cannot contain the opening range. Fetch
-        # only a bounded number of real historical bars, cache them, and never
-        # fabricate an opening range from a later candle.
-        if len(parsed) < 4 or not has_opening_range(parsed):
+        def has_valid_volume_context(items: list[dict[str, Any]]) -> bool:
+            if len(items) < 4:
+                return False
+            prior_valid = [
+                c for c in items[:-1]
+                if float(c.get("volume") or 0) > 0 and c.get("volume_valid") is not False
+            ]
+            latest = items[-1]
+            return (
+                len(prior_valid) >= 3
+                and float(latest.get("volume") or 0) > 0
+                and latest.get("volume_valid") is not False
+            )
+
+        # Cold starts, missing opening ranges, or untrustworthy WS volume trigger
+        # a bounded real-history repair. Never infer volume confirmation from zero
+        # or invalid cumulative-volume deltas.
+        if len(parsed) < 4 or not has_opening_range(parsed) or not has_valid_volume_context(parsed):
             historical = self._historical_context_candles(symbol)
             if historical:
                 parsed_historical = self._parse_context_candles(historical, today)
-                merged = {c["_parsed_time"]: c for c in parsed_historical}
-                merged.update({c["_parsed_time"]: c for c in parsed})
+                merged = {c["_parsed_time"]: dict(c) for c in parsed_historical}
+                for stream_candle in parsed:
+                    stamp = stream_candle["_parsed_time"]
+                    merged_candle = dict(stream_candle)
+                    historical_candle = merged.get(stamp)
+                    stream_volume = float(stream_candle.get("volume") or 0)
+                    if (
+                        historical_candle is not None
+                        and (stream_candle.get("volume_valid") is False or stream_volume <= 0)
+                        and float(historical_candle.get("volume") or 0) > 0
+                    ):
+                        merged_candle["volume"] = float(historical_candle["volume"])
+                        merged_candle["volume_valid"] = historical_candle.get("volume_valid", True)
+                        merged_candle["volume_source"] = "angel_one_historical_5m"
+                    else:
+                        merged_candle["volume_source"] = (
+                            stream_candle.get("volume_source")
+                            or stream_candle.get("source")
+                            or stream_candle.get("candle_source")
+                        )
+                    merged[stamp] = merged_candle
                 parsed = sorted(merged.values(), key=lambda x: x["_parsed_time"])
 
         if len(parsed) < 4:
@@ -365,23 +421,58 @@ class ScalpChainEngine:
         close = float(recent["close"])
         prev_close = float(prev["close"])
         momentum = ((close - prev_close) / prev_close * 100.0) if prev_close else 0.0
-        volumes = [float(c.get("volume") or 0) for c in parsed[:-1] if float(c.get("volume") or 0) > 0]
+        volumes = [
+            float(c.get("volume") or 0) for c in parsed[:-1]
+            if float(c.get("volume") or 0) > 0 and c.get("volume_valid") is not False
+        ]
         last_volume = float(recent.get("volume") or 0)
-        median_volume = statistics.median(volumes[-5:]) if volumes else 0.0
-        volume_ok = last_volume > 0 and (median_volume <= 0 or last_volume >= median_volume * 0.5)
+        median_volume = statistics.median(volumes[-5:]) if len(volumes) >= 3 else 0.0
+        relative_volume = last_volume / median_volume if median_volume > 0 else 0.0
+        # No "volume OK" fallback when historical volume is missing/zero. A
+        # missing-volume candle is missing evidence, not positive confirmation.
+        volume_ok = (
+            len(volumes) >= 3
+            and median_volume > 0
+            and last_volume > 0
+            and recent.get("volume_valid") is not False
+            and relative_volume >= MIN_RELATIVE_VOLUME
+        )
         total_volume = sum(max(0.0, float(c.get("volume") or 0)) for c in parsed)
         vwap = (
             sum(float(c["close"]) * max(0.0, float(c.get("volume") or 0)) for c in parsed) / total_volume
             if total_volume > 0 else sum(float(c["close"]) for c in parsed) / len(parsed)
         )
-        if close > or_high and close > vwap and momentum >= MOMENTUM_MIN_PCT and volume_ok:
+        candle_range = max(0.0, float(recent.get("high") or close) - float(recent.get("low") or close))
+        candle_open = float(recent.get("open") or close)
+        close_location = (close - float(recent.get("low") or close)) / candle_range if candle_range > 0 else 0.5
+        candle_body_pct = abs(close - candle_open) / prev_close * 100.0 if prev_close > 0 else 0.0
+        opening_range_width = max(0.0, or_high - or_low)
+        breakout_buffer = max(close * MIN_BREAKOUT_BUFFER_PCT / 100.0, opening_range_width * 0.10)
+        breakout_distance_pct = 0.0
+        buy_breakout = close > or_high + breakout_buffer
+        sell_breakout = close < or_low - breakout_buffer
+        if buy_breakout and or_high > 0:
+            breakout_distance_pct = (close - or_high) / or_high * 100.0
+        elif sell_breakout and or_low > 0:
+            breakout_distance_pct = (or_low - close) / or_low * 100.0
+        candle_shape_buy = close > candle_open and close_location >= MIN_CANDLE_CLOSE_LOCATION and candle_body_pct >= 0.08
+        candle_shape_sell = close < candle_open and close_location <= (1.0 - MIN_CANDLE_CLOSE_LOCATION) and candle_body_pct >= 0.08
+        if (
+            buy_breakout and close > vwap and momentum >= MOMENTUM_MIN_PCT
+            and volume_ok and candle_shape_buy
+        ):
             direction = "BUY"
-        elif close < or_low and close < vwap and momentum <= -MOMENTUM_MIN_PCT and volume_ok:
+        elif (
+            sell_breakout and close < vwap and momentum <= -MOMENTUM_MIN_PCT
+            and volume_ok and candle_shape_sell
+        ):
             direction = "SELL"
         else:
             direction = None
             if not volume_ok:
                 self._last_context_rejection = "volume_not_confirmed"
+            elif (buy_breakout and not candle_shape_buy) or (sell_breakout and not candle_shape_sell):
+                self._last_context_rejection = "breakout_candle_weak"
             elif (close > or_high and close <= vwap) or (close < or_low and close >= vwap):
                 self._last_context_rejection = "wrong_side_of_vwap"
             elif abs(momentum) < MOMENTUM_MIN_PCT:
@@ -401,33 +492,60 @@ class ScalpChainEngine:
             "momentum_pct": momentum,
             "last_volume": last_volume,
             "median_volume": median_volume,
+            "relative_volume": round(relative_volume, 3),
             "volume_ok": volume_ok,
+            "candle_close_location": round(close_location, 4),
+            "candle_body_pct": round(candle_body_pct, 4),
+            "breakout_distance_pct": round(breakout_distance_pct, 4),
             "candle_count": len(parsed),
             "candle_age_s": round(candle_age_s, 2),
             "candle_source": latest.get("candle_source") or latest.get("source") or "angel_one_websocket_v2",
+            "volume_source": latest.get("volume_source") or latest.get("source") or latest.get("candle_source") or "unknown",
             "data_frequency": "FIVE_MINUTE",
         }
 
     def _chain_confirmation(self, symbol: str, direction: str, chain: dict[str, Any]) -> dict[str, Any] | None:
+        self._last_chain_rejection = ""
         rows = chain.get("rows") or []
         if not rows:
+            self._last_chain_rejection = "option_chain_empty"
             return None
         option_type = "CE" if direction == "BUY" else "PE"
         target = [r for r in rows if r.get("option_type") == option_type and float(r.get("strike") or 0) == float(chain["atm_strike"])]
         if not target:
             target = [r for r in rows if r.get("option_type") == option_type]
         if not target:
+            self._last_chain_rejection = "option_contract_missing"
             return None
         option = min(target, key=lambda r: abs(float(r.get("strike") or 0) - float(chain["atm_strike"])))
         if float(option.get("oi") or 0) < MIN_OPTION_OI or float(option.get("volume") or 0) < MIN_OPTION_VOLUME:
+            self._last_chain_rejection = "option_liquidity_below_minimum"
             return None
         previous = self._previous_chain.get(symbol, {})
         prev_by_key = {(r.get("strike"), r.get("option_type")): r for r in previous.get("rows", [])}
         prev = prev_by_key.get((option.get("strike"), option.get("option_type")))
         if not prev:
+            self._last_chain_rejection = "option_previous_snapshot_missing"
             return None
-        premium_change = float(option["ltp"] or 0) - float(prev.get("ltp") or 0)
-        premium_change_pct = premium_change / float(prev.get("ltp") or 1) * 100.0
+        current_premium = float(option.get("ltp") or 0)
+        previous_premium = float(prev.get("ltp") or 0)
+        if current_premium <= 0 or previous_premium <= 0:
+            self._last_chain_rejection = "option_premium_unavailable"
+            return None
+        best_bid = float(option.get("best_bid") or 0)
+        best_ask = float(option.get("best_ask") or 0)
+        bid_qty = float(option.get("bid_qty") or 0)
+        ask_qty = float(option.get("ask_qty") or 0)
+        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid or bid_qty <= 0 or ask_qty <= 0:
+            self._last_chain_rejection = "option_spread_unavailable"
+            return None
+        mid_quote = (best_bid + best_ask) / 2.0
+        spread_pct = (best_ask - best_bid) / mid_quote * 100.0 if mid_quote > 0 else float("inf")
+        if spread_pct > MAX_OPTION_SPREAD_PCT:
+            self._last_chain_rejection = "option_spread_too_wide"
+            return None
+        premium_change = current_premium - previous_premium
+        premium_change_pct = premium_change / previous_premium * 100.0
         opposite_type = "PE" if option_type == "CE" else "CE"
         opposite = next((r for r in rows if r.get("option_type") == opposite_type and float(r.get("strike") or 0) == float(option.get("strike") or 0)), None)
         previous_opposite = prev_by_key.get((option.get("strike"), opposite_type))
@@ -436,14 +554,32 @@ class ScalpChainEngine:
             float(opposite.get("oi") or 0) - float(previous_opposite.get("oi") or 0)
             if opposite and previous_opposite else None
         )
-        if premium_change_pct <= 0 or opposite_oi_delta is None or oi_delta <= opposite_oi_delta:
+        # A falling directional OI value must never pass merely because the
+        # opposite side's OI fell faster. Require actual directional OI addition,
+        # premium follow-through, and a material (not one-tick) premium increase.
+        if premium_change_pct < MIN_PREMIUM_CHANGE_PCT:
+            self._last_chain_rejection = "option_premium_follow_through_weak"
+            return None
+        if opposite_oi_delta is None:
+            self._last_chain_rejection = "option_opposite_oi_unavailable"
+            return None
+        if oi_delta <= 0 or oi_delta <= opposite_oi_delta:
+            self._last_chain_rejection = "option_oi_not_directional"
             return None
         return {
             "option": option,
-            "premium_change_pct": premium_change_pct,
+            "premium_change_pct": round(premium_change_pct, 4),
+            "previous_option_ltp": previous_premium,
             "oi_delta": oi_delta,
             "opposite_oi_delta": opposite_oi_delta,
-            "rule": "CHAIN_PREMIUM_RISING_AND_DIRECTIONAL_OI",
+            "option_oi": float(option.get("oi") or 0),
+            "option_volume": float(option.get("volume") or 0),
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "bid_qty": bid_qty,
+            "ask_qty": ask_qty,
+            "spread_pct": round(spread_pct, 4),
+            "rule": "CHAIN_PREMIUM_RISING_DIRECTIONAL_OI_AND_TIGHT_SPREAD",
         }
 
     def probe_chain(self, symbol: str = "RELIANCE") -> tuple[bool, str]:
@@ -505,6 +641,12 @@ class ScalpChainEngine:
 
     def _candidate_contexts(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         symbols, gainers, losers, gainer_symbols, loser_symbols = self._ranked_universe()
+        # Rotate scan order so a tiny historical-fetch budget cannot repeatedly
+        # favor the same highest-ranked names when WS history/volume is incomplete.
+        if symbols:
+            offset = self._history_rotation % len(symbols)
+            symbols = symbols[offset:] + symbols[:offset]
+            self._history_rotation = (offset + max(1, HIST_CANDLE_MAX_CALLS_PER_REFRESH)) % len(symbols)
         candidates: list[dict[str, Any]] = []
         early_rejections: dict[str, int] = {}
         early_rejected_symbols: dict[str, str] = {}
@@ -548,6 +690,35 @@ class ScalpChainEngine:
             "entry_time_ist": now.isoformat(),
             "underlying_entry": float(candidate["ltp"]),
             "entry_option_ltp": float(option["ltp"]),
+            # Persist the exact evidence that authorized this entry so future
+            # winner-vs-loser analysis is based on facts, not reconstructed guesses.
+            "signal_quality": {
+                "version": "scalp-quality-v2",
+                "underlying": {
+                    key: candidate.get(key) for key in (
+                        "vwap", "or_high", "or_low", "momentum_pct", "last_volume",
+                        "median_volume", "relative_volume", "volume_ok",
+                        "candle_close_location", "candle_body_pct", "breakout_distance_pct",
+                        "candle_count", "candle_age_s", "candle_source", "volume_source", "data_frequency",
+                        "day_change_pct",
+                    )
+                },
+                "option": {
+                    "premium_change_pct": confirmation.get("premium_change_pct"),
+                    "previous_option_ltp": confirmation.get("previous_option_ltp"),
+                    "directional_oi_delta": confirmation.get("oi_delta"),
+                    "opposite_oi_delta": confirmation.get("opposite_oi_delta"),
+                    "oi": confirmation.get("option_oi"),
+                    "volume": confirmation.get("option_volume"),
+                    "best_bid": confirmation.get("best_bid"),
+                    "best_ask": confirmation.get("best_ask"),
+                    "bid_qty": confirmation.get("bid_qty"),
+                    "ask_qty": confirmation.get("ask_qty"),
+                    "spread_pct": confirmation.get("spread_pct"),
+                    "confirmation_rule": confirmation.get("rule"),
+                },
+                "spread_check": "passed",
+            },
             "rule_ids": [
                 "TIME_WINDOW",
                 "UNDERLYING_OR_BREAK",
@@ -852,7 +1023,8 @@ class ScalpChainEngine:
                 stats["entries"] += 1
             else:
                 stats["confirmation_failed"] += 1
-                rejection_counts["option_chain_confirmation"] = rejection_counts.get("option_chain_confirmation", 0) + 1
+                reason = self._last_chain_rejection or "option_chain_confirmation"
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
 
         stats["top_rejections"] = dict(sorted(rejection_counts.items(), key=lambda kv: -kv[1])[:8])
         self._last_run_stats = stats
@@ -894,9 +1066,14 @@ class ScalpChainEngine:
                 "status": "OPEN",
             })
         recent = self.repository.scalp_events_for_date(now.date().isoformat())[:30]
+        try:
+            quality_learning = self.repository.scalp_quality_summary()
+        except Exception:
+            quality_learning = {"status": "unavailable"}
         return {
             "mode": MODE,
             "paper_only": True,
+            "quality_learning": quality_learning,
             "open": open_rows,
             "recent": recent,
             "updated_at_ist": now.isoformat(),

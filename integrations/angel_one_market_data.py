@@ -319,6 +319,11 @@ class AngelOneMarketData:
                 token = str(row.get("symbolToken") or row.get("symboltoken") or "")
                 if not token:
                     continue
+                depth = row.get("depth") or {}
+                buys = depth.get("buy") or []
+                sells = depth.get("sell") or []
+                best_bid = float((buys[0] or {}).get("price") or 0) if buys else 0.0
+                best_ask = float((sells[0] or {}).get("price") or 0) if sells else 0.0
                 output[token] = {
                     "ltp": float(row.get("ltp") or 0),
                     "oi": int(float(row.get("opnInterest") or row.get("openInterest") or 0)),
@@ -326,6 +331,9 @@ class AngelOneMarketData:
                     "avg_price": float(row.get("avgPrice") or 0),
                     "open": float(row.get("open") or 0), "high": float(row.get("high") or 0),
                     "low": float(row.get("low") or 0), "close": float(row.get("close") or 0),
+                    "best_bid": best_bid, "best_ask": best_ask,
+                    "bid_qty": int(float((buys[0] or {}).get("quantity") or 0)) if buys else 0,
+                    "ask_qty": int(float((sells[0] or {}).get("quantity") or 0)) if sells else 0,
                     "symbol": str(row.get("tradingSymbol") or row.get("symbol") or "").upper(),
                     "source": "angel_one_option_quote",
                 }
@@ -372,8 +380,12 @@ class AngelOneMarketData:
                 def leg(item):
                     if not item: return None
                     q = quotes.get(item["token"])
-                    if not q: return {"token": item["token"], "symbol": item["symbol"], "ltp": 0, "oi": 0, "volume": 0}
-                    return {"token": item["token"], "symbol": item["symbol"], "ltp": q["ltp"], "oi": q["oi"], "volume": q["volume"]}
+                    if not q:
+                        return {"token": item["token"], "symbol": item["symbol"], "ltp": 0, "oi": 0, "volume": 0,
+                                "best_bid": 0, "best_ask": 0, "bid_qty": 0, "ask_qty": 0}
+                    return {"token": item["token"], "symbol": item["symbol"], "ltp": q["ltp"], "oi": q["oi"],
+                            "volume": q["volume"], "best_bid": q.get("best_bid", 0), "best_ask": q.get("best_ask", 0),
+                            "bid_qty": q.get("bid_qty", 0), "ask_qty": q.get("ask_qty", 0)}
                 ceq, peq = leg(ce), leg(pe)
                 chain.append({"strike": strike, "ce": ceq, "pe": peq})
                 for item, q in ((ce, ceq), (pe, peq)):

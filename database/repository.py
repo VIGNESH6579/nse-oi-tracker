@@ -128,6 +128,23 @@ class SignalRepository:
     def repair_scalp_event_integrity(self) -> None:
         """Run data migrations after restoring a durable snapshot over the live database."""
         with self._connect() as connection:
+            # A GitHub-restored snapshot can predate this compact learning table.
+            # Recreate it after restore, not just during first-time DB initialization.
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS scalp_quality_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_option_ltp REAL NOT NULL,
+                    exit_option_ltp REAL NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    exit_reason TEXT NOT NULL,
+                    signal_quality_json TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scalp_quality_samples_id ON scalp_quality_samples(id DESC)"
+            )
             self._repair_scalp_event_integrity(connection)
 
     def _initialize(self) -> None:
@@ -321,6 +338,21 @@ class SignalRepository:
                     ON scalp_events(trade_date, entry_time_ist DESC);
                 CREATE INDEX IF NOT EXISTS idx_scalp_events_open
                     ON scalp_events(trade_date, status, symbol);
+
+                -- Compact rolling outcomes for quality evaluation; no day-by-day archive.
+                CREATE TABLE IF NOT EXISTS scalp_quality_samples (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_option_ltp REAL NOT NULL,
+                    exit_option_ltp REAL NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    exit_reason TEXT NOT NULL,
+                    signal_quality_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scalp_quality_samples_id
+                    ON scalp_quality_samples(id DESC);
 
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER NOT NULL
@@ -620,6 +652,25 @@ class SignalRepository:
                     exit_option_ltp: float | None, hold_minutes: float, exit_reason: str,
                     payload: dict[str, Any] | None = None) -> None:
         with self._connect() as connection:
+            # Capture the entry-time evidence before the close payload replaces it.
+            # Only a real positive exit quote can become a learning sample.
+            entry_row = connection.execute(
+                "SELECT symbol, direction, entry_option_ltp, payload_json FROM scalp_events WHERE id=?",
+                (int(event_id),),
+            ).fetchone()
+            signal_quality = None
+            entry_ltp = 0.0
+            if entry_row is not None:
+                try:
+                    entry_payload = json.loads(str(entry_row["payload_json"] or "{}"))
+                    signal_quality = entry_payload.get("signal_quality")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    signal_quality = None
+                try:
+                    entry_ltp = float(entry_row["entry_option_ltp"] or 0)
+                except (TypeError, ValueError):
+                    entry_ltp = 0.0
+
             connection.execute(
                 """UPDATE scalp_events
                    SET exit_time_ist=?, underlying_exit=?, exit_option_ltp=?,
@@ -635,6 +686,87 @@ class SignalRepository:
                 ),
             )
 
+            try:
+                exit_ltp = float(exit_option_ltp) if exit_option_ltp is not None else 0.0
+            except (TypeError, ValueError):
+                exit_ltp = 0.0
+            if entry_row is not None and isinstance(signal_quality, dict) and entry_ltp > 0 and exit_ltp > 0:
+                pnl_pct = round((exit_ltp - entry_ltp) / entry_ltp * 100.0, 4)
+                connection.execute(
+                    """INSERT INTO scalp_quality_samples
+                       (symbol, direction, entry_option_ltp, exit_option_ltp, pnl_pct,
+                        exit_reason, signal_quality_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        str(entry_row["symbol"]), str(entry_row["direction"]), entry_ltp,
+                        exit_ltp, pnl_pct, str(exit_reason),
+                        json.dumps(signal_quality, separators=(",", ":"), default=str),
+                    ),
+                )
+                # Keep only the most recent 100 priced outcomes. The dashboard
+                # remains current-session-only; this compact sample is solely for
+                # measuring whether entry features distinguish winners from losers.
+                connection.execute(
+                    """DELETE FROM scalp_quality_samples
+                       WHERE id NOT IN (
+                           SELECT id FROM scalp_quality_samples ORDER BY id DESC LIMIT 100
+                       )"""
+                )
+
+    def scalp_quality_summary(self) -> dict[str, Any]:
+        """Summarize the rolling priced outcomes without exposing day-wise history."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT pnl_pct, signal_quality_json FROM scalp_quality_samples
+                   ORDER BY id DESC LIMIT 100"""
+            ).fetchall()
+        values: list[tuple[float, dict[str, Any]]] = []
+        for row in rows:
+            try:
+                quality = json.loads(str(row["signal_quality_json"] or "{}"))
+                pnl = float(row["pnl_pct"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(quality, dict):
+                values.append((pnl, quality))
+        wins = [(p, q) for p, q in values if p > 0]
+        losses = [(p, q) for p, q in values if p < 0]
+        flats = [(p, q) for p, q in values if p == 0]
+
+        def avg(group: list[tuple[float, dict[str, Any]]], path: tuple[str, ...]) -> float | None:
+            found: list[float] = []
+            for _, quality in group:
+                item: Any = quality
+                for key in path:
+                    item = item.get(key) if isinstance(item, dict) else None
+                try:
+                    if item is not None:
+                        found.append(float(item))
+                except (TypeError, ValueError):
+                    continue
+            return round(sum(found) / len(found), 4) if found else None
+
+        decided = len(wins) + len(losses)
+        return {
+            "sample_size": len(values),
+            "wins": len(wins),
+            "losses": len(losses),
+            "flat": len(flats),
+            "win_rate_pct_ex_flat": round(len(wins) / decided * 100.0, 2) if decided else None,
+            "mean_quoted_pnl_pct": round(sum(p for p, _ in values) / len(values), 4) if values else None,
+            "average_win_pct": round(sum(p for p, _ in wins) / len(wins), 4) if wins else None,
+            "average_loss_pct": round(sum(p for p, _ in losses) / len(losses), 4) if losses else None,
+            "winner_avg_relative_volume": avg(wins, ("underlying", "relative_volume")),
+            "loser_avg_relative_volume": avg(losses, ("underlying", "relative_volume")),
+            "winner_avg_momentum_pct": avg(wins, ("underlying", "momentum_pct")),
+            "loser_avg_momentum_pct": avg(losses, ("underlying", "momentum_pct")),
+            "winner_avg_premium_change_pct": avg(wins, ("option", "premium_change_pct")),
+            "loser_avg_premium_change_pct": avg(losses, ("option", "premium_change_pct")),
+            "winner_avg_spread_pct": avg(wins, ("option", "spread_pct")),
+            "loser_avg_spread_pct": avg(losses, ("option", "spread_pct")),
+            "pnl_basis": "quoted_option_premium_before_costs_not_realized_pnl",
+            "retention_limit": 100,
+        }
     def open_scalps(self, trade_date: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -671,6 +803,19 @@ class SignalRepository:
                 else "UNPRICED"
             )
             event["pnl_premium_pct"] = payload.get("pnl_premium_pct")
+            # The dashboard uses pnl_pct for both open and closed rows. Populate
+            # it only from a real quoted exit; never infer a flat/green result when
+            # the exact option contract had no exit quote.
+            pnl_pct = payload.get("pnl_premium_pct")
+            if pnl_pct is None:
+                try:
+                    entry_ltp = float(event.get("entry_option_ltp") or 0)
+                    exit_ltp = float(event.get("exit_option_ltp") or 0)
+                    if entry_ltp > 0 and exit_ltp > 0:
+                        pnl_pct = round((exit_ltp - entry_ltp) / entry_ltp * 100.0, 4)
+                except (TypeError, ValueError):
+                    pnl_pct = None
+            event["pnl_pct"] = float(pnl_pct) if pnl_pct is not None else None
             event["pnl_note"] = payload.get("pnl_note") or payload.get("exit_quote_note")
             event["exit_quote_source"] = payload.get("exit_quote_source")
             events.append(event)

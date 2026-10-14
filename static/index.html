@@ -140,7 +140,7 @@
   </section>
   <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
       <div><h2 class="text-sm font-bold text-white">Stock Options Scalping · PAPER</h2>
-      <p class="text-[10px] text-gray-500">Underlying OR/VWAP impulse → Angel near-ATM CE/PE confirmation → exit within minutes.</p></div>
+      <p class="text-[10px] text-gray-500">Opening-range breakout + VWAP + valid relative volume + directional option OI/premium + tight bid/ask spread. Exit on momentum weakness or risk rules.</p></div>
       <div class="flex-1"></div>
       <span class="badge bg-blue-950 text-blue-300 border-blue-800">ENTRY 09:30–15:00 IST</span>
       <span class="badge bg-gray-800 text-gray-300 border-gray-700">MOMENTUM-BASED EXIT</span>
@@ -169,6 +169,20 @@
       <span class="text-gray-300">Top rejection:</span>
       <span x-text="Object.entries(scalpHealth.last_run?.top_rejections || {}).map(([k,v]) => k + ' ×' + v).join(' · ') || 'none recorded yet'"></span>
     </div>
+  </section>
+  <section class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="text-xs font-bold text-gray-200">Rolling signal-quality audit</h3>
+      <span class="text-[10px] text-gray-500">Last 100 priced paper outcomes · no daily archive</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-[10px]">
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Sample size</span><b class="block text-white" x-text="scalpHealth.quality_learning?.sample_size ?? 0"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Win rate (ex-flat)</span><b class="block text-white" x-text="scalpHealth.quality_learning?.win_rate_pct_ex_flat == null ? '—' : scalpHealth.quality_learning.win_rate_pct_ex_flat + '%'"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Mean quoted P/L</span><b class="block" :class="(scalpHealth.quality_learning?.mean_quoted_pnl_pct ?? 0) > 0 ? 'text-green-400' : ((scalpHealth.quality_learning?.mean_quoted_pnl_pct ?? 0) < 0 ? 'text-red-400' : 'text-gray-400')" x-text="scalpHealth.quality_learning?.mean_quoted_pnl_pct == null ? '—' : scalpHealth.quality_learning.mean_quoted_pnl_pct + '%'"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Relative volume · W / L</span><b class="block text-gray-200" x-text="(scalpHealth.quality_learning?.winner_avg_relative_volume ?? '—') + ' / ' + (scalpHealth.quality_learning?.loser_avg_relative_volume ?? '—')"></b></div>
+      <div class="bg-gray-950 rounded p-2"><span class="text-gray-500">Spread % · W / L</span><b class="block text-gray-200" x-text="(scalpHealth.quality_learning?.winner_avg_spread_pct ?? '—') + ' / ' + (scalpHealth.quality_learning?.loser_avg_spread_pct ?? '—')"></b></div>
+    </div>
+    <p class="mt-2 text-[10px] text-gray-500">Quoted option-premium returns exclude fees, slippage and execution effects. Treat the comparison as provisional until the sample is large enough; it is not a profit guarantee.</p>
   </section>
   <section class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between"><h3 class="text-xs font-bold text-gray-200">Live scalps</h3><span class="text-[10px] text-gray-600 mono" x-text="scalpUpdated ? hm(scalpUpdated) + ' IST' : '—'"></span></div>
