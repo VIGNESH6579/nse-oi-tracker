@@ -104,6 +104,20 @@ def test_volume_validity_recovers_after_counter_reset_without_rewriting_old_bar(
     assert history[-1]["volume_valid"] is True
 
 
+def test_stream_volume_health_uses_valid_measured_candles():
+    stream = AngelOneMarketStream(None, enabled=True)
+    first = parse_stream_packet(_packet(ts=1791518100000, volume=1000))
+    next_bar = parse_stream_packet(_packet(ts=1791518400000, volume=1020))
+    stream.candles.add(first)
+    assert stream.health()["volume_actionable"] is False
+
+    stream.candles.add(next_bar)
+    health = stream.health()
+    assert health["volume_actionable"] is True
+    assert health["valid_volume_candles"] == 1
+    assert health["order_execution"] is False
+
+
 def test_stream_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("ANGEL_ONE_STREAM_ENABLED", raising=False)
     stream = AngelOneMarketStream(None)
