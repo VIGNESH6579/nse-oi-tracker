@@ -81,6 +81,43 @@ def test_local_candle_invalidates_volume_after_mid_session_reset():
     assert candle["volume_valid"] is False
 
 
+def test_volume_validity_recovers_after_counter_reset_without_rewriting_old_bar():
+    builder = LocalFiveMinuteBuilder()
+    first = parse_stream_packet(_packet(ts=1791518100000, volume=1000))
+    reset = parse_stream_packet(_packet(ts=1791518160000, volume=900))
+    recovered = parse_stream_packet(_packet(ts=1791518400000, volume=910))
+    next_tick = parse_stream_packet(_packet(ts=1791518460000, volume=930))
+
+    builder.add(first)
+    invalid = builder.add(reset)
+    assert invalid["volume_valid"] is False
+
+    current = builder.add(recovered)
+    assert current["volume_valid"] is True
+    assert current["volume"] == 10
+    current = builder.add(next_tick)
+    assert current["volume_valid"] is True
+    assert current["volume"] == 30
+
+    history = builder.recent(2, "11536", limit=3)
+    assert history[-2]["volume_valid"] is False
+    assert history[-1]["volume_valid"] is True
+
+
+def test_stream_volume_health_uses_valid_measured_candles():
+    stream = AngelOneMarketStream(None, enabled=True)
+    first = parse_stream_packet(_packet(ts=1791518100000, volume=1000))
+    next_bar = parse_stream_packet(_packet(ts=1791518400000, volume=1020))
+    stream.candles.add(first)
+    assert stream.health()["volume_actionable"] is False
+
+    stream.candles.add(next_bar)
+    health = stream.health()
+    assert health["volume_actionable"] is True
+    assert health["valid_volume_candles"] == 1
+    assert health["order_execution"] is False
+
+
 def test_stream_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("ANGEL_ONE_STREAM_ENABLED", raising=False)
     stream = AngelOneMarketStream(None)

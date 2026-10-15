@@ -130,7 +130,13 @@ def run_stage(stage: str, probes: dict[str, Probe], now: datetime) -> dict[str, 
         critical_set -= {"oi_window_depth", "angel_intraday_candles"}
     critical = [name for name in failed if name in critical_set]
     verdict = "READY" if not failed else ("BLOCKED" if critical else "DEGRADED")
-    result = {"stage": stage, "at": now.isoformat(timespec="seconds"), "verdict": verdict, "failed": failed, "checks": checks}
+    core_verdict = "BLOCKED" if critical else "READY"
+    optional_failed = [name for name in failed if name not in critical_set]
+    result = {
+        "stage": stage, "at": now.isoformat(timespec="seconds"),
+        "verdict": verdict, "core_verdict": core_verdict,
+        "failed": failed, "optional_failed": optional_failed, "checks": checks,
+    }
     with _lock:
         _latest[stage] = result
     (logger.info if verdict == "READY" else logger.warning)("SELF_TEST stage=%s verdict=%s failed=%s", stage, verdict, failed)
@@ -145,8 +151,21 @@ def latest() -> dict[str, dict[str, Any]]:
 
 
 def readiness() -> str:
-    """Verdict of the most recent stage, or UNTESTED before the first run."""
+    """Core market-data/service readiness; optional scalp checks do not mask it."""
     with _lock:
         if not _latest:
             return "UNTESTED"
-        return max(_latest.values(), key=lambda r: r["at"])["verdict"]
+        latest_result = max(_latest.values(), key=lambda r: r["at"])
+        return str(latest_result.get("core_verdict") or latest_result["verdict"])
+
+
+def scalp_readiness() -> str:
+    """Separate status for the optional live option-chain confirmation path."""
+    with _lock:
+        result = _latest.get("post_open")
+        if not result:
+            return "UNTESTED"
+        check = (result.get("checks") or {}).get("scalp_chain")
+        if check is None:
+            return "UNTESTED"
+        return "READY" if check.get("ok") else "DEGRADED"

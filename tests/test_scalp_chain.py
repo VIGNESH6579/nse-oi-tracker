@@ -421,6 +421,26 @@ def test_chain_confirmation_requires_positive_directional_oi_and_premium_follow_
     assert result["premium_change_pct"] >= scalp.MIN_PREMIUM_CHANGE_PCT
 
 
+def test_historical_rate_limit_cools_down_all_symbols(monkeypatch):
+    class RateLimitedMarket(FakeMarket):
+        def __init__(self):
+            self.calls = 0
+        def intraday_candles(self, symbol, *, interval="FIVE_MINUTE", exchange="NSE", days=1):
+            self.calls += 1
+            raise RuntimeError("HTTP 429 rate limit")
+
+    market = RateLimitedMarket()
+    engine = scalp.ScalpChainEngine(market, RankingStream(), FakeRepo())
+    monkeypatch.setattr(scalp, "HIST_CANDLE_TTL_S", 300.0)
+    monkeypatch.setattr(scalp, "HIST_CANDLE_MAX_CALLS_PER_REFRESH", 2)
+
+    assert engine._historical_context_candles("AAA") == []
+    assert engine._historical_context_candles("BBB") == []
+    assert market.calls == 1
+    assert engine._historical_failure_reasons["AAA"][1] == "angel_historical_rate_limited"
+    assert engine._historical_failure_reasons["BBB"][1] == "angel_historical_rate_limited"
+
+
 def test_underlying_context_rejects_breakout_without_relative_volume(monkeypatch):
     now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
     candles = [

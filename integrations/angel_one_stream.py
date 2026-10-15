@@ -73,6 +73,7 @@ class _Candle:
     ticks: int
     last_volume: int | None = None
     last_observed_at: float = 0.0
+    volume_valid: bool = True
     source: str = "angel_one_websocket_v2"
 
 
@@ -138,7 +139,6 @@ class LocalFiveMinuteBuilder:
     def __init__(self) -> None:
         self._candles: dict[tuple[int, str], _Candle] = {}
         self._history: dict[tuple[int, str], deque[_Candle]] = {}
-        self._volume_valid: dict[tuple[int, str], bool] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -170,13 +170,23 @@ class LocalFiveMinuteBuilder:
                 self._candles[key] = candle
 
             if tick.volume is not None and tick.volume >= 0:
-                if candle.last_volume is not None and tick.volume < candle.last_volume:
-                    self._volume_valid[key] = False
                 previous_candle = self._history.get(key, deque())[-1] if self._history.get(key) else None
                 prior_volume = previous_candle.last_volume if previous_candle else None
-                if candle.last_volume is None and prior_volume is not None and tick.volume >= prior_volume:
-                    candle.volume += int(tick.volume - prior_volume)
-                elif candle.last_volume is not None and tick.volume >= candle.last_volume and self._volume_valid.get(key, True):
+                if candle.last_volume is None:
+                    if prior_volume is None:
+                        # We joined mid-candle without a baseline. Price is valid,
+                        # but this bar's full traded volume cannot be reconstructed.
+                        candle.volume_valid = False
+                    elif tick.volume >= prior_volume:
+                        candle.volume += int(tick.volume - prior_volume)
+                    else:
+                        # A session reset or provider counter reset makes this
+                        # candle's full volume unknowable. The next candle starts
+                        # a fresh validity state and can recover from a new baseline.
+                        candle.volume_valid = False
+                elif tick.volume < candle.last_volume:
+                    candle.volume_valid = False
+                elif candle.volume_valid:
                     candle.volume += int(tick.volume - candle.last_volume)
                 candle.last_volume = tick.volume
 
@@ -202,7 +212,7 @@ class LocalFiveMinuteBuilder:
             "volume": candle.volume,
             "ticks": candle.ticks,
             "source": candle.source,
-            "volume_valid": self._volume_valid.get(key, True),
+            "volume_valid": candle.volume_valid,
             "observed_at": candle.last_observed_at or tick.received_at,
         }
 
@@ -211,6 +221,19 @@ class LocalFiveMinuteBuilder:
         with self._lock:
             rows = list(self._history.get(key, ())) + ([self._candles[key]] if key in self._candles else [])
             return [self._as_dict(c, key=key, tick=StreamTick(exchange_type, token, time.time(), c.bucket_ms, c.close)) for c in rows[-limit:]]
+
+    def volume_stats(self) -> dict[str, Any]:
+        """Expose only measured volume validity; never infer it from price ticks."""
+        with self._lock:
+            rows = [c for history in self._history.values() for c in history]
+            rows.extend(self._candles.values())
+            valid = sum(1 for candle in rows if candle.volume_valid and candle.volume > 0)
+            invalid = sum(1 for candle in rows if not candle.volume_valid)
+        return {
+            "volume_actionable": valid > 0,
+            "valid_volume_candles": valid,
+            "invalid_volume_candles": invalid,
+        }
 
     def latest(self, exchange_type: int, token: str) -> dict[str, Any] | None:
         with self._lock:
@@ -263,6 +286,7 @@ class AngelOneMarketStream:
         self.candles = LocalFiveMinuteBuilder()
 
     def health(self) -> dict[str, Any]:
+        volume_stats = self.candles.volume_stats()
         with self._lock:
             age = time.time() - self._last_tick_at if self._last_tick_at else None
             return {
@@ -278,7 +302,7 @@ class AngelOneMarketStream:
                 "reconnects": self._reconnects,
                 "last_error": self._last_error,
                 "candle_source": "angel_one_websocket_v2",
-                "volume_actionable": False,
+                **volume_stats,
                 "order_execution": False,
             }
 
