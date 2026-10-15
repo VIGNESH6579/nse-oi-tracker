@@ -139,7 +139,6 @@ class LocalFiveMinuteBuilder:
     def __init__(self) -> None:
         self._candles: dict[tuple[int, str], _Candle] = {}
         self._history: dict[tuple[int, str], deque[_Candle]] = {}
-        self._volume_valid: dict[tuple[int, str], bool] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -223,6 +222,19 @@ class LocalFiveMinuteBuilder:
             rows = list(self._history.get(key, ())) + ([self._candles[key]] if key in self._candles else [])
             return [self._as_dict(c, key=key, tick=StreamTick(exchange_type, token, time.time(), c.bucket_ms, c.close)) for c in rows[-limit:]]
 
+    def volume_stats(self) -> dict[str, Any]:
+        """Expose only measured volume validity; never infer it from price ticks."""
+        with self._lock:
+            rows = [c for history in self._history.values() for c in history]
+            rows.extend(self._candles.values())
+            valid = sum(1 for candle in rows if candle.volume_valid and candle.volume > 0)
+            invalid = sum(1 for candle in rows if not candle.volume_valid)
+        return {
+            "volume_actionable": valid > 0,
+            "valid_volume_candles": valid,
+            "invalid_volume_candles": invalid,
+        }
+
     def latest(self, exchange_type: int, token: str) -> dict[str, Any] | None:
         with self._lock:
             candle = self._candles.get((exchange_type, token))
@@ -274,6 +286,7 @@ class AngelOneMarketStream:
         self.candles = LocalFiveMinuteBuilder()
 
     def health(self) -> dict[str, Any]:
+        volume_stats = self.candles.volume_stats()
         with self._lock:
             age = time.time() - self._last_tick_at if self._last_tick_at else None
             return {
@@ -289,7 +302,7 @@ class AngelOneMarketStream:
                 "reconnects": self._reconnects,
                 "last_error": self._last_error,
                 "candle_source": "angel_one_websocket_v2",
-                "volume_actionable": False,
+                **volume_stats,
                 "order_execution": False,
             }
 
