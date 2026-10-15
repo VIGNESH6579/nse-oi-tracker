@@ -73,6 +73,7 @@ class _Candle:
     ticks: int
     last_volume: int | None = None
     last_observed_at: float = 0.0
+    volume_valid: bool = True
     source: str = "angel_one_websocket_v2"
 
 
@@ -170,13 +171,23 @@ class LocalFiveMinuteBuilder:
                 self._candles[key] = candle
 
             if tick.volume is not None and tick.volume >= 0:
-                if candle.last_volume is not None and tick.volume < candle.last_volume:
-                    self._volume_valid[key] = False
                 previous_candle = self._history.get(key, deque())[-1] if self._history.get(key) else None
                 prior_volume = previous_candle.last_volume if previous_candle else None
-                if candle.last_volume is None and prior_volume is not None and tick.volume >= prior_volume:
-                    candle.volume += int(tick.volume - prior_volume)
-                elif candle.last_volume is not None and tick.volume >= candle.last_volume and self._volume_valid.get(key, True):
+                if candle.last_volume is None:
+                    if prior_volume is None:
+                        # We joined mid-candle without a baseline. Price is valid,
+                        # but this bar's full traded volume cannot be reconstructed.
+                        candle.volume_valid = False
+                    elif tick.volume >= prior_volume:
+                        candle.volume += int(tick.volume - prior_volume)
+                    else:
+                        # A session reset or provider counter reset makes this
+                        # candle's full volume unknowable. The next candle starts
+                        # a fresh validity state and can recover from a new baseline.
+                        candle.volume_valid = False
+                elif tick.volume < candle.last_volume:
+                    candle.volume_valid = False
+                elif candle.volume_valid:
                     candle.volume += int(tick.volume - candle.last_volume)
                 candle.last_volume = tick.volume
 
@@ -202,7 +213,7 @@ class LocalFiveMinuteBuilder:
             "volume": candle.volume,
             "ticks": candle.ticks,
             "source": candle.source,
-            "volume_valid": self._volume_valid.get(key, True),
+            "volume_valid": candle.volume_valid,
             "observed_at": candle.last_observed_at or tick.received_at,
         }
 
