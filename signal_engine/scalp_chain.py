@@ -86,6 +86,9 @@ class ScalpChainEngine:
         self._history_rotation = 0
         self._historical_fetch_count = 0
         self._historical_fetch_failures = 0
+        self._historical_provider_cooldown_until = 0.0
+        self._historical_provider_cooldown_reason = ""
+        self._historical_failure_reasons: dict[str, tuple[float, str]] = {}
         self._previous_chain: dict[str, dict[str, Any]] = {}
         self._open: dict[str, dict[str, Any]] = {}
         self._last_run_at = 0.0
@@ -239,6 +242,12 @@ class ScalpChainEngine:
         cached = self._historical_candle_cache.get(key)
         if cached and now_mono - cached[0] < HIST_CANDLE_TTL_S:
             return cached[1]
+        if now_mono < self._historical_provider_cooldown_until:
+            self._historical_failure_reasons[key] = (
+                self._historical_provider_cooldown_until,
+                self._historical_provider_cooldown_reason or "angel_historical_cooldown",
+            )
+            return []
         if self._historical_fetches_this_refresh >= HIST_CANDLE_MAX_CALLS_PER_REFRESH:
             return []
         if self.market_data is None or not self.market_data.configured:
@@ -257,7 +266,12 @@ class ScalpChainEngine:
                 candle["candle_source"] = "angel_one_historical_5m"
                 candles.append(candle)
             self._historical_fetch_count += 1
-            self._historical_candle_cache[key] = (time.monotonic(), candles)
+            completed_at = time.monotonic()
+            self._historical_candle_cache[key] = (completed_at, candles)
+            if candles:
+                self._historical_failure_reasons.pop(key, None)
+            else:
+                self._historical_failure_reasons[key] = (completed_at + 60.0, "historical_history_empty")
             while len(self._historical_candle_cache) > 80:
                 oldest = next(iter(self._historical_candle_cache))
                 self._historical_candle_cache.pop(oldest, None)
@@ -274,22 +288,35 @@ class ScalpChainEngine:
             # provider can be retried without hammering it every scan.
             message = str(exc).lower()
             provider_cooldown = isinstance(exc, AngelUnavailable)
-            if not provider_cooldown and (
+            rate_limited = not provider_cooldown and (
                 "403" in message or "429" in message or "rate" in message or "access rate" in message
-            ):
+            )
+            if rate_limited:
                 failure_reason = "angel_historical_rate_limited"
                 self._historical_fetch_failures += 1
+                negative_ttl = max(HIST_CANDLE_TTL_S, float(os.getenv("SCALP_HIST_RATE_LIMIT_TTL_S", "300")))
+                self._historical_provider_cooldown_until = max(
+                    self._historical_provider_cooldown_until, time.monotonic() + negative_ttl
+                )
+                self._historical_provider_cooldown_reason = failure_reason
             elif provider_cooldown:
                 failure_reason = "angel_historical_cooldown"
+                negative_ttl = max(60.0, float(os.getenv("SCALP_HIST_FAILURE_TTL_S", "120")))
+                self._historical_provider_cooldown_until = max(
+                    self._historical_provider_cooldown_until, time.monotonic() + negative_ttl
+                )
+                self._historical_provider_cooldown_reason = failure_reason
             else:
                 failure_reason = "angel_historical_request_failed"
                 self._historical_fetch_failures += 1
-            logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s reason=%s error=%s", key, failure_reason, type(exc).__name__)
-            negative_ttl = max(30.0, float(os.getenv("SCALP_HIST_FAILURE_TTL_S", "60")))
-            # Cache entries use the normal TTL. Backdate the negative entry so it
-            # expires after negative_ttl rather than holding an empty result for
-            # the full five-minute successful-candle TTL.
-            cache_stamp = time.monotonic() - max(0.0, HIST_CANDLE_TTL_S - negative_ttl)
+                negative_ttl = max(30.0, float(os.getenv("SCALP_HIST_FAILURE_TTL_S", "60")))
+            logger.warning("SCALP_HISTORICAL_CANDLES_FAILED symbol=%s reason=%s error=%s cooldown_s=%.0f",
+                           key, failure_reason, type(exc).__name__, negative_ttl)
+            self._historical_failure_reasons[key] = (time.monotonic() + negative_ttl, failure_reason)
+            # A provider rate limit is shared across symbols; do not retry a different
+            # name on the next minute's scan and compound the same upstream failure.
+            cache_ttl = min(HIST_CANDLE_TTL_S, negative_ttl)
+            cache_stamp = time.monotonic() - max(0.0, HIST_CANDLE_TTL_S - cache_ttl)
             self._historical_candle_cache[key] = (cache_stamp, [])
             return []
 
@@ -470,7 +497,18 @@ class ScalpChainEngine:
         else:
             direction = None
             if not volume_ok:
-                self._last_context_rejection = "volume_not_confirmed"
+                symbol_key = symbol.upper()
+                cached_history = self._historical_candle_cache.get(symbol_key)
+                failure = self._historical_failure_reasons.get(symbol_key)
+                now_mono = time.monotonic()
+                if failure and failure[0] > now_mono:
+                    self._last_context_rejection = failure[1]
+                elif cached_history is None and now_mono < self._historical_provider_cooldown_until:
+                    self._last_context_rejection = self._historical_provider_cooldown_reason or "angel_historical_cooldown"
+                elif cached_history is None and self._historical_fetches_this_refresh >= HIST_CANDLE_MAX_CALLS_PER_REFRESH:
+                    self._last_context_rejection = "historical_fetch_budget_deferred"
+                else:
+                    self._last_context_rejection = "volume_not_confirmed"
             elif (buy_breakout and not candle_shape_buy) or (sell_breakout and not candle_shape_sell):
                 self._last_context_rejection = "breakout_candle_weak"
             elif (close > or_high and close <= vwap) or (close < or_low and close >= vwap):
