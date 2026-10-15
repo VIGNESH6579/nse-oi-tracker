@@ -1545,6 +1545,7 @@ async def health():
             self_test.readiness() if self_test.readiness() != "UNTESTED"
             else (_startup_state if effective_last_scan_at else "UNTESTED")
         ),
+        "scalp_readiness": self_test.scalp_readiness(),
         "startup_state": _startup_state,
         "startup_ready_at_ist": _startup_ready_at_ist,
         "startup_error": _startup_error,
