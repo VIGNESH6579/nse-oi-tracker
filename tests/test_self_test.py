@@ -197,6 +197,20 @@ def test_scalp_failure_is_not_core_blocker(tmp_path):
     assert "scalp_chain" in result["failed"]
 
 
+def test_scalp_probe_failure_is_reported_separately_from_core_readiness(tmp_path):
+    st._latest.clear()
+    repo = _repo(tmp_path, ["A", "B", "C"])
+    probes = _probes("post_open", FakeAngel(), repo, ["A"])
+    probes["scalp_chain"] = lambda: (False, "option chain timeout")
+    result = st.run_stage("post_open", probes, NOW)
+
+    assert result["verdict"] == "DEGRADED"
+    assert result["core_verdict"] == "READY"
+    assert "scalp_chain" in result["optional_failed"]
+    assert st.readiness() == "READY"
+    assert st.scalp_readiness() == "DEGRADED"
+
+
 def test_readiness_recheck_can_recover_after_hours_without_restart(monkeypatch):
     import asyncio
     import app.main as main
