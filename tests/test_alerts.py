@@ -81,3 +81,13 @@ def test_scalp_lifecycle_alert_delivery_failure_is_reported_not_raised():
     assert result[0].channel == "ntfy"
     assert result[0].delivered is False
     assert "simulated timeout" in result[0].detail
+
+
+def test_failed_alert_delivery_retries_only_after_cooldown(tmp_path):
+    repository = SignalRepository(tmp_path / "tracker.sqlite3")
+    now = datetime(2026, 9, 10, 10, 0, tzinfo=IST)
+    assert repository.reserve_alert("retry-me", "ntfy", now) is True
+    repository.complete_alert("retry-me", delivered=False, detail="HTTP 503", observed_at=now)
+    assert repository.reserve_alert("retry-me", "ntfy", now.replace(minute=4)) is False
+    assert repository.reserve_alert("retry-me", "ntfy", now.replace(minute=5)) is True
+    assert repository.reserve_alert("retry-me", "ntfy", now.replace(minute=6)) is False
