@@ -846,7 +846,7 @@ class SignalRepository:
         return events
 
     def reserve_alert(self, alert_key: str, channel: str, observed_at: datetime) -> bool:
-        """Reserve an idempotent alert before network delivery."""
+        """Reserve an idempotent alert; retry failed delivery at most once per five minutes."""
         observed_at = as_ist(observed_at)
         with self._connect() as connection:
             cursor = connection.execute(
@@ -857,7 +857,29 @@ class SignalRepository:
                 """,
                 (alert_key, ist_trade_date(observed_at), channel, observed_at.isoformat()),
             )
-        return cursor.rowcount > 0
+            if cursor.rowcount > 0:
+                return True
+            existing = connection.execute(
+                "SELECT status, created_at_ist FROM alert_deliveries WHERE alert_key=?",
+                (alert_key,),
+            ).fetchone()
+            if existing is None or str(existing["status"] or "").upper() != "FAILED":
+                return False
+            try:
+                last_attempt = as_ist(datetime.fromisoformat(str(existing["created_at_ist"])))
+            except (TypeError, ValueError):
+                return False
+            if (observed_at - last_attempt).total_seconds() < 300:
+                return False
+            retry = connection.execute(
+                """
+                UPDATE alert_deliveries
+                SET status='PENDING', detail=NULL, created_at_ist=?, delivered_at_ist=NULL
+                WHERE alert_key=? AND status='FAILED'
+                """,
+                (observed_at.isoformat(), alert_key),
+            )
+            return retry.rowcount > 0
 
     def complete_alert(self, alert_key: str, *, delivered: bool, detail: str, observed_at: datetime) -> None:
         """Record a delivery result without exposing endpoint secrets."""
