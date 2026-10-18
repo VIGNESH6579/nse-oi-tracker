@@ -575,8 +575,8 @@ def _dispatch_scalp_lifecycle_alerts(before_open: dict[str, dict], after_open: d
                     f"PAPER ENTRY | {symbol} {position.get('direction')} | "
                     f"{position.get('option_type')} {position.get('strike')} {position.get('expiry')} | "
                     f"Underlying ₹{float(position.get('underlying_entry') or 0):.2f} | "
-                    f"Option ₹{entry:.2f} | SL premium ₹{stop if stop is not None else 'n/a'} | "
-                    f"Target reference ₹{target if target is not None else 'n/a'} | "
+                    f"Option ₹{entry:.2f} | Protective stop reference ₹{stop if stop is not None else 'n/a'} | "
+                    f"Trailing activation reference ₹{target if target is not None else 'n/a'} (not a fixed take-profit) | "
                     f"{observed_at.strftime('%H:%M:%S')} IST. Paper-only; no order placed."
                 ),
                 "direction": position.get("direction"), "option_type": position.get("option_type"),
