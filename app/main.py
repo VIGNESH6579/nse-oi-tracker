@@ -525,6 +525,8 @@ def _dispatch_scalp_lifecycle_alerts(before_open: dict[str, dict], after_open: d
         return
     observed_at = now_ist()
     trade_date = ist_trade_date(observed_at)
+    stop_pct = max(0.0, float(os.getenv("SCALP_OPTION_STOP_PCT", "30")))
+    target_pct = max(0.0, float(os.getenv("SCALP_OPTION_TARGET_PCT", "20")))
     channels = (
         ("webhook", settings.alert_webhook_url),
         ("ntfy", settings.ntfy_topic_url),
@@ -564,8 +566,8 @@ def _dispatch_scalp_lifecycle_alerts(before_open: dict[str, dict], after_open: d
     for symbol, position in after_open.items():
         if symbol not in before_open:
             entry = float(position.get("entry_option_ltp") or 0)
-            stop = round(entry * (1 - float(getattr(scalp_engine, "OPTION_STOP_PCT", 30)) / 100), 2) if entry > 0 else None
-            target = round(entry * (1 + float(getattr(scalp_engine, "OPTION_TARGET_PCT", 20)) / 100), 2) if entry > 0 else None
+            stop = round(entry * (1 - stop_pct / 100), 2) if entry > 0 else None
+            target = round(entry * (1 + target_pct / 100), 2) if entry > 0 else None
             deliver({
                 "event": "ENTRY", "event_id": position.get("id"), "symbol": symbol,
                 "title": f"PAPER SCALP ENTRY: {symbol}",
@@ -638,16 +640,21 @@ async def scheduled_scalp_refresh() -> None:
     _scheduler_heartbeat_at_ist = now_ist().isoformat()
     if SIGNAL_MODE != "scalp_chain":
         return
+    before_open = {symbol: dict(position) for symbol, position in scalp_engine._open.items()}
     try:
-        # Snapshot only the engine's already-loaded paper state; no extra market-data calls.
-        before_open = {symbol: dict(position) for symbol, position in scalp_engine._open.items()}
         # Still closes positions as unpriced if a restart/feed outage carries the engine
         # beyond 15:15 or the market is already closed.
         await asyncio.to_thread(scalp_engine.refresh)
-        after_open = {symbol: dict(position) for symbol, position in scalp_engine._open.items()}
-        await asyncio.to_thread(_dispatch_scalp_lifecycle_alerts, before_open, after_open)
     except Exception:
         logger.exception("Scheduled scalp-chain refresh failed")
+    finally:
+        # Even if an unrelated scan step raises after a close/entry was persisted,
+        # lifecycle notification is attempted. Delivery failures never stop monitoring.
+        after_open = {symbol: dict(position) for symbol, position in scalp_engine._open.items()}
+        try:
+            await asyncio.to_thread(_dispatch_scalp_lifecycle_alerts, before_open, after_open)
+        except Exception:
+            logger.exception("Scheduled scalp lifecycle notification processing failed")
 
 
 async def scheduled_confirmed_signal_cleanup() -> None:
