@@ -80,3 +80,37 @@ def dispatch_candidate_alert(
         )
         results.append(AlertDelivery("telegram", result.delivered, result.detail))
     return results
+
+
+def dispatch_lifecycle_alert(
+    event: dict[str, Any], *, webhook_url: str | None, ntfy_topic_url: str | None,
+    telegram_bot_token: str | None = None, telegram_chat_id: str | None = None,
+    sender: Sender | None = None,
+) -> list[AlertDelivery]:
+    """Deliver paper scalp lifecycle events without implying a live order."""
+    if not webhook_url and not ntfy_topic_url and not (telegram_bot_token and telegram_chat_id):
+        return []
+    sender = sender or cffi_requests.Session(impersonate="chrome120")
+    event_type = str(event.get("event") or "SCALP_UPDATE").upper()
+    symbol = str(event.get("symbol") or "UNKNOWN").upper()
+    title = str(event.get("title") or f"NSE paper scalp {event_type}: {symbol}")
+    message = str(event.get("message") or f"{event_type}: {symbol}. Paper-only; not an order instruction.")
+    payload = {**event, "event": event_type, "symbol": symbol, "title": title,
+               "message": message, "paper_only": True, "live_order": False}
+    results: list[AlertDelivery] = []
+    if webhook_url:
+        result = _post(sender, webhook_url, json.dumps(payload, default=str),
+                       {"Content-Type": "application/json"})
+        results.append(AlertDelivery("webhook", result.delivered, result.detail))
+    if ntfy_topic_url:
+        result = _post(sender, ntfy_topic_url, message, {
+            "Title": title, "Tags": "chart_with_upwards_trend" if event_type == "ENTRY" else "warning",
+            "Priority": "high" if event_type == "EXIT" else "default",
+        })
+        results.append(AlertDelivery("ntfy", result.delivered, result.detail))
+    if telegram_bot_token and telegram_chat_id:
+        result = _post(sender, f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage",
+                       json.dumps({"chat_id": telegram_chat_id, "text": message}),
+                       {"Content-Type": "application/json"})
+        results.append(AlertDelivery("telegram", result.delivered, result.detail))
+    return results

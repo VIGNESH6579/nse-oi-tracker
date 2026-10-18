@@ -71,7 +71,7 @@ from signal_engine.quality import apply_daily_technical_context, apply_intraday_
 from signal_engine.scalp_chain import ScalpChainEngine
 from analytics.market_overview import normalize_market_overview
 from analytics.backtest import summarize_candidate_backtest
-from alerts.dispatcher import dispatch_candidate_alert
+from alerts.dispatcher import dispatch_candidate_alert, dispatch_lifecycle_alert
 from analytics.sectors import attach_sector, known_sectors
 from analytics.traps import trap_risk
 from analytics.sources import public_source_inventory
@@ -519,18 +519,142 @@ async def scheduled_refresh() -> None:
     except Exception:
         logger.exception("Scheduled swing OI refresh failed")
 
+def _dispatch_scalp_lifecycle_alerts(before_open: dict[str, dict], after_open: dict[str, dict]) -> None:
+    """Notify once for paper entry, first weakening observation, and recorded exit."""
+    if not (settings.alert_webhook_url or settings.ntfy_topic_url or settings.telegram_bot_token):
+        return
+    observed_at = now_ist()
+    trade_date = ist_trade_date(observed_at)
+    stop_pct = max(0.0, float(os.getenv("SCALP_OPTION_STOP_PCT", "30")))
+    target_pct = max(0.0, float(os.getenv("SCALP_OPTION_TARGET_PCT", "20")))
+    channels = (
+        ("webhook", settings.alert_webhook_url),
+        ("ntfy", settings.ntfy_topic_url),
+        ("telegram", settings.telegram_bot_token),
+    )
+
+    def deliver(event: dict) -> None:
+        event_type = str(event.get("event") or "UPDATE").upper()
+        event_id = str(event.get("event_id") or event.get("id") or event.get("symbol") or "unknown")
+        for channel, endpoint in channels:
+            if not endpoint:
+                continue
+            key = f"scalp:{trade_date}:{event_id}:{event_type}:{channel}"
+            try:
+                if not repository.reserve_alert(key, channel, observed_at):
+                    continue
+                outcomes = dispatch_lifecycle_alert(
+                    event,
+                    webhook_url=endpoint if channel == "webhook" else None,
+                    ntfy_topic_url=endpoint if channel == "ntfy" else None,
+                    telegram_bot_token=endpoint if channel == "telegram" else None,
+                    telegram_chat_id=settings.telegram_chat_id if channel == "telegram" else None,
+                )
+                outcome = next((item for item in outcomes if item.channel == channel), None)
+                if outcome is None:
+                    repository.complete_alert(key, delivered=False, detail="channel_not_dispatched", observed_at=observed_at)
+                    continue
+                repository.complete_alert(key, delivered=outcome.delivered, detail=outcome.detail, observed_at=observed_at)
+                if not outcome.delivered:
+                    logger.warning("SCALP_ALERT_DELIVERY_FAILED event=%s symbol=%s channel=%s detail=%s",
+                                   event_type, event.get("symbol"), channel, outcome.detail)
+            except Exception:
+                # Notification failures must never interrupt market scanning or position monitoring.
+                logger.exception("SCALP_ALERT_FAILED event=%s symbol=%s channel=%s",
+                                 event_type, event.get("symbol"), channel)
+
+    for symbol, position in after_open.items():
+        if symbol not in before_open:
+            entry = float(position.get("entry_option_ltp") or 0)
+            stop = round(entry * (1 - stop_pct / 100), 2) if entry > 0 else None
+            target = round(entry * (1 + target_pct / 100), 2) if entry > 0 else None
+            deliver({
+                "event": "ENTRY", "event_id": position.get("id"), "symbol": symbol,
+                "title": f"PAPER SCALP ENTRY: {symbol}",
+                "message": (
+                    f"PAPER ENTRY | {symbol} {position.get('direction')} | "
+                    f"{position.get('option_type')} {position.get('strike')} {position.get('expiry')} | "
+                    f"Underlying ₹{float(position.get('underlying_entry') or 0):.2f} | "
+                    f"Option ₹{entry:.2f} | Protective stop reference ₹{stop if stop is not None else 'n/a'} | "
+                    f"Trailing activation reference ₹{target if target is not None else 'n/a'} (not a fixed take-profit) | "
+                    f"{observed_at.strftime('%H:%M:%S')} IST. Paper-only; no order placed."
+                ),
+                "direction": position.get("direction"), "option_type": position.get("option_type"),
+                "strike": position.get("strike"), "expiry": position.get("expiry"),
+                "entry_option_ltp": entry, "underlying_entry": position.get("underlying_entry"),
+                "paper_only": True,
+            })
+        else:
+            old_weak = int(before_open[symbol].get("_weak_signal_count") or 0)
+            new_weak = int(position.get("_weak_signal_count") or 0)
+            if old_weak < 1 <= new_weak:
+                deliver({
+                    "event": "WEAKENING", "event_id": position.get("id"), "symbol": symbol,
+                    "title": f"PAPER SCALP WEAKENING: {symbol}",
+                    "message": (
+                        f"WEAKENING | {symbol} {position.get('direction')} | "
+                        f"{position.get('option_type')} {position.get('strike')} {position.get('expiry')} | "
+                        f"Underlying momentum/VWAP/opening-range check weakened. Review the position; "
+                        f"this is an advisory warning, not an automatic exit. {observed_at.strftime('%H:%M:%S')} IST."
+                    ),
+                    "direction": position.get("direction"), "option_type": position.get("option_type"),
+                    "strike": position.get("strike"), "expiry": position.get("expiry"),
+                    "weak_signal_count": new_weak, "paper_only": True,
+                })
+
+    exited = set(before_open) - set(after_open)
+    if exited:
+        try:
+            rows = repository.scalp_events_for_date(trade_date)
+            by_id = {str(row.get("id")): row for row in rows}
+            for symbol in sorted(exited):
+                previous = before_open[symbol]
+                row = by_id.get(str(previous.get("id")), {})
+                exit_price = row.get("exit_option_ltp")
+                pnl_pct = row.get("pnl_pct")
+                exit_text = f"₹{float(exit_price):.2f}" if exit_price is not None else "UNPRICED"
+                pnl_text = f"{float(pnl_pct):+.2f}%" if pnl_pct is not None else "unknown (no valid exit quote)"
+                deliver({
+                    "event": "EXIT", "event_id": previous.get("id"), "symbol": symbol,
+                    "title": f"PAPER SCALP EXIT: {symbol}",
+                    "message": (
+                        f"PAPER EXIT | {symbol} {previous.get('direction')} | "
+                        f"{previous.get('option_type')} {previous.get('strike')} {previous.get('expiry')} | "
+                        f"Exit option premium: {exit_text} | Paper premium change: {pnl_text} | "
+                        f"Reason: {row.get('exit_reason') or 'position closed'} | "
+                        f"Hold: {row.get('hold_minutes', 'n/a')} min | "
+                        f"{observed_at.strftime('%H:%M:%S')} IST. Paper result only; not a real fill."
+                    ),
+                    "direction": previous.get("direction"), "option_type": previous.get("option_type"),
+                    "strike": previous.get("strike"), "expiry": previous.get("expiry"),
+                    "exit_option_ltp": exit_price, "pnl_pct": pnl_pct,
+                    "exit_reason": row.get("exit_reason"), "paper_only": True,
+                })
+        except Exception:
+            logger.exception("Could not build scalp exit notification from persisted event history")
+
+
 async def scheduled_scalp_refresh() -> None:
-    """Monitor paper scalps on schedule; the engine itself gates market-hour entries."""
+    """Monitor paper scalps and notify on lifecycle changes without blocking the scan."""
     global _scheduler_heartbeat_at_ist
     _scheduler_heartbeat_at_ist = now_ist().isoformat()
     if SIGNAL_MODE != "scalp_chain":
         return
+    before_open = {symbol: dict(position) for symbol, position in scalp_engine._open.items()}
     try:
-        # The monitor must still close same-day positions as unpriced when a restart/feed
-        # outage carries the engine beyond 15:15 or the market is already closed.
+        # Still closes positions as unpriced if a restart/feed outage carries the engine
+        # beyond 15:15 or the market is already closed.
         await asyncio.to_thread(scalp_engine.refresh)
     except Exception:
         logger.exception("Scheduled scalp-chain refresh failed")
+    finally:
+        # Even if an unrelated scan step raises after a close/entry was persisted,
+        # lifecycle notification is attempted. Delivery failures never stop monitoring.
+        after_open = {symbol: dict(position) for symbol, position in scalp_engine._open.items()}
+        try:
+            await asyncio.to_thread(_dispatch_scalp_lifecycle_alerts, before_open, after_open)
+        except Exception:
+            logger.exception("Scheduled scalp lifecycle notification processing failed")
 
 
 async def scheduled_confirmed_signal_cleanup() -> None:
