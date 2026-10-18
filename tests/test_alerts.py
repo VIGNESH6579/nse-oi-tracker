@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from alerts.dispatcher import dispatch_candidate_alert
+from alerts.dispatcher import dispatch_candidate_alert, dispatch_lifecycle_alert
 from database.repository import SignalRepository
 from utils.time import IST
 
@@ -47,3 +47,37 @@ def test_telegram_alert_is_opt_in_and_does_not_put_token_in_payload():
     assert result[0].channel == "telegram"
     assert "not-a-real-token" in sender.calls[0][0]
     assert "not-a-real-token" not in sender.calls[0][1]
+
+
+def test_scalp_lifecycle_alert_is_paper_only_and_uses_configured_channel():
+    sender = FakeSender()
+    result = dispatch_lifecycle_alert(
+        {
+            "event": "EXIT", "symbol": "RELIANCE", "event_id": 42,
+            "title": "PAPER SCALP EXIT: RELIANCE",
+            "message": "PAPER EXIT | RELIANCE | Exit premium: UNPRICED",
+            "exit_reason": "CLOCK", "paper_only": True,
+        },
+        webhook_url=None, ntfy_topic_url="https://ntfy.sh/example", sender=sender,
+    )
+    assert len(result) == 1
+    assert result[0].channel == "ntfy"
+    assert result[0].delivered is True
+    assert sender.calls[0][1] == "PAPER EXIT | RELIANCE | Exit premium: UNPRICED"
+    assert sender.calls[0][2]["Priority"] == "high"
+    assert sender.calls[0][3] == 10
+
+
+def test_scalp_lifecycle_alert_delivery_failure_is_reported_not_raised():
+    class BrokenSender:
+        def post(self, url, *, data, headers, timeout):
+            raise TimeoutError("simulated timeout")
+
+    result = dispatch_lifecycle_alert(
+        {"event": "WEAKENING", "symbol": "YESBANK", "message": "Review paper position"},
+        webhook_url=None, ntfy_topic_url="https://ntfy.sh/example", sender=BrokenSender(),
+    )
+    assert len(result) == 1
+    assert result[0].channel == "ntfy"
+    assert result[0].delivered is False
+    assert "simulated timeout" in result[0].detail
