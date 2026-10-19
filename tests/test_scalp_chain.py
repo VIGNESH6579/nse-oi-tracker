@@ -622,3 +622,46 @@ def test_entry_window_uses_exact_second_boundary():
     assert scalp._in_window(end, "09:30", "15:00")
     assert not scalp._in_window(end.replace(second=1), "09:30", "15:00")
     assert not scalp._in_window(end.replace(microsecond=1), "09:30", "15:00")
+
+
+
+def test_open_trade_monitor_persists_fresh_underlying_and_option_snapshot(monkeypatch):
+    now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
+
+    class MonitorRepo(ExitRepo):
+        def __init__(self):
+            super().__init__()
+            self.snapshots = []
+
+        def record_scalp_monitor_snapshot(self, event_id, **kwargs):
+            self.snapshots.append({"event_id": event_id, **kwargs})
+
+    repo = MonitorRepo()
+    engine = scalp.ScalpChainEngine(FakeMarket(), ExitStream(), repo)
+    _open_position(engine)
+    monkeypatch.setattr(scalp, "now_ist", lambda: now)
+    monkeypatch.setattr(engine, "_underlying_context", lambda symbol: {
+        "ltp": 102.0, "vwap": 101.0, "momentum_pct": 0.4,
+        "or_high": 101.0, "or_low": 98.0, "relative_volume": 1.8,
+        "volume_ok": True, "last_volume": 180, "median_volume": 100,
+        "candle_age_s": 1.0, "candle_source": "angel_one_websocket_v2",
+        "volume_source": "angel_one_websocket_v2", "data_frequency": "FIVE_MINUTE",
+    })
+    monkeypatch.setattr(engine, "_chain", lambda symbol, *, spot, force_refresh=False: {
+        "expiry": "27OCT2026",
+        "rows": [{
+            "strike": 100.0, "option_type": "CE", "ltp": 5.2, "oi": 12000,
+            "volume": 500, "best_bid": 5.15, "best_ask": 5.2,
+            "bid_qty": 300, "ask_qty": 350,
+        }],
+    })
+
+    engine._manage_open()
+
+    assert len(repo.snapshots) == 1
+    saved = repo.snapshots[0]
+    assert saved["event_id"] == 10
+    assert saved["status"] == "MONITORING"
+    assert saved["snapshot"]["underlying"]["momentum_pct"] == 0.4
+    assert saved["snapshot"]["option"]["ltp"] == 5.2
+    assert saved["snapshot"]["mark_pnl_pct"] == 4.0
