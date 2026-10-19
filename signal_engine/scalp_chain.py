@@ -54,10 +54,14 @@ def _clock(value: str) -> tuple[int, int]:
 
 
 def _in_window(now: datetime, start: str, end: str) -> bool:
-    current = now.hour * 60 + now.minute
+    # Compare the actual clock time, not just the minute. Minute-only checks
+    # accidentally allowed new entries until 15:00:59 when ENTRY_END=15:00.
+    current = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1_000_000
     sh, sm = _clock(start)
     eh, em = _clock(end)
-    return sh * 60 + sm <= current <= eh * 60 + em
+    start_seconds = sh * 3600 + sm * 60
+    end_seconds = eh * 3600 + em * 60
+    return start_seconds <= current <= end_seconds
 
 
 def _before(now: datetime, value: str) -> bool:
