@@ -1817,6 +1817,25 @@ async def scalp_quality_samples(
     }
 
 
+@app.get("/api/scalp/monitor-history/{event_id}")
+async def scalp_monitor_history(
+    event_id: int,
+    limit: int = Query(200, ge=1, le=500),
+):
+    """Timestamped monitor observations for one paper scalp event."""
+    snapshots = await asyncio.to_thread(
+        repository.scalp_monitor_snapshots_for_event,
+        event_id,
+        limit=limit,
+    )
+    return {
+        "paper_only": True,
+        "event_id": event_id,
+        "count": len(snapshots),
+        "snapshots": snapshots,
+    }
+
+
 @app.get("/api/oi-signals")
 async def oi_signals(
     refresh:      bool  = Query(False, description="Force fresh NSE fetch"),

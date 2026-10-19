@@ -145,6 +145,20 @@ class SignalRepository:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_scalp_quality_samples_id ON scalp_quality_samples(id DESC)"
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS scalp_monitor_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id INTEGER NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    observed_at_ist TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scalp_monitor_event_time ON scalp_monitor_snapshots(event_id, id DESC)"
+            )
             self._repair_scalp_event_integrity(connection)
 
     def _initialize(self) -> None:
@@ -353,6 +367,19 @@ class SignalRepository:
 
                 CREATE INDEX IF NOT EXISTS idx_scalp_quality_samples_id
                     ON scalp_quality_samples(id DESC);
+
+                CREATE TABLE IF NOT EXISTS scalp_monitor_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id INTEGER NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    observed_at_ist TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scalp_monitor_event_time
+                    ON scalp_monitor_snapshots(event_id, id DESC);
 
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER NOT NULL
@@ -726,6 +753,65 @@ class SignalRepository:
                            SELECT id FROM scalp_quality_samples ORDER BY id DESC LIMIT 100
                        )"""
                 )
+
+    def record_scalp_monitor_snapshot(
+        self,
+        event_id: int,
+        *,
+        trade_date: str,
+        symbol: str,
+        observed_at_ist: str,
+        status: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Persist one timestamped, read-only observation for an open paper scalp."""
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO scalp_monitor_snapshots
+                   (event_id, trade_date, symbol, observed_at_ist, status, snapshot_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    int(event_id), str(trade_date), str(symbol).upper(),
+                    str(observed_at_ist), str(status),
+                    json.dumps(snapshot, separators=(",", ":"), default=str),
+                ),
+            )
+            # Bound SQLite growth on Render Free while retaining a useful rolling
+            # audit trail. At most 20,000 monitoring observations are kept.
+            connection.execute(
+                """DELETE FROM scalp_monitor_snapshots
+                   WHERE id NOT IN (
+                       SELECT id FROM scalp_monitor_snapshots ORDER BY id DESC LIMIT 20000
+                   )"""
+            )
+
+    def scalp_monitor_snapshots_for_event(self, event_id: int, *, limit: int = 200) -> list[dict[str, Any]]:
+        """Return a single trade's latest monitor observations in chronological order."""
+        safe_limit = max(1, min(500, int(limit)))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, event_id, trade_date, symbol, observed_at_ist, status, snapshot_json
+                   FROM scalp_monitor_snapshots
+                   WHERE event_id=?
+                   ORDER BY id DESC LIMIT ?""",
+                (int(event_id), safe_limit),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in reversed(rows):
+            try:
+                snapshot = json.loads(str(row["snapshot_json"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                snapshot = {}
+            result.append({
+                "id": int(row["id"]),
+                "event_id": int(row["event_id"]),
+                "trade_date": str(row["trade_date"]),
+                "symbol": str(row["symbol"]),
+                "observed_at_ist": str(row["observed_at_ist"]),
+                "status": str(row["status"]),
+                "snapshot": snapshot if isinstance(snapshot, dict) else {},
+            })
+        return result
 
     def scalp_quality_samples(self, *, symbol: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """Return recent per-trade feature samples for a read-only quality audit."""

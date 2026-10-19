@@ -937,6 +937,84 @@ class ScalpChainEngine:
         )
         self._open.pop(symbol, None)
 
+    def _record_monitor_snapshot(
+        self,
+        symbol: str,
+        position: dict[str, Any],
+        now: datetime,
+        *,
+        underlying: dict[str, Any] | None,
+        tick: dict[str, Any] | None,
+        chain: dict[str, Any] | None,
+        option_ltp: float | None,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        """Persist the exact data used to monitor an open paper trade; never block exits."""
+        recorder = getattr(self.repository, "record_scalp_monitor_snapshot", None)
+        if not callable(recorder):
+            return
+        try:
+            underlying_keys = (
+                "ltp", "vwap", "momentum_pct", "relative_volume", "volume_ok",
+                "last_volume", "median_volume", "or_high", "or_low",
+                "candle_age_s", "candle_source", "volume_source", "data_frequency",
+            )
+            underlying_snapshot = {
+                key: underlying.get(key) for key in underlying_keys
+            } if isinstance(underlying, dict) else {}
+            option_row = None
+            if chain and str(chain.get("expiry") or "").replace(" ", "").upper() == str(position.get("expiry") or "").replace(" ", "").upper():
+                option_row = next(
+                    (
+                        row for row in (chain.get("rows") or [])
+                        if row.get("option_type") == position.get("option_type")
+                        and float(row.get("strike") or 0) == float(position.get("strike") or 0)
+                    ),
+                    None,
+                )
+            option_keys = (
+                "strike", "option_type", "ltp", "oi", "volume", "best_bid",
+                "best_ask", "bid_qty", "ask_qty", "token", "symbol",
+            )
+            option_snapshot = {
+                key: option_row.get(key) for key in option_keys
+            } if isinstance(option_row, dict) else {}
+            try:
+                entry_ltp = float(position.get("entry_option_ltp") or 0)
+            except (TypeError, ValueError):
+                entry_ltp = 0.0
+            mark = float(option_ltp) if option_ltp is not None else 0.0
+            snapshot = {
+                "direction": position.get("direction"),
+                "underlying": underlying_snapshot,
+                "tick": {
+                    "ltp": (tick or {}).get("ltp"),
+                    "tick_age_s": (tick or {}).get("tick_age_s"),
+                    "source": (tick or {}).get("source"),
+                },
+                "option": option_snapshot,
+                "option_quote_available": mark > 0,
+                "entry_option_ltp": entry_ltp,
+                "mark_option_ltp": mark if mark > 0 else None,
+                "mark_pnl_pct": round((mark - entry_ltp) / entry_ltp * 100.0, 4) if mark > 0 and entry_ltp > 0 else None,
+                "weak_signal_count": int(position.get("_weak_signal_count") or 0),
+                "trailing_armed": bool(position.get("_trailing_armed")),
+                "peak_option_ltp": position.get("_peak_option_ltp"),
+                "reason": reason,
+                "quote_error": self._last_error if mark <= 0 else None,
+            }
+            recorder(
+                int(position["id"]),
+                trade_date=str(position.get("trade_date") or now.date().isoformat()),
+                symbol=symbol,
+                observed_at_ist=now.isoformat(),
+                status=status,
+                snapshot=snapshot,
+            )
+        except Exception as exc:
+            logger.warning("SCALP_MONITOR_SNAPSHOT_FAILED symbol=%s error=%s", symbol, type(exc).__name__)
+
     def _manage_open(self) -> None:
         if not self._open:
             return
@@ -999,6 +1077,10 @@ class ScalpChainEngine:
                 position["_last_pnl_pct"] = round((option_ltp - entry_ltp) / entry_ltp * 100.0, 3) if entry_ltp else None
 
             if due_reason is not None:
+                self._record_monitor_snapshot(
+                    symbol, position, now, underlying=underlying, tick=tick, chain=chain,
+                    option_ltp=option_ltp, status="EXIT_TRIGGERED", reason=due_reason,
+                )
                 quote_note = None
                 if not quote_window:
                     quote_note = "exit deadline was handled outside the regular market quote window"
@@ -1020,8 +1102,19 @@ class ScalpChainEngine:
             # monitoring cycle; do not substitute the entry price. A fresh option mark
             # still allows premium stop/target checks if candle context is missing.
             if option_ltp is None:
+                self._record_monitor_snapshot(
+                    symbol, position, now, underlying=underlying, tick=tick, chain=chain,
+                    option_ltp=None, status="OPTION_QUOTE_UNAVAILABLE",
+                    reason=self._last_error or "exact_option_quote_missing",
+                )
                 continue
             reason = self._exit_reason(position, underlying, option_ltp, now)
+            self._record_monitor_snapshot(
+                symbol, position, now, underlying=underlying, tick=tick, chain=chain,
+                option_ltp=option_ltp,
+                status="EXIT_TRIGGERED" if reason else "MONITORING",
+                reason=reason,
+            )
             if reason:
                 self._close_paper_position(
                     symbol, position, now, reason, underlying=underlying,
