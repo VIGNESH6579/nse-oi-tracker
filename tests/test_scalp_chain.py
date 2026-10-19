@@ -596,3 +596,19 @@ def test_invalid_websocket_volume_is_repaired_from_real_historical_candles(monke
     assert context["volume_ok"] is True
     assert context["volume_source"] == "angel_one_historical_5m"
     assert context["relative_volume"] >= 1.2
+
+
+
+def test_health_exposes_per_symbol_fresh_tick_coverage(monkeypatch):
+    stream = RankingStream()
+    engine = scalp.ScalpChainEngine(FakeMarket(), stream, FakeRepo())
+    engine._last_run_stats = {
+        "gainer_symbols": ["AAA", "CCC"],
+        "loser_symbols": ["BBB", "DDD"],
+        "at": "2026-10-07T10:00:00+05:30",
+    }
+    health = engine.health()
+    assert health["ranked_symbols_last_scan"] == 4
+    assert health["ranked_symbols_fresh_ticks_now"] == 4
+    assert health["ranked_symbols_without_fresh_ticks_now"] == 0
+    assert health["ranked_symbol_tick_freshness"]["AAA"]["status"] == "fresh"
