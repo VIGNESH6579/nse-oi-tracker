@@ -1793,6 +1793,30 @@ async def scalp_history_today():
     }
 
 
+@app.get("/api/scalp/quality-samples")
+async def scalp_quality_samples(
+    symbol: str = Query("", max_length=32),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """Read-only rolling per-trade entry-feature samples for quality audits."""
+    samples = await asyncio.to_thread(
+        repository.scalp_quality_samples,
+        symbol=symbol or None,
+        limit=limit,
+    )
+    return {
+        "mode": SIGNAL_MODE,
+        "paper_only": True,
+        "pnl_basis": "quoted_option_premium_before_costs_not_realized_pnl",
+        "timestamp_note": (
+            "Rolling quality samples do not retain trade timestamps; cross-reference "
+            "symbol, entry/exit premium and P&L with /api/scalp/history/today."
+        ),
+        "count": len(samples),
+        "samples": samples,
+    }
+
+
 @app.get("/api/oi-signals")
 async def oi_signals(
     refresh:      bool  = Query(False, description="Force fresh NSE fetch"),
