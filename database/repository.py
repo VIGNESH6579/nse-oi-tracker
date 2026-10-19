@@ -727,6 +727,46 @@ class SignalRepository:
                        )"""
                 )
 
+    def scalp_quality_samples(self, *, symbol: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent per-trade feature samples for a read-only quality audit."""
+        safe_limit = max(1, min(100, int(limit)))
+        normalized = str(symbol or "").strip().upper()
+        with self._connect() as connection:
+            if normalized:
+                rows = connection.execute(
+                    """SELECT id, symbol, direction, entry_option_ltp, exit_option_ltp,
+                              pnl_pct, exit_reason, signal_quality_json
+                       FROM scalp_quality_samples
+                       WHERE upper(symbol)=?
+                       ORDER BY id DESC LIMIT ?""",
+                    (normalized, safe_limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT id, symbol, direction, entry_option_ltp, exit_option_ltp,
+                              pnl_pct, exit_reason, signal_quality_json
+                       FROM scalp_quality_samples
+                       ORDER BY id DESC LIMIT ?""",
+                    (safe_limit,),
+                ).fetchall()
+        samples: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                quality = json.loads(str(row["signal_quality_json"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                quality = {}
+            samples.append({
+                "sample_id": int(row["id"]),
+                "symbol": str(row["symbol"]),
+                "direction": str(row["direction"]),
+                "entry_option_ltp": float(row["entry_option_ltp"] or 0),
+                "exit_option_ltp": float(row["exit_option_ltp"] or 0),
+                "pnl_pct": float(row["pnl_pct"] or 0),
+                "exit_reason": str(row["exit_reason"] or ""),
+                "signal_quality": quality if isinstance(quality, dict) else {},
+            })
+        return samples
+
     def scalp_quality_summary(self) -> dict[str, Any]:
         """Summarize the rolling priced outcomes without exposing day-wise history."""
         with self._connect() as connection:
