@@ -659,17 +659,31 @@ class SignalRepository:
                 (int(event_id),),
             ).fetchone()
             signal_quality = None
+            entry_payload: dict[str, Any] = {}
             entry_ltp = 0.0
             if entry_row is not None:
                 try:
-                    entry_payload = json.loads(str(entry_row["payload_json"] or "{}"))
+                    decoded_payload = json.loads(str(entry_row["payload_json"] or "{}"))
+                    entry_payload = decoded_payload if isinstance(decoded_payload, dict) else {}
                     signal_quality = entry_payload.get("signal_quality")
                 except (TypeError, ValueError, json.JSONDecodeError):
+                    entry_payload = {}
                     signal_quality = None
                 try:
                     entry_ltp = float(entry_row["entry_option_ltp"] or 0)
                 except (TypeError, ValueError):
                     entry_ltp = 0.0
+
+            # Closing an event must not erase the evidence that authorized the
+            # entry. Keep the close/P&L fields and add a compact, per-trade entry
+            # snapshot so the dashboard/API can audit winners and losers later.
+            close_payload = dict(payload or {})
+            if isinstance(signal_quality, dict):
+                close_payload.setdefault("entry_signal_quality", signal_quality)
+                close_payload.setdefault("entry_rule_ids", entry_payload.get("rule_ids") or [])
+                snapshot_id = entry_payload.get("chain_snapshot_id")
+                if snapshot_id:
+                    close_payload.setdefault("entry_chain_snapshot_id", snapshot_id)
 
             connection.execute(
                 """UPDATE scalp_events
@@ -682,7 +696,7 @@ class SignalRepository:
                     float(underlying_exit) if underlying_exit is not None else None,
                     float(exit_option_ltp) if exit_option_ltp is not None else None,
                     float(hold_minutes), str(exit_reason),
-                    json.dumps(payload or {}, separators=(",", ":")), int(event_id),
+                    json.dumps(close_payload, separators=(",", ":"), default=str), int(event_id),
                 ),
             )
 
