@@ -1,4 +1,6 @@
-import json\n\nfrom database.repository import SignalRepository
+import json
+
+from database.repository import SignalRepository
 
 
 def _save_closed_trade(repository, *, symbol, entry_time, entry_price, exit_price, quality, reason="MOMENTUM_WEAK"):
