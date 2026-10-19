@@ -82,3 +82,30 @@ def test_rolling_quality_summary_compares_winners_and_losers_without_daywise_arc
     # compact 100-trade rolling sample survives for signal-quality evaluation.
     repository.scalp_events_for_date("2026-10-08")
     assert repository.scalp_quality_summary()["sample_size"] == 2
+
+
+
+def test_individual_quality_samples_can_be_inspected_by_symbol(tmp_path):
+    repository = SignalRepository(tmp_path / "quality-inspection.sqlite3")
+    quality = {
+        "version": "scalp-quality-v2",
+        "underlying": {"relative_volume": 2.1, "momentum_pct": -0.4, "candle_age_s": 5},
+        "option": {"premium_change_pct": 0.8, "spread_pct": 1.2},
+    }
+    _save_closed_trade(
+        repository,
+        symbol="JSWSTEEL",
+        entry_time="2026-10-19T12:28:50+05:30",
+        entry_price=17.50,
+        exit_price=15.90,
+        quality=quality,
+    )
+
+    samples = repository.scalp_quality_samples(symbol="jswsteel", limit=10)
+
+    assert len(samples) == 1
+    assert samples[0]["symbol"] == "JSWSTEEL"
+    assert samples[0]["entry_option_ltp"] == 17.50
+    assert samples[0]["exit_option_ltp"] == 15.90
+    assert samples[0]["pnl_pct"] == -9.1429
+    assert samples[0]["signal_quality"] == quality
