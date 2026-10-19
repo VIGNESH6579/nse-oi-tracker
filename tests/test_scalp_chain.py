@@ -612,3 +612,13 @@ def test_health_exposes_per_symbol_fresh_tick_coverage(monkeypatch):
     assert health["ranked_symbols_fresh_ticks_now"] == 4
     assert health["ranked_symbols_without_fresh_ticks_now"] == 0
     assert health["ranked_symbol_tick_freshness"]["AAA"]["status"] == "fresh"
+
+
+
+def test_entry_window_uses_exact_second_boundary():
+    start = datetime.fromisoformat("2026-10-07T09:30:00+05:30")
+    end = datetime.fromisoformat("2026-10-07T15:00:00+05:30")
+    assert scalp._in_window(start, "09:30", "15:00")
+    assert scalp._in_window(end, "09:30", "15:00")
+    assert not scalp._in_window(end.replace(second=1), "09:30", "15:00")
+    assert not scalp._in_window(end.replace(microsecond=1), "09:30", "15:00")
