@@ -1,4 +1,4 @@
-from database.repository import SignalRepository
+import json\n\nfrom database.repository import SignalRepository
 
 
 def _save_closed_trade(repository, *, symbol, entry_time, entry_price, exit_price, quality, reason="MOMENTUM_WEAK"):
@@ -64,8 +64,17 @@ def test_rolling_quality_summary_compares_winners_and_losers_without_daywise_arc
     assert summary["loser_avg_spread_pct"] == 2.5
     assert summary["pnl_basis"] == "quoted_option_premium_before_costs_not_realized_pnl"
     today_events = repository.scalp_events_for_date("2026-10-07")
-    assert next(row for row in today_events if row["symbol"] == "WINNER")["pnl_pct"] == 20.0
-    assert next(row for row in today_events if row["symbol"] == "LOSER")["pnl_pct"] == -10.0
+    winner_event = next(row for row in today_events if row["symbol"] == "WINNER")
+    loser_event = next(row for row in today_events if row["symbol"] == "LOSER")
+    assert winner_event["pnl_pct"] == 20.0
+    assert loser_event["pnl_pct"] == -10.0
+    # The closed-event payload must retain entry-time features, not only the exit.
+    winner_payload = json.loads(winner_event["payload_json"])
+    loser_payload = json.loads(loser_event["payload_json"])
+    assert winner_payload["entry_signal_quality"]["underlying"]["relative_volume"] == 1.5
+    assert winner_payload["entry_rule_ids"] == ["QUALITY_V2"]
+    assert winner_payload["entry_chain_snapshot_id"] == "sample-WINNER"
+    assert loser_payload["entry_signal_quality"]["option"]["spread_pct"] == 2.5
 
     # The visible day-history cleanup may delete old detailed events, but the
     # compact 100-trade rolling sample survives for signal-quality evaluation.
