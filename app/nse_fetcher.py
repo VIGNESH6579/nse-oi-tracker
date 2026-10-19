@@ -102,6 +102,8 @@ class NSESession:
         self._lock                 = RLock()
         self._last_init            = 0.0
         self._last_rebuild_attempt = 0.0
+        self._next_init_retry      = 0.0
+        self._init_failures        = 0
 
     def _new_session(self) -> cffi_requests.Session:
         """Create a fresh curl-cffi session impersonating Chrome."""
@@ -145,15 +147,41 @@ class NSESession:
         logger.warning("NSE session seeding failed to acquire cookies.")
         return None
 
-    def _ensure(self):
-        """Rebuild session if missing or older than SESSION_REFRESH_SECONDS."""
+    def _install_session_or_cooldown(self, new_sess, *, reason: str) -> bool:
+        """Install a working session or circuit-break repeated NSE 403 seed attempts."""
         now = time.time()
-        if self._sess is None or (now - self._last_init) > SESSION_REFRESH_SECONDS:
-            new_sess = self._build()
-            if new_sess is not None:
-                self._sess = new_sess
-                self._last_init = time.time()
-                self._last_rebuild_attempt = time.time()
+        if new_sess is not None:
+            self._sess = new_sess
+            self._last_init = now
+            self._last_rebuild_attempt = now
+            self._next_init_retry = 0.0
+            self._init_failures = 0
+            return True
+
+        # NSE frequently blocks the seed pages on hosted IPs. A failed optional
+        # fallback must not rebuild a three-page session on every scan cycle.
+        self._sess = None
+        self._init_failures += 1
+        base = max(60.0, float(os.getenv("NSE_SESSION_FAILURE_COOLDOWN_S", "900")))
+        cap = max(base, float(os.getenv("NSE_SESSION_FAILURE_COOLDOWN_MAX_S", "3600")))
+        cooldown = min(cap, base * (2 ** min(self._init_failures - 1, 6)))
+        self._next_init_retry = now + cooldown
+        self._last_rebuild_attempt = now
+        logger.warning(
+            "NSE_SESSION_INIT_FAILED cooldown_s=%.0f consecutive_failures=%s; "
+            "skipping NSE fallback temporarily (Angel One remains primary)",
+            cooldown, self._init_failures,
+        )
+        return False
+
+    def _ensure(self):
+        """Build a session only when needed and when the failure cooldown has expired."""
+        now = time.time()
+        if self._sess is not None and (now - self._last_init) <= SESSION_REFRESH_SECONDS:
+            return
+        if now < self._next_init_retry:
+            return
+        self._install_session_or_cooldown(self._build(), reason="session_init")
 
     def _safe_json(self, resp, label: str):
         """Parse JSON from response. Returns None if body is empty or HTML."""
@@ -225,11 +253,8 @@ class NSESession:
                     logger.warning(f"HTTP {code} attempt {attempt+1} ? rebuilding session: {url}")
                     now = time.time()
                     if (now - self._last_rebuild_attempt) > 45:
-                        self._last_rebuild_attempt = now
-                        new_sess = self._build()
-                        if new_sess is not None:
-                            self._sess = new_sess
-                            self._last_init = time.time()
+                        if not self._install_session_or_cooldown(self._build(), reason=f"HTTP {code}"):
+                            return None
                     time.sleep(self._retry_delay(attempt + 1))
                 elif code == 404:
                     logger.warning(f"HTTP 404 (endpoint removed): {url}")
@@ -243,6 +268,8 @@ class NSESession:
         """Fetch a public text asset, retaining the same session/retry policy."""
         with self._lock:
             self._ensure()
+            if self._sess is None:
+                return None
             for attempt in range(retries):
                 resp = self._api_get(url, referer)
                 if resp is None:
@@ -274,11 +301,8 @@ class NSESession:
                     if response.status_code in (401, 403, 429, 503):
                         now = time.time()
                         if now - self._last_rebuild_attempt > 45:
-                            self._last_rebuild_attempt = now
-                            new_sess = self._build()
-                            if new_sess is not None:
-                                self._sess = new_sess
-                                self._last_init = time.time()
+                            if not self._install_session_or_cooldown(self._build(), reason=f"archive HTTP {response.status_code}"):
+                                return None
                 except Exception as exc:
                     logger.warning("NSE archive request failed (attempt %s): %s", attempt + 1, exc)
                 if attempt + 1 < retries:
@@ -331,21 +355,15 @@ class NSESession:
                     logger.warning("200 but HTML body ? checking session rebuild")
                     now = time.time()
                     if (now - self._last_rebuild_attempt) > 45:
-                        self._last_rebuild_attempt = now
-                        new_sess = self._build()
-                        if new_sess is not None:
-                            self._sess = new_sess
-                            self._last_init = time.time()
+                        if not self._install_session_or_cooldown(self._build(), reason="option-chain HTML"):
+                            return None
                     time.sleep(self._retry_delay(attempt + 1))
                 elif code in (401, 403, 429):
                     logger.warning(f"HTTP {code} option-chain attempt {attempt+1} ? checking rebuild")
                     now = time.time()
                     if (now - self._last_rebuild_attempt) > 45:
-                        self._last_rebuild_attempt = now
-                        new_sess = self._build()
-                        if new_sess is not None:
-                            self._sess = new_sess
-                            self._last_init = time.time()
+                        if not self._install_session_or_cooldown(self._build(), reason=f"option-chain HTTP {code}"):
+                            return None
                     time.sleep(self._retry_delay(attempt + 1))
                 elif code == 404:
                     logger.warning(f"HTTP 404 option-chain: {api_url}")
