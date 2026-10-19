@@ -94,7 +94,8 @@ class NSESession:
     Session lifecycle:
     - Built on first use (visits derivatives page + option chain)
     - Auto-refreshed every SESSION_REFRESH_SECONDS (10 min)
-    - Re-seeded on 401/403/429 with 45s cooldown to prevent rebuild storms
+    - Re-seeded on 401/403/429 with cooldown to prevent rebuild storms
+    - Failed seed attempts use a 15-minute initial backoff, doubling up to one hour
     """
 
     def __init__(self):
@@ -141,7 +142,7 @@ class NSESession:
             sess.headers.pop(h, None)
         sess.headers.update(BASE_HEADERS)
 
-        if seeded_ok or sess.cookies:
+        if seeded_ok:
             logger.info("NSE session ready (Chrome TLS fingerprint).")
             return sess
         logger.warning("NSE session seeding failed to acquire cookies.")
@@ -168,9 +169,9 @@ class NSESession:
         self._next_init_retry = now + cooldown
         self._last_rebuild_attempt = now
         logger.warning(
-            "NSE_SESSION_INIT_FAILED cooldown_s=%.0f consecutive_failures=%s; "
+            "NSE_SESSION_INIT_FAILED reason=%s cooldown_s=%.0f consecutive_failures=%s; "
             "skipping NSE fallback temporarily (Angel One remains primary)",
-            cooldown, self._init_failures,
+            reason, cooldown, self._init_failures,
         )
         return False
 
