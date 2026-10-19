@@ -131,3 +131,19 @@ def test_failed_rebuild_clears_blocked_session_and_sets_cooldown(monkeypatch):
     assert builds == [True]
     assert session._sess is None
     assert session._next_init_retry == 2900.0
+
+
+
+def test_seeded_cookies_without_any_successful_page_are_not_a_ready_session(monkeypatch):
+    class BlockedSession:
+        def __init__(self, **kwargs):
+            self.headers = {}
+            self.cookies = {"blocked-cookie": "not-proof-of-access"}
+
+        def get(self, url, **kwargs):
+            return FakeResponse(403, {"blocked": True})
+
+    monkeypatch.setattr(nse_fetcher.cffi_requests, "Session", BlockedSession)
+    monkeypatch.setattr(nse_fetcher.time, "sleep", lambda *_: None)
+
+    assert nse_fetcher.NSESession()._build() is None
