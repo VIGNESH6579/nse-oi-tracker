@@ -93,3 +93,57 @@ def test_placeholder_proxy_url_is_ignored(monkeypatch):
         "http://user:password@india-residential-proxy:port",
     )
     assert nse_fetcher._proxy_kwargs() == {}
+
+
+
+def test_failed_initial_seed_is_throttled(monkeypatch):
+    session = nse_fetcher.NSESession()
+    clock = {"now": 1000.0}
+    builds = []
+    monkeypatch.setenv("NSE_SESSION_FAILURE_COOLDOWN_S", "900")
+    monkeypatch.setenv("NSE_SESSION_FAILURE_COOLDOWN_MAX_S", "3600")
+    monkeypatch.setattr(nse_fetcher.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(session, "_build", lambda: builds.append(True) or None)
+
+    session._ensure()
+    session._ensure()
+    clock["now"] += 899
+    session._ensure()
+
+    assert builds == [True]
+    assert session._sess is None
+    assert session._next_init_retry == 1900.0
+
+
+def test_failed_rebuild_clears_blocked_session_and_sets_cooldown(monkeypatch):
+    session = nse_fetcher.NSESession()
+    session._sess = type("FakeSession", (), {"headers": {}})()
+    session._last_init = 0.0
+    clock = {"now": 2000.0}
+    builds = []
+    monkeypatch.setenv("NSE_SESSION_FAILURE_COOLDOWN_S", "900")
+    monkeypatch.setattr(nse_fetcher.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(session, "_build", lambda: builds.append(True) or None)
+
+    session._ensure()
+    session._ensure()
+
+    assert builds == [True]
+    assert session._sess is None
+    assert session._next_init_retry == 2900.0
+
+
+
+def test_seeded_cookies_without_any_successful_page_are_not_a_ready_session(monkeypatch):
+    class BlockedSession:
+        def __init__(self, **kwargs):
+            self.headers = {}
+            self.cookies = {"blocked-cookie": "not-proof-of-access"}
+
+        def get(self, url, **kwargs):
+            return FakeResponse(403, {"blocked": True})
+
+    monkeypatch.setattr(nse_fetcher.cffi_requests, "Session", BlockedSession)
+    monkeypatch.setattr(nse_fetcher.time, "sleep", lambda *_: None)
+
+    assert nse_fetcher.NSESession()._build() is None
