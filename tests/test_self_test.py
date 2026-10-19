@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import app.self_test as st
 from database.repository import SignalRepository
@@ -235,3 +235,15 @@ def test_readiness_recheck_can_recover_after_hours_without_restart(monkeypatch):
     assert main._startup_state == "READY"
     assert main._startup_error is None
     assert main._startup_ready_at_ist is not None
+
+
+
+def test_scalp_readiness_expires_old_successful_chain_probe():
+    st.run_stage("post_open", {"scalp_chain": lambda: (True, "RELIANCE chain CE=2 PE=2")}, NOW)
+    assert st.scalp_readiness(now=NOW + timedelta(minutes=10)) == "READY"
+    assert st.scalp_readiness(now=NOW + timedelta(minutes=16)) == "STALE"
+
+
+def test_failed_chain_probe_remains_degraded_even_when_recent():
+    st.run_stage("post_open", {"scalp_chain": lambda: (False, "chain unavailable")}, NOW)
+    assert st.scalp_readiness(now=NOW + timedelta(minutes=1)) == "DEGRADED"

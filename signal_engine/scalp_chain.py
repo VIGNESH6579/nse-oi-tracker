@@ -116,6 +116,30 @@ class ScalpChainEngine:
             round(max(0.0, cache_now - min(stamp for stamp, _ in self._chain_cache.values())), 2)
             if self._chain_cache else None
         )
+        last_stats = self._last_run_stats or {}
+        ranked_symbols = list(dict.fromkeys(
+            [str(s).upper() for s in (last_stats.get("gainer_symbols") or [])]
+            + [str(s).upper() for s in (last_stats.get("loser_symbols") or [])]
+        ))
+        tick_freshness: dict[str, dict[str, Any]] = {}
+        tick_reader = getattr(self.stream, "latest_tick_for_symbol", None)
+        for symbol in ranked_symbols:
+            tick = None
+            if callable(tick_reader):
+                try:
+                    tick = tick_reader(symbol, max_age_s=15.0)
+                except Exception:
+                    tick = None
+            try:
+                valid_tick = bool(tick) and float((tick or {}).get("ltp") or 0) > 0
+            except (TypeError, ValueError):
+                valid_tick = False
+            tick_freshness[symbol] = {
+                "status": "fresh" if valid_tick else "not_fresh_or_missing",
+                "tick_age_s": (tick or {}).get("tick_age_s") if valid_tick else None,
+            }
+        fresh_ranked_ticks = sum(1 for item in tick_freshness.values() if item["status"] == "fresh")
+        last_run_age_s = round(max(0.0, cache_now - self._last_run_at), 2) if self._last_run_at else None
         try:
             quality_learning = self.repository.scalp_quality_summary()
         except Exception:
@@ -136,6 +160,11 @@ class ScalpChainEngine:
             "chain_cache_ttl_s": CHAIN_TTL_S,
             "chain_cache_oldest_age_s": oldest_chain_age,
             "chain_ok": bool(fresh_chain_cache),
+            "last_run_age_s": last_run_age_s,
+            "ranked_symbols_last_scan": len(ranked_symbols),
+            "ranked_symbols_fresh_ticks_now": fresh_ranked_ticks,
+            "ranked_symbols_without_fresh_ticks_now": len(ranked_symbols) - fresh_ranked_ticks,
+            "ranked_symbol_tick_freshness": tick_freshness,
             "historical_candle_cache_symbols": len(self._historical_candle_cache),
             "historical_fetch_count": self._historical_fetch_count,
             "historical_fetch_failures": self._historical_fetch_failures,

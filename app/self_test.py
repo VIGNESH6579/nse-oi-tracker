@@ -159,8 +159,13 @@ def readiness() -> str:
         return str(latest_result.get("core_verdict") or latest_result["verdict"])
 
 
-def scalp_readiness() -> str:
-    """Separate status for the optional live option-chain confirmation path."""
+def scalp_readiness(now: datetime | None = None) -> str:
+    """Separate, time-bounded status for the optional live option-chain path.
+
+    A successful historical probe is not evidence that the chain is still fresh.
+    Expire it after 15 minutes so health cannot report READY indefinitely after a
+    market close, provider outage, or free-tier restart.
+    """
     with _lock:
         result = _latest.get("post_open")
         if not result:
@@ -168,4 +173,14 @@ def scalp_readiness() -> str:
         check = (result.get("checks") or {}).get("scalp_chain")
         if check is None:
             return "UNTESTED"
-        return "READY" if check.get("ok") else "DEGRADED"
+        if not check.get("ok"):
+            return "DEGRADED"
+        try:
+            tested_at = datetime.fromisoformat(str(result.get("at") or ""))
+            current = now or datetime.now().astimezone()
+            age_s = (current - tested_at).total_seconds()
+        except (TypeError, ValueError):
+            return "STALE"
+        if age_s < -60 or age_s > 900:
+            return "STALE"
+        return "READY"
