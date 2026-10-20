@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from analytics.intraday_confirm import candle_minute
+from utils.time import IST
 
 logger = logging.getLogger(__name__)
 Probe = Callable[[], tuple[bool, str]]
@@ -158,7 +159,7 @@ def readiness(now: datetime | None = None) -> str:
         latest_result = max(_latest.values(), key=lambda r: r["at"])
         try:
             tested_at = datetime.fromisoformat(str(latest_result.get("at") or ""))
-            current = now or datetime.now().astimezone()
+            current = now.astimezone(IST) if now is not None else datetime.now(IST)
             age_s = (current - tested_at).total_seconds()
         except (TypeError, ValueError):
             return "STALE"
@@ -176,7 +177,7 @@ def readiness(now: datetime | None = None) -> str:
                 return "STALE"
             if current.date() == tested_at.date() and (
                 current.hour > 9 or (current.hour == 9 and current.minute >= 15)
-            ) and current.hour < 15:
+            ) and (current.hour < 15 or (current.hour == 15 and current.minute < 15)):
                 return "STALE"
         return str(latest_result.get("core_verdict") or latest_result["verdict"])
 
