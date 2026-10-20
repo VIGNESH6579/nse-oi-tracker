@@ -268,3 +268,12 @@ def test_pre_open_readiness_expires_after_18_hours():
     st._latest.clear()
     st.run_stage("pre_open", {"bars_coverage": lambda: (True, "100%")}, NOW)
     assert st.readiness(now=NOW + timedelta(hours=19)) == "STALE"
+
+
+
+def test_previous_night_pre_open_probe_is_stale_during_next_session():
+    st._latest.clear()
+    previous_night = NOW.replace(hour=23, minute=55)
+    st.run_stage("pre_open", {"bars_coverage": lambda: (True, "100%")}, previous_night)
+    next_session = previous_night.replace(day=22, hour=10, minute=0)
+    assert st.readiness(now=next_session) == "STALE"
