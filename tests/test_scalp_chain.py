@@ -65,7 +65,7 @@ def test_underlying_context_accepts_timestamp_ms_normalized_to_ist(monkeypatch):
     from datetime import datetime
     candles = [
         {"timestamp_ms": 1791517500000, "data_frequency": "FIVE_MINUTE", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100},
-        {"timestamp_ms": 1791517800000, "data_frequency": "FIVE_MINUTE", "open": 100, "high": 102, "low": 100, "close": 101, "volume": 100},
+        {"timestamp_ms": 1791517800000, "data_frequency": "FIVE_MINUTE", "open": 100, "high": 103, "low": 100, "close": 101, "volume": 100},
         {"timestamp_ms": 1791519900000, "data_frequency": "FIVE_MINUTE", "open": 102, "high": 103, "low": 102, "close": 103, "volume": 100},
         {"timestamp_ms": 1791520200000, "data_frequency": "FIVE_MINUTE", "open": 103.9, "high": 104.1, "low": 103.8, "close": 104.0, "volume": 150},
     ]
@@ -220,12 +220,12 @@ def test_live_paper_position_has_nonzero_option_risk_levels(monkeypatch):
 def test_underlying_context_recovers_missing_opening_range_from_real_history(monkeypatch):
     now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
     raw_candles = [
-        {"time": "2026-10-07T09:15:00+05:30", "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "volume": 100},
-        {"time": "2026-10-07T09:20:00+05:30", "open": 100.0, "high": 101.0, "low": 100.0, "close": 100.5, "volume": 100},
-        {"time": "2026-10-07T09:25:00+05:30", "open": 100.5, "high": 101.0, "low": 100.4, "close": 100.8, "volume": 100},
-        {"time": "2026-10-07T09:30:00+05:30", "open": 100.8, "high": 101.2, "low": 100.7, "close": 101.0, "volume": 100},
-        {"time": "2026-10-07T09:35:00+05:30", "open": 101.0, "high": 101.1, "low": 100.9, "close": 101.0, "volume": 100},
-        {"time": "2026-10-07T09:55:00+05:30", "open": 103.0, "high": 104.0, "low": 102.9, "close": 103.5, "volume": 120},
+        {"time": "2026-10-07T09:15:00+05:30", "open": 102.0, "high": 102.5, "low": 101.5, "close": 102.0, "volume": 100},
+        {"time": "2026-10-07T09:20:00+05:30", "open": 102.0, "high": 103.0, "low": 102.0, "close": 102.5, "volume": 100},
+        {"time": "2026-10-07T09:25:00+05:30", "open": 102.5, "high": 103.5, "low": 102.4, "close": 103.2, "volume": 100},
+        {"time": "2026-10-07T09:30:00+05:30", "open": 103.2, "high": 103.7, "low": 103.1, "close": 103.5, "volume": 100},
+        {"time": "2026-10-07T09:35:00+05:30", "open": 103.5, "high": 103.6, "low": 103.4, "close": 103.5, "volume": 100},
+        {"time": "2026-10-07T09:55:00+05:30", "open": 103.5, "high": 104.0, "low": 103.4, "close": 103.95, "volume": 120},
         {"time": "2026-10-07T10:00:00+05:30", "open": 103.5, "high": 105.0, "low": 103.4, "close": 104.5, "volume": 130},
     ]
 
@@ -559,12 +559,12 @@ def test_candidate_context_scan_order_rotates_to_share_historical_fetch_budget(m
 def test_invalid_websocket_volume_is_repaired_from_real_historical_candles(monkeypatch):
     now = datetime.fromisoformat("2026-10-07T10:00:30+05:30")
     historical = [
-        {"time": "2026-10-07T09:15:00+05:30", "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "volume": 100},
-        {"time": "2026-10-07T09:20:00+05:30", "open": 100.0, "high": 101.0, "low": 100.0, "close": 100.5, "volume": 100},
-        {"time": "2026-10-07T09:25:00+05:30", "open": 100.5, "high": 101.0, "low": 100.4, "close": 100.8, "volume": 100},
-        {"time": "2026-10-07T09:30:00+05:30", "open": 100.8, "high": 101.2, "low": 100.7, "close": 101.0, "volume": 100},
-        {"time": "2026-10-07T09:35:00+05:30", "open": 101.0, "high": 101.1, "low": 100.9, "close": 101.0, "volume": 100},
-        {"time": "2026-10-07T09:55:00+05:30", "open": 103.0, "high": 104.0, "low": 102.9, "close": 103.5, "volume": 120},
+        {"time": "2026-10-07T09:15:00+05:30", "open": 102.0, "high": 102.5, "low": 101.5, "close": 102.0, "volume": 100},
+        {"time": "2026-10-07T09:20:00+05:30", "open": 102.0, "high": 103.0, "low": 102.0, "close": 102.5, "volume": 100},
+        {"time": "2026-10-07T09:25:00+05:30", "open": 102.5, "high": 103.5, "low": 102.4, "close": 103.2, "volume": 100},
+        {"time": "2026-10-07T09:30:00+05:30", "open": 103.2, "high": 103.7, "low": 103.1, "close": 103.5, "volume": 100},
+        {"time": "2026-10-07T09:35:00+05:30", "open": 103.5, "high": 103.6, "low": 103.4, "close": 103.5, "volume": 100},
+        {"time": "2026-10-07T09:55:00+05:30", "open": 103.5, "high": 104.0, "low": 103.4, "close": 103.95, "volume": 120},
         {"time": "2026-10-07T10:00:00+05:30", "open": 103.5, "high": 105.0, "low": 103.4, "close": 104.5, "volume": 130},
     ]
     stream_candles = [
