@@ -60,7 +60,7 @@ def test_pre_open_ready(tmp_path):
     universe = [f"S{i}" for i in range(200)]
     repo = _repo(tmp_path, universe)
     result = st.run_stage("pre_open", _probes("pre_open", FakeAngel(), repo, universe), NOW)
-    assert result["verdict"] == "READY" and result["failed"] == [] and st.readiness() == "READY"
+    assert result["verdict"] == "READY" and result["failed"] == [] and st.readiness(now=NOW) == "READY"
 
 
 def test_pre_open_does_not_check_live_quotes_and_shows_missing_symbols(tmp_path):
@@ -247,3 +247,24 @@ def test_scalp_readiness_expires_old_successful_chain_probe():
 def test_failed_chain_probe_remains_degraded_even_when_recent():
     st.run_stage("post_open", {"scalp_chain": lambda: (False, "chain unavailable")}, NOW)
     assert st.scalp_readiness(now=NOW + timedelta(minutes=1)) == "DEGRADED"
+
+
+
+def test_core_readiness_expires_stale_post_open_probe():
+    st._latest.clear()
+    st.run_stage("post_open", {"angel_equity_quotes": lambda: (True, "3/3 fresh quotes")}, NOW)
+    assert st.readiness(now=NOW + timedelta(minutes=10)) == "READY"
+    assert st.readiness(now=NOW + timedelta(minutes=16)) == "STALE"
+
+
+def test_pre_open_readiness_does_not_claim_live_ready_during_session_without_post_open_probe():
+    st._latest.clear()
+    st.run_stage("pre_open", {"bars_coverage": lambda: (True, "100%")}, NOW)
+    session_start = NOW.replace(hour=10, minute=0)
+    assert st.readiness(now=session_start) == "STALE"
+
+
+def test_pre_open_readiness_expires_after_18_hours():
+    st._latest.clear()
+    st.run_stage("pre_open", {"bars_coverage": lambda: (True, "100%")}, NOW)
+    assert st.readiness(now=NOW + timedelta(hours=19)) == "STALE"
