@@ -997,19 +997,35 @@ async def startup_universe_maintenance() -> None:
         logger.exception("F&O universe maintenance failed")
 
 
-async def scheduled_backfill_topup() -> None:
-    """Top up missing NSE daily history in bounded chunks; full target after close."""
+async def scheduled_backfill_topup(*, post_close: bool = False) -> None:
+    """Repair history in small daytime batches; run one bounded larger pass after close.
+
+    This function is also attached to a one-minute interval, so it must return
+    before doing database/provider work outside the intended window. The separate
+    post-close job opts in explicitly and cannot be swallowed by that guard.
+    """
     if not settings.startup_backfill:
         return
     try:
         current = now_ist()
         minutes = current.hour * 60 + current.minute
-        in_market_hours = current.weekday() < 5 and 540 <= minutes <= 945
-        limit = min(3, settings.backfill_target_days)
+        if post_close:
+            # The cron job is weekdays at 16:05; keep manual/recovery calls bounded too.
+            if current.weekday() >= 5 or not (16 * 60 <= minutes <= 18 * 60):
+                return
+            limit = max(1, int(settings.backfill_target_days))
+            label = "Post-close"
+        else:
+            # The one-minute interval should be effectively idle after close,
+            # before open, on weekends, and on exchange holidays.
+            if not is_market_open():
+                return
+            limit = min(3, max(1, int(settings.backfill_target_days)))
+            label = "Daytime"
         result = await run_backfill(required_days=settings.backfill_target_days, max_downloads=limit)
-        logger.info("Post-close bhavcopy top-up finished: %s", result)
+        logger.info("%s bhavcopy top-up finished (cap=%d): %s", label, limit, result)
     except Exception:
-        logger.exception("Post-close bhavcopy top-up failed")
+        logger.exception("%s bhavcopy top-up failed", "Post-close" if post_close else "Daytime")
 
 
 _gap_fill: dict = {"running": False, "last_start": None, "symbols": [], "result": None, "gave_up": set()}
@@ -1444,6 +1460,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         scheduled_backfill_topup,
         CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=IST),
+        kwargs={"post_close": True},
         id="post-close-bhavcopy-topup",
         replace_existing=True,
         max_instances=1,
