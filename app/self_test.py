@@ -175,9 +175,13 @@ def readiness(now: datetime | None = None) -> str:
             # post-open validation and must not stay green indefinitely.
             if age_s > 18 * 60 * 60:
                 return "STALE"
-            if current.date() == tested_at.date() and (
-                current.hour > 9 or (current.hour == 9 and current.minute >= 15)
-            ) and (current.hour < 15 or (current.hour == 15 and current.minute < 15)):
+            in_market_session = (
+                (current.hour > 9 or (current.hour == 9 and current.minute >= 15))
+                and (current.hour < 15 or (current.hour == 15 and current.minute < 15))
+            )
+            # A pre-open-only result is never sufficient once the session starts,
+            # even if it was produced late the previous night.
+            if in_market_session:
                 return "STALE"
         return str(latest_result.get("core_verdict") or latest_result["verdict"])
 
