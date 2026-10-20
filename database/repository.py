@@ -857,10 +857,10 @@ class SignalRepository:
         """Summarize the rolling priced outcomes without exposing day-wise history."""
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT pnl_pct, signal_quality_json FROM scalp_quality_samples
+                """SELECT pnl_pct, signal_quality_json, direction FROM scalp_quality_samples
                    ORDER BY id DESC LIMIT 100"""
             ).fetchall()
-        values: list[tuple[float, dict[str, Any]]] = []
+        values: list[tuple[float, dict[str, Any], str]] = []
         for row in rows:
             try:
                 quality = json.loads(str(row["signal_quality_json"] or "{}"))
@@ -868,14 +868,14 @@ class SignalRepository:
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
             if isinstance(quality, dict):
-                values.append((pnl, quality))
-        wins = [(p, q) for p, q in values if p > 0]
-        losses = [(p, q) for p, q in values if p < 0]
-        flats = [(p, q) for p, q in values if p == 0]
+                values.append((pnl, quality, str(row["direction"] or "").upper()))
+        wins = [sample for sample in values if sample[0] > 0]
+        losses = [sample for sample in values if sample[0] < 0]
+        flats = [sample for sample in values if sample[0] == 0]
 
-        def avg(group: list[tuple[float, dict[str, Any]]], path: tuple[str, ...]) -> float | None:
+        def avg(group: list[tuple[float, dict[str, Any], str]], path: tuple[str, ...]) -> float | None:
             found: list[float] = []
-            for _, quality in group:
+            for _, quality, _direction in group:
                 item: Any = quality
                 for key in path:
                     item = item.get(key) if isinstance(item, dict) else None
@@ -886,6 +886,21 @@ class SignalRepository:
                     continue
             return round(sum(found) / len(found), 4) if found else None
 
+        def directional_momentum_avg(group: list[tuple[float, dict[str, Any], str]]) -> float | None:
+            found: list[float] = []
+            for _, quality, direction in group:
+                underlying = quality.get("underlying") if isinstance(quality.get("underlying"), dict) else {}
+                try:
+                    momentum = float(underlying["momentum_pct"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if direction == "SELL":
+                    momentum = -momentum
+                elif direction != "BUY":
+                    continue
+                found.append(momentum)
+            return round(sum(found) / len(found), 4) if found else None
+
         decided = len(wins) + len(losses)
         return {
             "sample_size": len(values),
@@ -893,13 +908,21 @@ class SignalRepository:
             "losses": len(losses),
             "flat": len(flats),
             "win_rate_pct_ex_flat": round(len(wins) / decided * 100.0, 2) if decided else None,
-            "mean_quoted_pnl_pct": round(sum(p for p, _ in values) / len(values), 4) if values else None,
-            "average_win_pct": round(sum(p for p, _ in wins) / len(wins), 4) if wins else None,
-            "average_loss_pct": round(sum(p for p, _ in losses) / len(losses), 4) if losses else None,
+            "mean_quoted_pnl_pct": round(sum(p for p, _, _ in values) / len(values), 4) if values else None,
+            "average_win_pct": round(sum(p for p, _, _ in wins) / len(wins), 4) if wins else None,
+            "average_loss_pct": round(sum(p for p, _, _ in losses) / len(losses), 4) if losses else None,
             "winner_avg_relative_volume": avg(wins, ("underlying", "relative_volume")),
             "loser_avg_relative_volume": avg(losses, ("underlying", "relative_volume")),
+            # Raw momentum is signed by market direction; use the directional metric
+            # below when comparing momentum alignment for BUY vs SELL trades.
             "winner_avg_momentum_pct": avg(wins, ("underlying", "momentum_pct")),
             "loser_avg_momentum_pct": avg(losses, ("underlying", "momentum_pct")),
+            "winner_avg_directional_momentum_pct": directional_momentum_avg(wins),
+            "loser_avg_directional_momentum_pct": directional_momentum_avg(losses),
+            "momentum_metric_note": (
+                "winner_avg_momentum_pct and loser_avg_momentum_pct are raw signed underlying momentum; "
+                "directional_momentum_pct flips SELL momentum so positive values mean momentum aligned with the trade"
+            ),
             "winner_avg_premium_change_pct": avg(wins, ("option", "premium_change_pct")),
             "loser_avg_premium_change_pct": avg(losses, ("option", "premium_change_pct")),
             "winner_avg_spread_pct": avg(wins, ("option", "spread_pct")),
