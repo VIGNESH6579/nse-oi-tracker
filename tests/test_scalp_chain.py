@@ -665,3 +665,14 @@ def test_open_trade_monitor_persists_fresh_underlying_and_option_snapshot(monkey
     assert saved["snapshot"]["underlying"]["momentum_pct"] == 0.4
     assert saved["snapshot"]["option"]["ltp"] == 5.2
     assert saved["snapshot"]["mark_pnl_pct"] == 4.0
+
+
+
+def test_extended_breakout_requires_strong_volume_and_momentum():
+    # JSWSTEEL's saved entry: 1.64% extended, only 1.38x volume and 0.37% momentum.
+    assert scalp._breakout_extension_ok(1.6395, 1.382, 0.3705) is False
+    # Similar overextension with both participation and momentum confirmed is allowed.
+    assert scalp._breakout_extension_ok(3.3486, 2.432, 0.5513) is True
+    assert scalp._breakout_extension_ok(2.6898, 3.067, -1.4118) is True
+    # A modest breakout remains eligible under the existing confirmation gates.
+    assert scalp._breakout_extension_ok(0.7257, 1.20, 0.30) is True
