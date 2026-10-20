@@ -45,8 +45,28 @@ MOMENTUM_MIN_PCT = float(os.getenv("SCALP_MOMENTUM_MIN_PCT", "0.30"))
 MIN_RELATIVE_VOLUME = max(1.0, float(os.getenv("SCALP_MIN_RELATIVE_VOLUME", "1.20")))
 MIN_CANDLE_CLOSE_LOCATION = min(0.90, max(0.60, float(os.getenv("SCALP_MIN_CLOSE_LOCATION", "0.65"))))
 MIN_BREAKOUT_BUFFER_PCT = max(0.0, float(os.getenv("SCALP_MIN_BREAKOUT_BUFFER_PCT", "0.05")))
+MAX_BREAKOUT_DISTANCE_PCT = max(0.25, float(os.getenv("SCALP_MAX_BREAKOUT_DISTANCE_PCT", "1.50")))
+EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME = max(
+    MIN_RELATIVE_VOLUME, float(os.getenv("SCALP_EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME", "2.00"))
+)
+EXTENDED_BREAKOUT_MIN_MOMENTUM_PCT = max(
+    MOMENTUM_MIN_PCT, float(os.getenv("SCALP_EXTENDED_BREAKOUT_MIN_MOMENTUM_PCT", "0.50"))
+)
 MIN_PREMIUM_CHANGE_PCT = max(0.0, float(os.getenv("SCALP_MIN_PREMIUM_CHANGE_PCT", "0.25")))
 MAX_OPTION_SPREAD_PCT = max(0.5, float(os.getenv("SCALP_MAX_OPTION_SPREAD_PCT", "3.0")))
+
+
+
+
+def _breakout_extension_ok(distance_pct: float, relative_volume: float, momentum_pct: float) -> bool:
+    """Avoid chasing an extended opening-range breakout without strong participation."""
+    if distance_pct <= MAX_BREAKOUT_DISTANCE_PCT:
+        return True
+    return (
+        relative_volume >= EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME
+        and abs(momentum_pct) >= EXTENDED_BREAKOUT_MIN_MOMENTUM_PCT
+    )
+
 
 def _clock(value: str) -> tuple[int, int]:
     hour, minute = value.strip().split(":", 1)
@@ -517,14 +537,15 @@ class ScalpChainEngine:
             breakout_distance_pct = (or_low - close) / or_low * 100.0
         candle_shape_buy = close > candle_open and close_location >= MIN_CANDLE_CLOSE_LOCATION and candle_body_pct >= 0.08
         candle_shape_sell = close < candle_open and close_location <= (1.0 - MIN_CANDLE_CLOSE_LOCATION) and candle_body_pct >= 0.08
+        breakout_extension_ok = _breakout_extension_ok(breakout_distance_pct, relative_volume, momentum)
         if (
             buy_breakout and close > vwap and momentum >= MOMENTUM_MIN_PCT
-            and volume_ok and candle_shape_buy
+            and volume_ok and candle_shape_buy and breakout_extension_ok
         ):
             direction = "BUY"
         elif (
             sell_breakout and close < vwap and momentum <= -MOMENTUM_MIN_PCT
-            and volume_ok and candle_shape_sell
+            and volume_ok and candle_shape_sell and breakout_extension_ok
         ):
             direction = "SELL"
         else:
@@ -548,6 +569,8 @@ class ScalpChainEngine:
                 self._last_context_rejection = "wrong_side_of_vwap"
             elif abs(momentum) < MOMENTUM_MIN_PCT:
                 self._last_context_rejection = "momentum_below_threshold"
+            elif not breakout_extension_ok:
+                self._last_context_rejection = "breakout_overextended_low_confirmation"
             elif or_low <= close <= or_high:
                 self._last_context_rejection = "inside_opening_range"
             else:
@@ -568,6 +591,7 @@ class ScalpChainEngine:
             "candle_close_location": round(close_location, 4),
             "candle_body_pct": round(candle_body_pct, 4),
             "breakout_distance_pct": round(breakout_distance_pct, 4),
+            "breakout_extension_ok": breakout_extension_ok,
             "candle_count": len(parsed),
             "candle_age_s": round(candle_age_s, 2),
             "candle_source": latest.get("candle_source") or latest.get("source") or "angel_one_websocket_v2",
@@ -770,7 +794,7 @@ class ScalpChainEngine:
                         "vwap", "or_high", "or_low", "momentum_pct", "last_volume",
                         "median_volume", "relative_volume", "volume_ok",
                         "candle_close_location", "candle_body_pct", "breakout_distance_pct",
-                        "candle_count", "candle_age_s", "candle_source", "volume_source", "data_frequency",
+                        "breakout_extension_ok", "candle_count", "candle_age_s", "candle_source", "volume_source", "data_frequency",
                         "day_change_pct",
                     )
                 },
