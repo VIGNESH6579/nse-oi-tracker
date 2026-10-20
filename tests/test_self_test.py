@@ -207,8 +207,8 @@ def test_scalp_probe_failure_is_reported_separately_from_core_readiness(tmp_path
     assert result["verdict"] == "DEGRADED"
     assert result["core_verdict"] == "READY"
     assert "scalp_chain" in result["optional_failed"]
-    assert st.readiness() == "READY"
-    assert st.scalp_readiness() == "DEGRADED"
+    assert st.readiness(now=NOW) == "READY"
+    assert st.scalp_readiness(now=NOW) == "DEGRADED"
 
 
 def test_readiness_recheck_can_recover_after_hours_without_restart(monkeypatch):
