@@ -150,12 +150,34 @@ def latest() -> dict[str, dict[str, Any]]:
         return dict(_latest)
 
 
-def readiness() -> str:
-    """Core market-data/service readiness; optional scalp checks do not mask it."""
+def readiness(now: datetime | None = None) -> str:
+    """Core readiness with stage-aware expiry; old successful probes are not live proof."""
     with _lock:
         if not _latest:
             return "UNTESTED"
         latest_result = max(_latest.values(), key=lambda r: r["at"])
+        try:
+            tested_at = datetime.fromisoformat(str(latest_result.get("at") or ""))
+            current = now or datetime.now().astimezone()
+            age_s = (current - tested_at).total_seconds()
+        except (TypeError, ValueError):
+            return "STALE"
+        if age_s < -60:
+            return "STALE"
+        stage = str(latest_result.get("stage") or "")
+        if stage == "post_open":
+            # Live quote, candle and OI checks expire quickly during the session.
+            if age_s > 900:
+                return "STALE"
+        elif stage == "pre_open":
+            # Overnight preparation is useful pre-market, but not a substitute for
+            # post-open validation and must not stay green indefinitely.
+            if age_s > 18 * 60 * 60:
+                return "STALE"
+            if current.date() == tested_at.date() and (
+                current.hour > 9 or (current.hour == 9 and current.minute >= 15)
+            ) and current.hour < 15:
+                return "STALE"
         return str(latest_result.get("core_verdict") or latest_result["verdict"])
 
 
