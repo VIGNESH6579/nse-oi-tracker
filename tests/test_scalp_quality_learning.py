@@ -3,12 +3,12 @@ import json
 from database.repository import SignalRepository
 
 
-def _save_closed_trade(repository, *, symbol, entry_time, entry_price, exit_price, quality, reason="MOMENTUM_WEAK"):
+def _save_closed_trade(repository, *, symbol, entry_time, entry_price, exit_price, quality, direction="BUY", reason="MOMENTUM_WEAK"):
     event_id = repository.save_scalp_entry({
         "trade_date": "2026-10-07",
         "mode": "scalp_chain",
         "symbol": symbol,
-        "direction": "BUY",
+        "direction": direction,
         "strike": 100.0,
         "option_type": "CE",
         "expiry": "27OCT2026",
@@ -109,3 +109,23 @@ def test_individual_quality_samples_can_be_inspected_by_symbol(tmp_path):
     assert samples[0]["exit_option_ltp"] == 15.90
     assert samples[0]["pnl_pct"] == -9.1429
     assert samples[0]["signal_quality"] == quality
+
+
+
+def test_directional_momentum_summary_aligns_sell_momentum_sign(tmp_path):
+    repository = SignalRepository(tmp_path / "directional-momentum.sqlite3")
+    _save_closed_trade(
+        repository,
+        symbol="SELL_WINNER",
+        entry_time="2026-10-07T10:00:00+05:30",
+        entry_price=10.0,
+        exit_price=11.0,
+        direction="SELL",
+        quality={"underlying": {"momentum_pct": -0.6}, "option": {"spread_pct": 1.0}},
+    )
+
+    summary = repository.scalp_quality_summary()
+
+    assert summary["winner_avg_momentum_pct"] == -0.6
+    assert summary["winner_avg_directional_momentum_pct"] == 0.6
+    assert "positive values mean momentum aligned" in summary["momentum_metric_note"]
