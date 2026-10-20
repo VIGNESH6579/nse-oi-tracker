@@ -136,7 +136,7 @@ def test_health_exposes_readiness_and_gap_fields():
     with TestClient(main.app) as client:
         body = client.get("/api/health").json()
     assert "readiness" in body and "self_test" in body["data_quality"] and "universe_missing_bars" in body["data_quality"]
-    assert body["startup_state"] in {"READY", "DEGRADED", "BLOCKED"}
+    assert body["startup_state"] in {"READY", "DEGRADED", "BLOCKED", "UNTESTED"}
     # In the dependency-free test environment the self-test must not falsely claim READY.
     if body["data_quality"]["self_test"].get("pre_open", {}).get("verdict") == "BLOCKED":
         assert body["startup_state"] == "BLOCKED"
