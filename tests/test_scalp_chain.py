@@ -671,8 +671,21 @@ def test_open_trade_monitor_persists_fresh_underlying_and_option_snapshot(monkey
 def test_extended_breakout_requires_strong_volume_and_momentum():
     # JSWSTEEL's saved entry: 1.64% extended, only 1.38x volume and 0.37% momentum.
     assert scalp._breakout_extension_ok(1.6395, 1.382, 0.3705) is False
-    # Similar overextension with both participation and momentum confirmed is allowed.
+    # A modest extension can pass only when participation and momentum agree.
     assert scalp._breakout_extension_ok(3.3486, 2.432, 0.5513) is True
     assert scalp._breakout_extension_ok(2.6898, 3.067, -1.4118) is True
+
+
+def test_extended_breakout_has_absolute_cap_even_with_extreme_participation():
+    # Recent VMM/SRF entries were 4.35% and 5.11% beyond the opening range.
+    # Extremely high volume must not override the hard anti-chase ceiling.
+    assert scalp._breakout_extension_ok(4.3478, 37.118, -2.728) is False
+    assert scalp._breakout_extension_ok(5.1118, 38.43, -2.0) is False
+
+
+def test_breakout_extension_rejects_non_finite_or_invalid_inputs():
+    assert scalp._breakout_extension_ok(float("nan"), 10.0, 1.0) is False
+    assert scalp._breakout_extension_ok(2.0, float("inf"), 1.0) is False
+    assert scalp._breakout_extension_ok(-1.0, 10.0, 1.0) is False
     # A modest breakout remains eligible under the existing confirmation gates.
     assert scalp._breakout_extension_ok(0.7257, 1.20, 0.30) is True
