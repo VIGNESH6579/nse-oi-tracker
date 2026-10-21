@@ -76,6 +76,8 @@ class AngelOneMarketData:
         # new underlying examined by the scalp engine.
         self._option_master_text: str | None = None
         self._option_master_loaded_at = 0.0
+        self._option_master_retry_after = 0.0
+        self._option_master_error = ""
         self._option_master_lock = threading.Lock()
         self._last_quote_at = 0.0
         self._breaker_until = 0.0
@@ -268,10 +270,30 @@ class AngelOneMarketData:
                 self._option_master_text is None
                 or now - self._option_master_loaded_at >= ttl
             ):
-                response = requests.get(INSTRUMENT_MASTER_URL, timeout=60)
-                response.raise_for_status()
-                self._option_master_text = response.text
-                self._option_master_loaded_at = now
+                if now < self._option_master_retry_after:
+                    raise AngelUnavailable(
+                        f"Angel option instrument master cooldown ({self._option_master_error or 'recent_failure'})"
+                    )
+                try:
+                    # Keep this optional chain-discovery call within the normal
+                    # HTTP budget. A cold option-master timeout must not stall the
+                    # one-minute scan for a full 60 seconds.
+                    response = requests.get(INSTRUMENT_MASTER_URL, timeout=self.timeout)
+                    response.raise_for_status()
+                    master_text = response.text
+                except Exception as exc:
+                    cooldown_s = max(30.0, float(os.getenv("ANGEL_OPTION_MASTER_FAILURE_TTL_S", "60")))
+                    self._option_master_retry_after = time.monotonic() + cooldown_s
+                    self._option_master_error = type(exc).__name__
+                    logger.warning(
+                        "Angel option instrument master failed error=%s cooldown_s=%.0f",
+                        self._option_master_error, cooldown_s,
+                    )
+                    raise
+                self._option_master_text = master_text
+                self._option_master_loaded_at = time.monotonic()
+                self._option_master_retry_after = 0.0
+                self._option_master_error = ""
             master_text = self._option_master_text
 
         rows: list[AngelInstrument] = []
