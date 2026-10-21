@@ -172,6 +172,39 @@ def test_two_consecutive_403s_start_a_cooldown_that_escalates(monkeypatch):
     assert first_block > 0
 
 
+def test_option_instrument_master_is_downloaded_once_for_multiple_underlyings(monkeypatch):
+    import json
+
+    client = AngelOneMarketData(api_key="k", client_code="c", password="p", totp_secret="t")
+    rows = [
+        {"exch_seg": "NFO", "instrumenttype": "OPTSTK", "name": "AAA",
+         "symbol": "AAA100CE", "token": "1", "expiry": "27OCT2026", "strike": "10000"},
+        {"exch_seg": "NFO", "instrumenttype": "OPTSTK", "name": "AAA",
+         "symbol": "AAA100PE", "token": "2", "expiry": "27OCT2026", "strike": "10000"},
+        {"exch_seg": "NFO", "instrumenttype": "OPTSTK", "name": "BBB",
+         "symbol": "BBB200CE", "token": "3", "expiry": "27OCT2026", "strike": "20000"},
+        {"exch_seg": "NFO", "instrumenttype": "OPTSTK", "name": "BBB",
+         "symbol": "BBB200PE", "token": "4", "expiry": "27OCT2026", "strike": "20000"},
+    ]
+    calls = []
+
+    class MasterResponse:
+        text = json.dumps(rows)
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(angel.requests, "get", lambda *a, **k: calls.append((a, k)) or MasterResponse())
+
+    aaa = client.load_option_instruments("AAA")
+    bbb = client.load_option_instruments("BBB")
+
+    assert len(aaa) == 2 and {x["option_type"] for x in aaa} == {"CE", "PE"}
+    assert len(bbb) == 2 and {x["option_type"] for x in bbb} == {"CE", "PE"}
+    assert len(calls) == 1
+    assert calls[0][1]["timeout"] == 60
+
+
 def test_option_chain_near_atm_shape(monkeypatch):
     client = AngelOneMarketData(api_key="k", client_code="c", password="p", totp_secret="t")
     monkeypatch.setattr(client, "load_option_instruments", lambda underlying: [
