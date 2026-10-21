@@ -606,6 +606,7 @@ class ScalpChainEngine:
             "median_volume": median_volume,
             "relative_volume": round(relative_volume, 3),
             "volume_ok": volume_ok,
+            "volume_valid": recent.get("volume_valid") is not False and last_volume > 0,
             "candle_close_location": round(close_location, 4),
             "candle_body_pct": round(candle_body_pct, 4),
             "breakout_distance_pct": round(breakout_distance_pct, 4),
@@ -763,6 +764,7 @@ class ScalpChainEngine:
         candidates: list[dict[str, Any]] = []
         early_rejections: dict[str, int] = {}
         early_rejected_symbols: dict[str, str] = {}
+        early_rejection_details: dict[str, dict[str, Any]] = {}
         for symbol in symbols:
             self._last_context_rejection = ""
             ctx = self._underlying_context(symbol)
@@ -777,6 +779,22 @@ class ScalpChainEngine:
                 early_rejections[reason] = early_rejections.get(reason, 0) + 1
                 if len(early_rejected_symbols) < 20:
                     early_rejected_symbols[symbol] = reason
+                    # Expose why a symbol failed with the measurements that were
+                    # actually used, so invalid/missing volume can be separated
+                    # from genuinely insufficient relative volume.
+                    early_rejection_details[symbol] = {
+                        "reason": reason,
+                        "last_volume": ctx.get("last_volume") if ctx else None,
+                        "median_volume": ctx.get("median_volume") if ctx else None,
+                        "relative_volume": ctx.get("relative_volume") if ctx else None,
+                        "volume_valid": ctx.get("volume_valid") if ctx else None,
+                        "volume_source": ctx.get("volume_source") if ctx else None,
+                        "candle_source": ctx.get("candle_source") if ctx else None,
+                        "candle_age_s": ctx.get("candle_age_s") if ctx else None,
+                        "momentum_pct": ctx.get("momentum_pct") if ctx else None,
+                        "breakout_distance_pct": ctx.get("breakout_distance_pct") if ctx else None,
+                        "breakout_extension_ok": ctx.get("breakout_extension_ok") if ctx else None,
+                    }
         candidates.sort(key=lambda x: abs(float(x.get("day_change_pct") or 0)), reverse=True)
         return candidates[:TOP_N], {
             "ranked_universe": len(symbols),
@@ -786,6 +804,7 @@ class ScalpChainEngine:
             "loser_symbols": loser_symbols,
             "early_rejections": early_rejections,
             "early_rejected_symbols": early_rejected_symbols,
+            "early_rejection_details": early_rejection_details,
         }
 
     def _enter(self, candidate: dict[str, Any], confirmation: dict[str, Any], chain: dict[str, Any]) -> None:
@@ -1238,11 +1257,12 @@ class ScalpChainEngine:
         logger.info(
             "SCALP_REFRESH ranked=%d gainers=%d losers=%d candidates=%d chain_checked=%d "
             "chain_unavailable=%d confirmation_failed=%d entries=%d early_rejections=%s "
-            "early_rejected_symbols=%s rejections=%s",
+            "early_rejected_symbols=%s early_rejection_details=%s rejections=%s",
             stats["ranked_universe"], stats["gainers"], stats["losers"], stats["candidates"],
             stats["chain_checked"], stats["chain_unavailable"], stats["confirmation_failed"],
             stats["entries"], stats.get("early_rejections", {}),
-            stats.get("early_rejected_symbols", {}), stats["top_rejections"],
+            stats.get("early_rejected_symbols", {}), stats.get("early_rejection_details", {}),
+            stats["top_rejections"],
         )
 
     def live(self) -> dict[str, Any]:
