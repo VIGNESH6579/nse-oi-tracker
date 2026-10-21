@@ -202,7 +202,25 @@ def test_option_instrument_master_is_downloaded_once_for_multiple_underlyings(mo
     assert len(aaa) == 2 and {x["option_type"] for x in aaa} == {"CE", "PE"}
     assert len(bbb) == 2 and {x["option_type"] for x in bbb} == {"CE", "PE"}
     assert len(calls) == 1
-    assert calls[0][1]["timeout"] == 60
+    assert calls[0][1]["timeout"] == client.timeout
+
+
+def test_option_master_failure_cooldown_prevents_repeated_full_downloads(monkeypatch):
+    client = AngelOneMarketData(api_key="k", client_code="c", password="p", totp_secret="t")
+    calls = []
+
+    class BrokenResponse:
+        def raise_for_status(self):
+            raise RuntimeError("instrument master timeout")
+
+    monkeypatch.setattr(angel.requests, "get", lambda *a, **k: calls.append((a, k)) or BrokenResponse())
+    with pytest.raises(RuntimeError, match="instrument master timeout"):
+        client.load_option_instruments("AAA")
+    with pytest.raises(angel.AngelUnavailable, match="cooldown"):
+        client.load_option_instruments("BBB")
+
+    assert len(calls) == 1
+    assert calls[0][1]["timeout"] == client.timeout
 
 
 def test_option_chain_near_atm_shape(monkeypatch):
