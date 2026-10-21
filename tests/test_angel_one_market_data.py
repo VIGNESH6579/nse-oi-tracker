@@ -194,7 +194,7 @@ def test_option_instrument_master_is_downloaded_once_for_multiple_underlyings(mo
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(angel.requests, "get", lambda *a, **k: calls.append((a, k)) or MasterResponse())
+    monkeypatch.setattr(angel.requests, "get", lambda *a, **k: calls.append((a, k)) or MasterResponse(), raising=False)
 
     aaa = client.load_option_instruments("AAA")
     bbb = client.load_option_instruments("BBB")
@@ -213,7 +213,7 @@ def test_option_master_failure_cooldown_prevents_repeated_full_downloads(monkeyp
         def raise_for_status(self):
             raise RuntimeError("instrument master timeout")
 
-    monkeypatch.setattr(angel.requests, "get", lambda *a, **k: calls.append((a, k)) or BrokenResponse())
+    monkeypatch.setattr(angel.requests, "get", lambda *a, **k: calls.append((a, k)) or BrokenResponse(), raising=False)
     with pytest.raises(RuntimeError, match="instrument master timeout"):
         client.load_option_instruments("AAA")
     with pytest.raises(angel.AngelUnavailable, match="cooldown"):
