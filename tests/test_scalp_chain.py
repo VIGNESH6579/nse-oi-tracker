@@ -100,21 +100,23 @@ def test_candidate_contexts_reports_early_rejections(monkeypatch):
 def test_candidate_rejection_details_include_volume_measurements(monkeypatch):
     engine = scalp.ScalpChainEngine(FakeMarket(), RankingStream(), FakeRepo())
     monkeypatch.setattr(engine, "_ranked_universe", lambda: (["AAA"], 1, 0, ["AAA"], []))
-    monkeypatch.setattr(engine, "_underlying_context", lambda symbol: {
-        "direction": None,
-        "last_volume": 80,
-        "median_volume": 100,
-        "relative_volume": 0.8,
-        "volume_ok": False,
-        "volume_valid": True,
-        "volume_source": "angel_one_historical_5m",
-        "candle_source": "angel_one_historical_5m",
-        "candle_age_s": 42.0,
-        "momentum_pct": 0.15,
-        "breakout_distance_pct": 0.7,
-        "breakout_extension_ok": True,
-    })
-    monkeypatch.setattr(engine, "_last_context_rejection", "volume_not_confirmed", raising=False)
+    def weak_context(symbol):
+        engine._last_context_rejection = "volume_not_confirmed"
+        return {
+            "direction": None,
+            "last_volume": 80,
+            "median_volume": 100,
+            "relative_volume": 0.8,
+            "volume_ok": False,
+            "volume_valid": True,
+            "volume_source": "angel_one_historical_5m",
+            "candle_source": "angel_one_historical_5m",
+            "candle_age_s": 42.0,
+            "momentum_pct": 0.15,
+            "breakout_distance_pct": 0.7,
+            "breakout_extension_ok": True,
+        }
+    monkeypatch.setattr(engine, "_underlying_context", weak_context)
     candidates, stats = engine._candidate_contexts()
     assert candidates == []
     detail = stats["early_rejection_details"]["AAA"]
