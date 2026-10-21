@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import statistics
+from math import isfinite
 import time
 import uuid
 from datetime import datetime, time as dt_time
@@ -46,6 +47,13 @@ MIN_RELATIVE_VOLUME = max(1.0, float(os.getenv("SCALP_MIN_RELATIVE_VOLUME", "1.2
 MIN_CANDLE_CLOSE_LOCATION = min(0.90, max(0.60, float(os.getenv("SCALP_MIN_CLOSE_LOCATION", "0.65"))))
 MIN_BREAKOUT_BUFFER_PCT = max(0.0, float(os.getenv("SCALP_MIN_BREAKOUT_BUFFER_PCT", "0.05")))
 MAX_BREAKOUT_DISTANCE_PCT = max(0.25, float(os.getenv("SCALP_MAX_BREAKOUT_DISTANCE_PCT", "1.50")))
+# Strong volume/momentum can justify a modest extension, never an unlimited chase.
+# Default 3.50% preserves the existing 3.35% confirmed fixture while rejecting
+# the 4.35% VMM and 5.11% SRF entry extensions observed in the recent paper sample.
+HARD_MAX_BREAKOUT_DISTANCE_PCT = max(
+    MAX_BREAKOUT_DISTANCE_PCT,
+    float(os.getenv("SCALP_HARD_MAX_BREAKOUT_DISTANCE_PCT", "3.50")),
+)
 EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME = max(
     MIN_RELATIVE_VOLUME, float(os.getenv("SCALP_EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME", "2.00"))
 )
@@ -59,12 +67,22 @@ MAX_OPTION_SPREAD_PCT = max(0.5, float(os.getenv("SCALP_MAX_OPTION_SPREAD_PCT", 
 
 
 def _breakout_extension_ok(distance_pct: float, relative_volume: float, momentum_pct: float) -> bool:
-    """Avoid chasing an extended opening-range breakout without strong participation."""
-    if distance_pct <= MAX_BREAKOUT_DISTANCE_PCT:
+    """Allow only bounded extensions; strong participation never permits unlimited chasing."""
+    try:
+        distance = float(distance_pct)
+        volume = float(relative_volume)
+        momentum = float(momentum_pct)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not all(isfinite(value) for value in (distance, volume, momentum)) or distance < 0:
+        return False
+    if distance <= MAX_BREAKOUT_DISTANCE_PCT:
         return True
+    if distance > HARD_MAX_BREAKOUT_DISTANCE_PCT:
+        return False
     return (
-        relative_volume >= EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME
-        and abs(momentum_pct) >= EXTENDED_BREAKOUT_MIN_MOMENTUM_PCT
+        volume >= EXTENDED_BREAKOUT_MIN_RELATIVE_VOLUME
+        and abs(momentum) >= EXTENDED_BREAKOUT_MIN_MOMENTUM_PCT
     )
 
 
