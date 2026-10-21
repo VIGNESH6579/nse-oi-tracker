@@ -71,6 +71,14 @@ class AngelOneMarketData:
         self._login_at = 0.0
         self._instruments: dict[tuple[str, str], AngelInstrument] = {}
         self._option_cache: dict[str, tuple[float, list[AngelInstrument]]] = {}
+        # The full Angel scrip master contains every option contract. Cache its
+        # raw payload once per TTL instead of downloading it again for every
+        # new underlying examined by the scalp engine.
+        self._option_master_text: str | None = None
+        self._option_master_loaded_at = 0.0
+        self._option_master_retry_after = 0.0
+        self._option_master_error = ""
+        self._option_master_lock = threading.Lock()
         self._last_quote_at = 0.0
         self._breaker_until = 0.0
         self._hist_lock = threading.Lock()
@@ -243,11 +251,11 @@ class AngelOneMarketData:
             return result
 
     def load_option_instruments(self, underlying: str) -> list[dict]:
-        """Load and cache only one underlying's NFO option contracts.
+        """Load one underlying's option contracts from a shared cached scrip master.
 
-        The Angel scrip master is streamed on a cache miss and option rows for
-        other underlyings are discarded immediately, keeping the Render Free
-        process from retaining the full options universe.
+        Only the raw master text is retained, not parsed objects for every option.
+        This bounds memory while ensuring new underlyings do not each trigger a
+        separate full-master HTTP download during a live scalp scan.
         """
         key = self._lookup_symbol(underlying, exchange="NSE")
         now = time.monotonic()
@@ -255,10 +263,41 @@ class AngelOneMarketData:
         cached = self._option_cache.get(key)
         if cached and now - cached[0] < ttl:
             return [self._option_dict(x) for x in cached[1]]
-        response = requests.get(INSTRUMENT_MASTER_URL, timeout=60)
-        response.raise_for_status()
+
+        with self._option_master_lock:
+            now = time.monotonic()
+            if (
+                self._option_master_text is None
+                or now - self._option_master_loaded_at >= ttl
+            ):
+                if now < self._option_master_retry_after:
+                    raise AngelUnavailable(
+                        f"Angel option instrument master cooldown ({self._option_master_error or 'recent_failure'})"
+                    )
+                try:
+                    # Keep this optional chain-discovery call within the normal
+                    # HTTP budget. A cold option-master timeout must not stall the
+                    # one-minute scan for a full 60 seconds.
+                    response = requests.get(INSTRUMENT_MASTER_URL, timeout=self.timeout)
+                    response.raise_for_status()
+                    master_text = response.text
+                except Exception as exc:
+                    cooldown_s = max(30.0, float(os.getenv("ANGEL_OPTION_MASTER_FAILURE_TTL_S", "60")))
+                    self._option_master_retry_after = time.monotonic() + cooldown_s
+                    self._option_master_error = type(exc).__name__
+                    logger.warning(
+                        "Angel option instrument master failed error=%s cooldown_s=%.0f",
+                        self._option_master_error, cooldown_s,
+                    )
+                    raise
+                self._option_master_text = master_text
+                self._option_master_loaded_at = time.monotonic()
+                self._option_master_retry_after = 0.0
+                self._option_master_error = ""
+            master_text = self._option_master_text
+
         rows: list[AngelInstrument] = []
-        for row in iter_json_array(response.text):
+        for row in iter_json_array(master_text):
             if not isinstance(row, dict) or str(row.get("exch_seg") or "").upper() != "NFO":
                 continue
             instrument_type = str(row.get("instrumenttype") or "").upper()
@@ -281,7 +320,7 @@ class AngelOneMarketData:
             if strike <= 0:
                 continue
             rows.append(AngelInstrument(raw_symbol, token, "NFO", expiry, instrument_type, name, strike, option_type))
-        self._option_cache[key] = (now, rows)
+        self._option_cache[key] = (time.monotonic(), rows)
         return [self._option_dict(x) for x in rows]
 
     @staticmethod
