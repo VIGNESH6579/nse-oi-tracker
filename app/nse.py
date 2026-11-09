@@ -24,7 +24,7 @@ FEEDS = {
 def _session():
     s=requests.Session()
     # Use a normal browser-compatible session for official NSE static files and
-    # JSON endpoints. The earlier custom bot User-Agent was being denied by NSE.
+    # JSON endpoints. This improves request compatibility but does not bypass IP-based NSE blocks.
     s.headers.update({
         "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
         "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,text/csv,*/*;q=0.8",
