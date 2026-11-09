@@ -34,7 +34,9 @@ def _session():
     try:
         # Prime an ordinary NSE session to receive its normal cookies before
         # requesting the permitted F&O reference file or corporate API.
-        s.get("https://www.nseindia.com",timeout=settings.nse_timeout)
+        prime=s.get("https://www.nseindia.com",timeout=settings.nse_timeout)
+        if prime.status_code >= 400:
+            log.warning("NSE homepage session prime returned HTTP %s",prime.status_code)
     except requests.RequestException as exc:
         log.warning("NSE homepage session prime failed; continuing with direct request: %s",exc)
     return s
