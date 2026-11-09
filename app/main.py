@@ -12,6 +12,7 @@ from .notifier import send
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger(__name__)
+log.info("ntfy configured=%s",bool(settings.ntfy_topic))
 store=Store(settings.database_path)
 scheduler=BackgroundScheduler(timezone="Asia/Kolkata")
 poll_lock=threading.Lock()
