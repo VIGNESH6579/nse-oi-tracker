@@ -136,7 +136,10 @@ def fetch_board_meetings_api(allowed):
     params = {
         "index": "equities",
         "fo_sec": "true",
-        "from_date": today.strftime("%d-%m-%Y"),
+        # NSE's board-meeting listing can retain a future meeting notice
+        # whose broadcast date is weeks earlier (e.g. 22-Oct for a 10-Nov
+        # meeting), so query a look-back window as well as future meeting dates.
+        "from_date": (today - timedelta(days=60)).strftime("%d-%m-%Y"),
         "to_date": (today + timedelta(days=60)).strftime("%d-%m-%Y"),
     }
     with requests.Session() as session:
