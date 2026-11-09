@@ -266,12 +266,12 @@ def test_universe_fallback_prefers_configured_then_last_known_good():
     from app.main import _fallback_universe
 
     symbols, source = _fallback_universe({"RVNL", "COCHINSHIP"}, {"RELIANCE"})
-    assert symbols == {"RVNL", "COCHINSHIP"}
-    assert source == "FNO_SYMBOLS environment fallback"
+    assert symbols == {"RVNL", "COCHINSHIP", "RELIANCE"}
+    assert source == "FNO_SYMBOLS + last-known-good F&O universe fallback"
 
     symbols, source = _fallback_universe(set(), {"RELIANCE", "TCS"})
     assert symbols == {"RELIANCE", "TCS"}
-    assert source == "in-memory last-known-good F&O universe"
+    assert source == "last-known-good F&O universe fallback"
 
     symbols, source = _fallback_universe(set(), set())
     assert symbols == set()
