@@ -81,10 +81,66 @@ def _date(value):
             except ValueError: pass
     return None
 
-def _classify(title,details,feed_type):
+
+def _parse_event_date(text):
+    """Extract a board/result meeting date only when the context indicates a meeting."""
+    cleaned = re.sub(r"\\b(\\d{1,2})(st|nd|rd|th)\\b", r"\\1", text or "", flags=re.I)
+    month = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    patterns = [
+        r"\\b\\d{4}-\\d{1,2}-\\d{1,2}\\b",
+        r"\\b\\d{1,2}[/-]\\d{1,2}[/-]\\d{4}\\b",
+        rf"\\b\\d{{1,2}}(?:st|nd|rd|th)?[\\s-]+{month}[\\s,.-]+\\d{{4}}\\b",
+        rf"\\b{month}\\s+\\d{{1,2}}(?:st|nd|rd|th)?[,]?\\s+\\d{{4}}\\b",
+    ]
+    candidates = []
+    formats = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
+               "%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%B-%Y",
+               "%B %d %Y", "%b %d %Y")
+    for pattern in patterns:
+        for match in re.finditer(pattern, cleaned, flags=re.I):
+            raw = re.sub(r"(?i)(\\d)(st|nd|rd|th)\\b", r"\\1", match.group(0)).replace(",", " ")
+            parsed = None
+            for fmt in formats:
+                try:
+                    parsed = datetime.strptime(" ".join(raw.split()), fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                continue
+            before = cleaned[max(0, match.start()-100):match.start()].lower()
+            after = cleaned[match.end():min(len(cleaned), match.end()+50)].lower()
+            context = before + " " + after
+            score = 0
+            if re.search(r"(board|committee).{0,90}(meeting|meet)|meeting.{0,90}$", before):
+                score += 3
+            if re.search(r"(held|scheduled|convene|conduct|take place).{0,50}$", before):
+                score += 3
+            if re.search(r"^(?:\\s|,|:|-)*(?:as scheduled|for the meeting|meeting)", after):
+                score += 1
+            if re.search(r"quarter ended|year ended|financial year|record date", context):
+                score -= 3
+            candidates.append((score, match.start(), parsed))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    score, _, selected = candidates[0]
+    return selected.isoformat() if score >= 3 else None
+
+
+def _dedupe_key(symbol, category, headline):
+    normalized = re.sub(r"[^a-z0-9]+", " ", (headline or "").lower()).strip()
+    normalized = re.sub(r"\\s+", " ", normalized)
+    return hashlib.sha256(f"{symbol.upper()}|{category.lower()}|{normalized}".encode()).hexdigest()
+
+def _classify(title,details,feed_type,event_date=None):
     text=(title+" "+details).lower()
-    if feed_type=="board_meetings" or "board meeting" in text: category="Board Meeting"
-    elif feed_type=="financial_results" or any(x in text for x in ("financial results","quarterly results","audited results","unaudited results")): category="Financial Results"
+    is_board = feed_type=="board_meetings" or "board meeting" in text or "meeting of the board" in text
+    result_terms = ("financial results","quarterly results","audited results","unaudited results","standalone results","consolidated results")
+    result_agenda = any(x in text for x in result_terms) and any(x in text for x in ("consider","approve","approval","to take on record","meeting"))
+    if is_board and result_agenda: category="Financial Results"
+    elif is_board: category="Board Meeting"
+    elif feed_type=="financial_results" or any(x in text for x in result_terms): category="Financial Results"
     elif any(x in text for x in ("dividend","record date","split","bonus issue")): category="Corporate Action"
     elif any(x in text for x in ("order","letter of award","work order","contract")): category="Order / Contract"
     elif any(x in text for x in ("resignation","appointed as","ceo","managing director","key managerial")): category="Management Change"
@@ -92,12 +148,21 @@ def _classify(title,details,feed_type):
     elif any(x in text for x in ("acquisition","merger","amalgamation","buyback","fund raising","qip","rights issue","credit rating")): category="Corporate Action"
     else: category="Corporate Announcement"
     is_result=category=="Financial Results" and any(x in text for x in ("result","financial","quarter","audited","unaudited"))
-    if is_result:
-        direction="neutral"; rationale="Results filing detected; detailed financial figures and expectations are not yet compared."
+    direction="neutral"
+    if feed_type=="financial_results" and is_result:
+        rationale="Results filing detected. Reported figures and market expectations have not yet been compared, so result direction is not assessed."
         state="RESULT PUBLISHED"
-    elif feed_type=="board_meetings" or any(x in text for x in ("proposed meeting date","board meeting to be held","board meeting scheduled")):
-        direction="neutral"; rationale="Scheduled corporate event. The event date must be checked against the filing; no price direction is implied."
-        state="UPCOMING"
+    elif is_board and result_agenda:
+        rationale="The board notice says financial results are on the agenda. This is a scheduled announcement, not a published result."
+        if event_date:
+            from zoneinfo import ZoneInfo
+            today=datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+            state="RESULT SCHEDULED TODAY" if event_date==today else ("RESULT SCHEDULED" if event_date>today else "BOARD MEETING NOTICE")
+        else:
+            state="RESULT DATE NOT CONFIRMED"
+    elif is_board:
+        rationale="Board meeting notice detected. Confirm the meeting date and agenda in the original exchange filing."
+        state="BOARD MEETING NOTICE"
     elif any(x in text for x in ("rescheduled","postponed","cancelled","canceled")):
         direction="neutral"; rationale="Schedule change; verify the revised date in the source filing."; state="SCHEDULE CHANGE"
     else:
@@ -138,10 +203,12 @@ def normalize(item,allowed,company_map=None):
         if len(matches)==1: symbol=matches[0]
     if not symbol: return None
     filed=_date(item.get("published"))
-    category,state,direction,rationale=_classify(title,details,item.get("feed_type",""))
+    event_date=_parse_event_date(title+" "+details)
+    category,state,direction,rationale=_classify(title,details,item.get("feed_type",""),event_date)
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
-    return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"symbol":symbol,"company":title,
+    dedupe_key=_dedupe_key(symbol,category,title)
+    return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"dedupe_key":dedupe_key,"symbol":symbol,"company":company_map.get(symbol,symbol),"event_date":event_date,
       "category":category,"impact":direction,"headline":title or "NSE filing","details":details,
       "filed_at":filed,"source_url":url,"event_status":state,"rationale":rationale,
       "source_name":item.get("source_name","NSE RSS"),"feed_type":item.get("feed_type","")}
