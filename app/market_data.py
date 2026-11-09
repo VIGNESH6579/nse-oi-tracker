@@ -30,6 +30,8 @@ class AngelMarketData:
         self._token_master_loaded = False
         self._lock = RLock()
         self._last_quote_at = 0.0
+        self.last_missing_symbols = []
+        self.last_unquoted_symbols = []
         try:
             configured = json.loads(os.getenv("ANGEL_SYMBOL_TOKENS", "{}"))
             if isinstance(configured, dict):
@@ -92,20 +94,31 @@ class AngelMarketData:
             raw = str(row.get("symbol", "")).upper()
             symbol = raw.removesuffix("-EQ")
             name = str(row.get("name", "")).upper()
-            if raw.endswith("-EQ") and symbol in missing:
-                found[symbol] = str(row.get("token", ""))
-            elif name == "NIFTY 50" or raw == "NIFTY 50":
-                found["NIFTY"] = str(row.get("token", ""))
-        self._tokens.update({k:v for k,v in found.items() if v})
+            token = str(row.get("token", ""))
+            if raw.endswith("-EQ") and token:
+                # Cache every NSE cash-equity token, not just symbols requested
+                # during the first poll. New event-linked stocks then resolve too.
+                found[symbol] = token
+            elif (name == "NIFTY 50" or raw == "NIFTY 50") and token:
+                found["NIFTY"] = token
+        # Explicit ANGEL_SYMBOL_TOKENS values take precedence over the master file.
+        for symbol, token in found.items():
+            self._tokens.setdefault(symbol, token)
         self._token_master_loaded = True
 
     def quotes(self, symbols):
         """Fetch price/volume snapshots; intentionally discard OI and depth."""
         if not symbols:
+            self.last_missing_symbols = []
+            self.last_unquoted_symbols = []
             return {}
+        requested_symbols = {str(s).upper().strip() for s in symbols if str(s).strip()}
         self._login()
-        self._load_tokens(list(symbols) + ["NIFTY"])
-        wanted = [str(s).upper().strip() for s in symbols if self._tokens.get(str(s).upper().strip())]
+        self._load_tokens(list(requested_symbols) + ["NIFTY"])
+        self.last_missing_symbols = sorted(
+            symbol for symbol in requested_symbols if not self._tokens.get(symbol)
+        )
+        wanted = [symbol for symbol in sorted(requested_symbols) if self._tokens.get(symbol)]
         # Always request NIFTY 50 as the market benchmark.
         if self._tokens.get("NIFTY") and "NIFTY" not in wanted:
             wanted.append("NIFTY")
@@ -149,6 +162,7 @@ class AngelMarketData:
                     "source": "Angel One SmartAPI",
                     "fetched_at": fetched_at,
                 }
+        self.last_unquoted_symbols = sorted(requested_symbols - set(out))
         return out
 
 angel_market_data = AngelMarketData()
