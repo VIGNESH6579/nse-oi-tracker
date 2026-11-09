@@ -41,6 +41,42 @@ def test_normalize_filters_unknown_symbol():
     assert normalize({"title": "Some Company", "description": "Corporate filing"}, {"XYZ"}) is None
 
 
+def test_company_name_matching_handles_ind_ltd_abbreviation_for_fno_stocks():
+    item = normalize(
+        {
+            "title": "KALYAN JEWELLERS IND LTD has informed the Exchange about Board Meeting",
+            "description": "Board meeting to be held on 10-Nov-2026 to consider and approve the unaudited financial results.",
+            "published": "Mon, 09 Nov 2026 10:00:00 +0530",
+            "link": "https://example.com/kalyan",
+            "feed_type": "board_meetings",
+        },
+        {"KALYANKJIL"},
+        {"KALYANKJIL": "Kalyan Jewellers India Limited"},
+    )
+    assert item is not None
+    assert item["symbol"] == "KALYANKJIL"
+    assert item["event_date"] == "2026-11-10"
+    assert item["event_status"] == "RESULT SCHEDULED"
+
+
+def test_normalize_matches_cochin_shipyard_name_without_symbol_in_rss():
+    item = normalize(
+        {
+            "title": "COCHIN SHIPYARD LIMITED has informed the Exchange about Board Meeting",
+            "description": "Board meeting to be held on 10-Nov-2026 to consider and approve the unaudited financial results.",
+            "published": "Wed, 04 Nov 2026 14:11:29 +0530",
+            "link": "https://example.com/cochin",
+            "feed_type": "board_meetings",
+        },
+        {"COCHINSHIP"},
+        {"COCHINSHIP": "Cochin Shipyard Limited"},
+    )
+    assert item is not None
+    assert item["symbol"] == "COCHINSHIP"
+    assert item["event_date"] == "2026-11-10"
+    assert item["event_status"] == "RESULT SCHEDULED"
+
+
 def test_normalize_keeps_company_name_and_schedule_date():
     item = normalize(
         {
@@ -88,6 +124,32 @@ def test_duplicate_rss_items_are_suppressed_within_72_hours(tmp_path):
     duplicate_category["filed_at"] = (now + timedelta(minutes=4)).isoformat()
     assert store.insert(duplicate_category) is False
     assert len(store.list_events(20)) == 1
+
+
+def test_instrument_master_caches_newly_relevant_stock_tokens(monkeypatch):
+    from app.market_data import AngelMarketData
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {"exch_seg": "NSE", "symbol": "RVNL-EQ", "name": "RAIL VIKAS NIGAM", "token": "101"},
+                {"exch_seg": "NSE", "symbol": "COCHINSHIP-EQ", "name": "COCHIN SHIPYARD", "token": "102"},
+                {"exch_seg": "NSE", "symbol": "KALYANKJIL-EQ", "name": "KALYAN JEWELLERS", "token": "103"},
+                {"exch_seg": "NSE", "symbol": "NIFTY 50", "name": "NIFTY 50", "token": "99926000"},
+            ]
+
+    monkeypatch.setattr("app.market_data.requests.get", lambda *args, **kwargs: Response())
+    adapter = AngelMarketData()
+    adapter._load_tokens(["RVNL", "NIFTY"])
+
+    # A later poll must already have tokens for new event-linked companies.
+    assert adapter._tokens["RVNL"] == "101"
+    assert adapter._tokens["COCHINSHIP"] == "102"
+    assert adapter._tokens["KALYANKJIL"] == "103"
+    assert adapter._tokens["NIFTY"] == "99926000"
 
 
 def test_date_only_filing_does_not_gain_an_invented_time():
