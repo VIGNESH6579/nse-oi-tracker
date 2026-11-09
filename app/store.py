@@ -23,8 +23,9 @@ class Store:
             for name,typ in {"event_status":"TEXT","rationale":"TEXT","source_name":"TEXT","feed_type":"TEXT",
                              "event_date":"TEXT","dedupe_key":"TEXT"}.items():
                 if name not in cols: db.execute(f"ALTER TABLE events ADD COLUMN {name} {typ}")
-            # Backfill a stable fingerprint so legacy duplicates can be hidden/detected too.
-            rows=db.execute("SELECT event_id,symbol,category,headline FROM events WHERE dedupe_key IS NULL").fetchall()
+            # Rebuild keys for every stored event so legacy category-based keys
+            # are migrated to the feed-independent symbol + headline fingerprint.
+            rows=db.execute("SELECT event_id,symbol,category,headline FROM events").fetchall()
             for row in rows:
                 db.execute("UPDATE events SET dedupe_key=? WHERE event_id=?",
                            (_event_key(row["symbol"],row["category"],row["headline"]),row["event_id"]))
