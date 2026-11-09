@@ -270,3 +270,12 @@ def test_event_calendar_excludes_non_fno_company():
     from app.nse import _event_calendar_items
     rows = [{"symbol": "RELIANCE", "date": "10-Nov-2026", "purpose": "Financial Results"}]
     assert _event_calendar_items(rows, {"KALYANKJIL"}) == []
+
+
+
+def test_bse_fallback_feeds_are_configured_for_independent_exchange_coverage():
+    from app.nse import FEEDS
+    assert "bse_announcements" in FEEDS
+    assert "bse_board_meetings" in FEEDS
+    assert "bse_financial_results" in FEEDS
+    assert "bseindia.com" in FEEDS["bse_board_meetings"]
