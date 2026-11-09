@@ -53,8 +53,10 @@ def poll_once():
                 "error":"Set ANGEL_ONE_API_KEY, ANGEL_ONE_CLIENT_CODE, ANGEL_ONE_PASSWORD and ANGEL_ONE_TOTP_SECRET in Render"}
         else:
             try:
-                quote_symbols=sorted(symbols) if symbols else ["NIFTY"]
-                quotes=angel_market_data.quotes(quote_symbols)
+                # Fetch only shares with recent company filings / scheduled result notices.
+                # NIFTY 50 is added internally by the read-only adapter as a benchmark.
+                quote_symbols=store.symbols_with_recent_news(days=3)
+                quotes=angel_market_data.quotes(quote_symbols) if quote_symbols else {}
                 saved=store.save_market_quotes(quotes)
                 status["market_data"]={"state":"ok" if saved else "no_quotes",
                     "quotes":saved,"last_quote_at":max((q["fetched_at"] for q in quotes.values()),default=None),"error":None}
