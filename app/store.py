@@ -87,7 +87,7 @@ class Store:
         with self.connect() as db:
             rows=db.execute("""SELECT DISTINCT symbol FROM events
               WHERE julianday(COALESCE(filed_at,created_at))>=julianday('now',?)
-                 OR (event_date IS NOT NULL AND event_date>=date('now','localtime'))
+                 OR (event_date IS NOT NULL AND event_date>=date('now','+5 hours','+30 minutes'))
               ORDER BY symbol""",(f"-{int(days)} days",)).fetchall()
         return [r["symbol"] for r in rows]
     def save_market_quotes(self, quotes):
