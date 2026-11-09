@@ -296,7 +296,7 @@ def test_nse_session_uses_browser_compatible_headers(monkeypatch):
             self.headers = {}
         def get(self, url, timeout):
             self.primed_url = url
-            return object()
+            return type("Response", (), {"status_code": 200})()
 
     fake = FakeSession()
     monkeypatch.setattr(nse.requests, "Session", lambda: fake)
