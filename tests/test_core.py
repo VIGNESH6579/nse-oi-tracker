@@ -276,3 +276,13 @@ def test_universe_fallback_prefers_configured_then_last_known_good():
     symbols, source = _fallback_universe(set(), set())
     assert symbols == set()
     assert source == "unavailable"
+
+
+def test_store_persists_last_known_good_fno_universe_and_drops_legacy_quotes(tmp_path):
+    store = Store(str(tmp_path / "events.db"))
+    assert store.save_fno_universe({"RVNL", "COCHINSHIP"}) == 2
+    assert store.load_fno_universe() == ["COCHINSHIP", "RVNL"]
+    with store.connect() as db:
+        tables = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "fno_universe" in tables
+    assert "market_quotes" not in tables
