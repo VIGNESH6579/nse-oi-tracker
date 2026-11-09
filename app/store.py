@@ -4,7 +4,7 @@ from datetime import datetime,timezone
 
 def _event_key(symbol,category,headline):
     normalized=re.sub(r"[^a-z0-9]+"," ",(headline or "").lower()).strip()
-    normalized=re.sub(r"\\s+"," ",normalized)
+    normalized=re.sub(r"\s+"," ",normalized)
     return hashlib.sha256(f"{str(symbol).upper()}|{str(category).lower()}|{normalized}".encode()).hexdigest()
 
 class Store:
