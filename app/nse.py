@@ -19,30 +19,60 @@ def _session():
                       "Accept":"application/rss+xml, application/xml, text/xml, */*"})
     return s
 
+def _valid_stock_symbol(value):
+    symbol = str(value or "").strip().upper()
+    # NSE equity trading symbols do not contain spaces. Keep common valid
+    # characters such as &, hyphen and leading digits (e.g. M&M, BAJAJ-AUTO,
+    # 360ONE); reject company and index display names.
+    return symbol if re.fullmatch(r"[A-Z0-9&-]{1,20}", symbol) else ""
+
+
+def _is_index_underlying(value):
+    name = re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).strip()
+    return name.startswith("NIFTY ") or name in {
+        "NIFTY", "NIFTY 50", "NIFTY BANK", "NIFTY FINANCIAL SERVICES",
+        "NIFTY MIDCAP SELECT", "NIFTY NEXT 50",
+    }
+
+
 def get_fno_symbols(session=None):
-    # The exchange CSV is authoritative and changes when F&O constituents are
-    # introduced/excluded. FNO_SYMBOLS is an additive override, not a permanent
-    # replacement for the live list (which would silently omit new entrants).
+    # The official file has both UNDERLYING (display name) and SYMBOL (ticker).
+    # Always use SYMBOL. The current file places UNDERLYING first, so reading
+    # the first matching column silently loads company names instead of tickers.
+    # FNO_SYMBOLS is additive, but malformed names are never accepted as symbols.
     s=session or _session()
+    configured = {
+        valid for item in settings.fno_symbols
+        if (valid := _valid_stock_symbol(item))
+    }
     try:
-        r=s.get(settings.universe_csv_url,timeout=settings.nse_timeout)
-        r.raise_for_status()
+        r=s.get(settings.universe_csv_url,timeout=settings.nse_timeout); r.raise_for_status()
         reader=csv.DictReader(io.StringIO(r.text))
+        fields = {
+            str(field or "").strip().lstrip("\\ufeff").upper(): field
+            for field in (reader.fieldnames or [])
+        }
+        symbol_field = fields.get("SYMBOL")
+        if not symbol_field:
+            raise RuntimeError("NSE F&O market-lot CSV has no SYMBOL column; refusing to use display-name UNDERLYING")
+        underlying_field = fields.get("UNDERLYING")
         symbols=set()
         for row in reader:
-            for key,value in row.items():
-                if key and key.strip().upper() in {"SYMBOL","UNDERLYING"} and value:
-                    symbols.add(value.strip().upper()); break
+            symbol = _valid_stock_symbol(row.get(symbol_field))
+            underlying = row.get(underlying_field) if underlying_field else ""
+            if not symbol or _is_index_underlying(underlying):
+                continue
+            symbols.add(symbol)
         if not symbols:
-            raise RuntimeError("F&O universe CSV parsed but contained no symbols")
-        symbols.update(settings.fno_symbols)
-        source="NSE F&O market-lot CSV"
-        if settings.fno_symbols:
-            source+=" + FNO_SYMBOLS additions"
+            raise RuntimeError("NSE F&O market-lot CSV parsed but contained no valid stock symbols")
+        symbols.update(configured)
+        source="NSE F&O market-lot CSV (SYMBOL column; stock underlyings only)"
+        if configured:
+            source+=" + valid FNO_SYMBOLS additions"
         return symbols,source
     except Exception:
-        if settings.fno_symbols:
-            return set(settings.fno_symbols),"FNO_SYMBOLS environment fallback (NSE CSV unavailable)"
+        if configured:
+            return configured,"FNO_SYMBOLS environment fallback (NSE CSV unavailable; valid tickers only)"
         raise
 
 def _tag(el,name):
