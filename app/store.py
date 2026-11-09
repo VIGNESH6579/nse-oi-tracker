@@ -63,11 +63,20 @@ class Store:
     def pending_notifications(self,limit=50):
         with self.connect() as db:
             rows=[dict(x) for x in db.execute("SELECT * FROM events WHERE notified=0 ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?",(max(limit*5,limit),)).fetchall()]
-        unique=[]; seen=set()
+        unique=[]; seen={}
         for row in rows:
             key=row.get("dedupe_key") or _event_key(row["symbol"],row["category"],row["headline"])
-            if key in seen: continue
-            seen.add(key); unique.append(row)
+            stamp=row.get("filed_at") or row.get("created_at")
+            try:
+                current=datetime.fromisoformat(str(stamp).replace("Z","+00:00"))
+                if current.tzinfo is None: current=current.replace(tzinfo=timezone.utc)
+            except Exception:
+                current=None
+            prior=seen.get(key,[])
+            if any(current is None or previous is None or abs((current-previous).total_seconds())<=72*3600 for previous in prior):
+                continue
+            seen.setdefault(key,[]).append(current)
+            unique.append(row)
             if len(unique)>=limit: break
         return unique
     def list_events(self,limit=100,symbol=None,status=None):
@@ -76,11 +85,20 @@ class Store:
         if status: sql+=" AND event_status=?"; args.append(status)
         sql+=" ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?"; args.append(max(limit*5,limit))
         with self.connect() as db: rows=[dict(x) for x in db.execute(sql,args).fetchall()]
-        unique=[]; seen=set()
+        unique=[]; seen={}
         for row in rows:
             key=row.get("dedupe_key") or _event_key(row["symbol"],row["category"],row["headline"])
-            if key in seen: continue
-            seen.add(key); unique.append(row)
+            stamp=row.get("filed_at") or row.get("created_at")
+            try:
+                current=datetime.fromisoformat(str(stamp).replace("Z","+00:00"))
+                if current.tzinfo is None: current=current.replace(tzinfo=timezone.utc)
+            except Exception:
+                current=None
+            prior=seen.get(key,[])
+            if any(current is None or previous is None or abs((current-previous).total_seconds())<=72*3600 for previous in prior):
+                continue
+            seen.setdefault(key,[]).append(current)
+            unique.append(row)
             if len(unique)>=limit: break
         return unique
     def symbols_with_recent_news(self,days=3):
