@@ -1,85 +1,20 @@
-# config.py — Signal thresholds, confidence config, constants
+import os
+from dataclasses import dataclass
+from dotenv import load_dotenv
 
+load_dotenv()
 
+@dataclass(frozen=True)
+class Settings:
+    app_name: str = os.getenv("APP_NAME", "NSE Company News Monitor")
+    database_path: str = os.getenv("DATABASE_PATH", "./data/news.db")
+    poll_interval: int = max(60, int(os.getenv("POLL_INTERVAL_SECONDS", "300")))
+    nse_timeout: int = max(5, int(os.getenv("NSE_TIMEOUT_SECONDS", "20")))
+    nse_retries: int = max(1, min(5, int(os.getenv("NSE_MAX_RETRIES", "3"))))
+    universe_csv_url: str = os.getenv("FNO_UNIVERSE_CSV_URL", "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv")
+    fno_symbols: frozenset[str] = frozenset(x.strip().upper() for x in os.getenv("FNO_SYMBOLS", "").split(",") if x.strip())
+    ntfy_base_url: str = os.getenv("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
+    ntfy_topic: str = os.getenv("NTFY_TOPIC", "").strip()
+    ntfy_token: str = os.getenv("NTFY_TOKEN", "").strip()
 
-# ─── NSE Indices (always checked) ────────────────────────────────────────────
-
-INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
-
-
-
-# ─── Signal classification thresholds ────────────────────────────────────────
-
-# Minimum % price move to be "rising" or "falling"
-
-PRICE_CHANGE_THRESHOLD = 0.25    # 0.25% — classify directional movement; publish gate is stricter
-
-
-
-# Minimum % OI change to be significant
-
-OI_CHANGE_THRESHOLD    = 3.00    # 3.00% — filter routine OI churn
-
-
-
-# ─── Confidence tiers (multi-factor score 0–100) ─────────────────────────────
-
-# Display both tiers. A 60-point floor was too restrictive for ordinary
-# intraday moves: rows could satisfy the signal-direction thresholds yet still
-# be discarded because the score awarded no points for modest price/OI moves.
-
-CONFIDENCE_HIGH   = 75   # ⭐⭐⭐⭐ — very high confidence
-CONFIDENCE_MEDIUM = 60   # ⭐⭐ — actionable medium confidence tier
-
-# Quality-feed guardrails reduce flip-flops and alert noise. They do not turn
-# public-data observations into guaranteed trade recommendations.
-QUALITY_MIN_CONFIDENCE = CONFIDENCE_HIGH
-QUALITY_REQUIRED_SCANS = 2
-QUALITY_MAX_SIGNALS = 10
-
-# Below MEDIUM → filtered out
-
-
-
-# ─── Liquidity filter ─────────────────────────────────────────────────────────
-
-# Minimum absolute OI in contracts (removes penny/illiquid F&O stocks, retains high-value lots)
-MIN_OI_ABSOLUTE = 10_000
-
-# The live dashboard publishes confirmed actionable signals across both HIGH and MEDIUM tiers.
-PUBLISH_MIN_CONFIDENCE = 60
-PUBLISH_MIN_OI_ABSOLUTE = 10_000
-
-
-
-# ─── Strength score (legacy, still computed) ─────────────────────────────────
-
-MIN_STRENGTH_SCORE = 5.0
-
-
-
-# ─── Cache & polling ──────────────────────────────────────────────────────────
-
-CACHE_TTL_SECONDS    = 60
-
-POLL_INTERVAL_SECONDS = 60
-
-SESSION_REFRESH_SECONDS = 600   # 10 min NSE cookie refresh
-
-
-
-# ─── Option chain display ─────────────────────────────────────────────────────
-
-STRIKES_EACH_SIDE = 10
-
-
-
-# ─── Market hours IST ────────────────────────────────────────────────────────
-
-MARKET_OPEN_HOUR   = 9
-
-MARKET_OPEN_MIN    = 15
-
-MARKET_CLOSE_HOUR  = 15
-
-MARKET_CLOSE_MIN   = 30
+settings = Settings()

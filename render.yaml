@@ -1,71 +1,21 @@
 services:
   - type: web
-    name: nse-oi-tracker
+    name: nse-company-news-monitor
     runtime: python
     plan: free
-    region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
-    # Keep Git pushes automatically deployed; the service remains on Render Free.
-    autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.11
-      - key: NSE_OI_POLL_INTERVAL_SECONDS
-        value: "60"
-      - key: NSE_OI_CACHE_TTL_SECONDS
-        value: "60"
-      - key: NSE_OI_HISTORY_RETENTION_DAYS
-        value: "30"
-      - key: NSE_OI_STARTUP_BACKFILL
-        value: "1"
-      - key: DEBUG_TOKEN
-        generateValue: true
-      - key: NSE_OI_AUTO_BACKFILL
-        value: "1"
-      - key: NSE_OI_INDEX_BACKFILL
-        value: "1"
-      # Configure these in Render's dashboard; never commit their values.
-      - key: NSE_OI_BACKUP_URL
-        sync: false
-      - key: NSE_OI_BACKUP_TOKEN
-        sync: false
-      - key: NSE_OI_BACKUP_GITHUB_REPO
-        sync: false
-      - key: NSE_OI_BACKUP_GITHUB_TOKEN
-        sync: false
-      - key: NSE_OI_BACKUP_BRANCH
-        value: data
-      - key: SIGNAL_MODE
-        value: scalp_chain
-      - key: SCALP_ENTRY_START
-        value: "09:30"
-      - key: SCALP_ENTRY_END
-        value: "15:00"
-      - key: SCALP_TRAIL_DRAWDOWN_PCT
-        value: "12"
-      - key: SCALP_MAX_OPEN
-        value: "3"
-      - key: SCALP_RANK_TOP_N
-        value: "20"
-      - key: NSE_OI_SPURTS_RETRY_S
+        value: 3.12.8
+      - key: DATABASE_PATH
+        value: /var/data/news.db
+      - key: POLL_INTERVAL_SECONDS
         value: "300"
-      - key: NSE_OI_PROXY_URL
+      - key: NTFY_TOPIC
         sync: false
-      # Add values later in Render; never commit credentials.
-      - key: ANGEL_ONE_API_KEY
+      - key: NTFY_TOKEN
         sync: false
-      - key: ANGEL_ONE_CLIENT_CODE
+      - key: FNO_SYMBOLS
         sync: false
-      - key: ANGEL_ONE_PASSWORD
-        sync: false
-      - key: ANGEL_ONE_TOTP_SECRET
-        sync: false
-      # Optional read-only Smart Stream; keep off until explicitly validated.
-      - key: ANGEL_ONE_STREAM_ENABLED
-        value: "true"
-
-# Render Free web services have an ephemeral filesystem. Set
-# NSE_OI_BACKUP_GITHUB_REPO + NSE_OI_BACKUP_GITHUB_TOKEN so SQLite history
-# restores from GitHub after restart instead of a cold 60-day crawl.
