@@ -286,3 +286,22 @@ def test_store_persists_last_known_good_fno_universe_and_drops_legacy_quotes(tmp
         tables = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "fno_universe" in tables
     assert "market_quotes" not in tables
+
+
+def test_nse_session_uses_browser_compatible_headers(monkeypatch):
+    from app import nse
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+        def get(self, url, timeout):
+            self.primed_url = url
+            return object()
+
+    fake = FakeSession()
+    monkeypatch.setattr(nse.requests, "Session", lambda: fake)
+    session = nse._session()
+    assert session is fake
+    assert "Mozilla/5.0" in session.headers["User-Agent"]
+    assert "text/csv" in session.headers["Accept"]
+    assert session.primed_url == "https://www.nseindia.com"
