@@ -23,8 +23,20 @@ FEEDS = {
 
 def _session():
     s=requests.Session()
-    s.headers.update({"User-Agent":"NSE-Company-News-Monitor/1.0 (RSS reader; contact: operator)",
-                      "Accept":"application/rss+xml, application/xml, text/xml, */*"})
+    # Use a normal browser-compatible session for official NSE static files and
+    # JSON endpoints. The earlier custom bot User-Agent was being denied by NSE.
+    s.headers.update({
+        "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,text/csv,*/*;q=0.8",
+        "Accept-Language":"en-US,en;q=0.9",
+        "Connection":"keep-alive",
+    })
+    try:
+        # Prime an ordinary NSE session to receive its normal cookies before
+        # requesting the permitted F&O reference file or corporate API.
+        s.get("https://www.nseindia.com",timeout=settings.nse_timeout)
+    except requests.RequestException as exc:
+        log.warning("NSE homepage session prime failed; continuing with direct request: %s",exc)
     return s
 
 def _valid_stock_symbol(value):
@@ -54,7 +66,10 @@ def get_fno_symbols(session=None):
         if (valid := _valid_stock_symbol(item))
     }
     try:
-        r=s.get(settings.universe_csv_url,timeout=settings.nse_timeout); r.raise_for_status()
+        r=s.get(settings.universe_csv_url,headers={
+            "Accept":"text/csv,application/csv,*/*;q=0.8",
+            "Referer":"https://www.nseindia.com/static/products-services/equity-derivatives-contract-information",
+        },timeout=settings.nse_timeout); r.raise_for_status()
         reader=csv.DictReader(io.StringIO(r.text))
         fields = {
             str(field or "").strip().lstrip("\\ufeff").upper(): field
