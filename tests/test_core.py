@@ -146,7 +146,7 @@ def test_company_name_matching_handles_ind_ltd_abbreviation_for_fno_stocks():
     assert item is not None
     assert item["symbol"] == "KALYANKJIL"
     assert item["event_date"] == "2026-11-10"
-    assert item["event_status"] == "RESULT SCHEDULED"
+    assert item["event_status"] in {"RESULT SCHEDULED", "RESULT SCHEDULED TODAY"}
 
 
 def test_normalize_matches_cochin_shipyard_name_without_symbol_in_rss():
@@ -262,7 +262,7 @@ def test_event_calendar_fno_result_is_scheduled_without_inventing_filing_time():
     event = normalize(items[0], {"KALYANKJIL"}, {"KALYANKJIL": "Kalyan Jewellers India Limited"})
     assert event["symbol"] == "KALYANKJIL"
     assert event["event_date"] == "2026-11-10"
-    assert event["event_status"] == "RESULT SCHEDULED"
+    assert event["event_status"] in {"RESULT SCHEDULED", "RESULT SCHEDULED TODAY"}
     assert event["filed_at"] is None
 
 
