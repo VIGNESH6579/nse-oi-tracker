@@ -1,16 +1,17 @@
 services:
   - type: web
-    name: nse-company-news-monitor
+    name: nse-oi-tracker
     runtime: python
     plan: free
+    region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: DATABASE_PATH
-        value: /var/data/news.db
+        value: ./data/news.db
       - key: POLL_INTERVAL_SECONDS
         value: "300"
       - key: NTFY_TOPIC
