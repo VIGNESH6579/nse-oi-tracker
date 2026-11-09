@@ -1,4 +1,5 @@
 import logging, threading, re
+from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, Query
@@ -15,20 +16,35 @@ log=logging.getLogger(__name__)
 store=Store(settings.database_path)
 scheduler=BackgroundScheduler(timezone="Asia/Kolkata")
 poll_lock=threading.Lock()
-status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","market_data":{"state":"not checked","quotes":0,"last_quote_at":None,"error":None,"missing_symbols":[],"unquoted_symbols":[]}}
+status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","universe_count":0,"raw_feed_items":0,"matched_feed_items":0,"matched_symbols":[],"feed_match_stats":{},"scanner_state":"starting","market_data":{"state":"not checked","quotes":0,"last_quote_at":None,"error":None,"missing_symbols":[],"unquoted_symbols":[]}}
+last_known_fno_symbols=set()
+
+def _fallback_universe(configured, cached):
+    configured_symbols=set(configured or ())
+    if configured_symbols:
+        return configured_symbols, "FNO_SYMBOLS environment fallback"
+    cached_symbols=set(cached or ())
+    if cached_symbols:
+        return cached_symbols, "in-memory last-known-good F&O universe"
+    return set(), "unavailable"
 
 def poll_once():
+    global last_known_fno_symbols
     if not poll_lock.acquire(blocking=False): return {"skipped":True,"reason":"poll already running"}
     try:
         poll_errors=[]
         try:
             symbols,universe_source=get_fno_symbols()
+            if symbols:
+                last_known_fno_symbols=set(symbols)
         except Exception as exc:
-            symbols=set(settings.fno_symbols)
-            universe_source="FNO_SYMBOLS environment fallback" if symbols else "unavailable"
+            symbols,universe_source=_fallback_universe(settings.fno_symbols,last_known_fno_symbols)
             poll_errors.append("F&O universe: "+str(exc))
-            log.warning("F&O universe fetch failed: %s",exc)
+            log.warning("F&O universe fetch failed; fallback=%s symbols=%d error=%s",
+                        universe_source,len(symbols),exc)
         company_map=get_fno_company_map(symbols) if symbols else {}
+        if symbols and not company_map:
+            log.warning("F&O company-name map is empty; symbol-only matching will miss name-only exchange filings")
         rows=[]
         source_health={}
         if symbols:
@@ -43,17 +59,31 @@ def poll_once():
         new_count=0
         matched_count=0
         matched_symbols=set()
+        raw_by_feed=Counter()
+        matched_by_feed=Counter()
+        unmatched_sample=[]
         for row in rows:
+            feed=str(row.get("source_name") or row.get("feed_type") or "unknown")
+            raw_by_feed[feed]+=1
             event=normalize(row,symbols,company_map)
             if event:
                 matched_count+=1
                 matched_symbols.add(event["symbol"])
+                matched_by_feed[feed]+=1
                 if store.insert(event): new_count+=1
+            elif len(unmatched_sample)<8:
+                unmatched_sample.append((feed,str(row.get("title") or "")[:150]))
+        feed_match_stats={
+            name:{"raw":count,"matched":matched_by_feed.get(name,0)}
+            for name,count in sorted(raw_by_feed.items())
+        }
         log.info(
-            "NSE filing matcher: universe=%d raw_feed_items=%d matched_items=%d unmatched_items=%d matched_symbols=%s",
-            len(symbols),len(rows),matched_count,max(0,len(rows)-matched_count),
-            ",".join(sorted(matched_symbols)) or "none"
+            "NSE filing matcher: universe=%d company_map=%d raw_feed_items=%d matched_items=%d unmatched_items=%d matched_symbols=%s feed_stats=%s",
+            len(symbols),len(company_map),len(rows),matched_count,max(0,len(rows)-matched_count),
+            ",".join(sorted(matched_symbols)) or "none",feed_match_stats
         )
+        if unmatched_sample:
+            log.info("NSE filing unmatched sample (feed, title): %s",unmatched_sample)
         # Read-only market snapshot. This adapter has no order/modify/cancel methods.
         # Only LTP, OHLC, percentage change and volume are persisted; OI is discarded.
         if not settings.angel_market_data_enabled:
@@ -91,9 +121,27 @@ def poll_once():
         for pending in store.pending_notifications(limit=50):
             if send(pending): store.mark_notified(pending["event_id"])
         now=datetime.now(timezone.utc).isoformat()
-        status.update(last_poll=now,last_success=now,last_error="; ".join(poll_errors) or None,
-                      sources=source_health,new_events=new_count,universe_source=universe_source)
-        return {"received":len(rows),"new_events":new_count,"sources":source_health,
+        source_ok=any(bool(feed.get("ok")) for feed in source_health.values())
+        poll_ok=bool(symbols) and source_ok
+        for name,feed in source_health.items():
+            if not feed.get("ok"):
+                poll_errors.append(f"{name}: {feed.get('error') or 'source unavailable'}")
+        status.update(
+            last_poll=now,
+            last_success=now if poll_ok else status["last_success"],
+            last_error="; ".join(poll_errors) or None,
+            sources=source_health,
+            new_events=new_count,
+            universe_source=universe_source,
+            universe_count=len(symbols),
+            raw_feed_items=len(rows),
+            matched_feed_items=matched_count,
+            matched_symbols=sorted(matched_symbols),
+            feed_match_stats=feed_match_stats,
+            scanner_state="healthy" if poll_ok else "unavailable",
+        )
+        return {"received":len(rows),"matched":matched_count,"new_events":new_count,
+                "sources":source_health,"scanner_state":status["scanner_state"],
                 "market_data":status["market_data"],"errors":poll_errors}
     except Exception as exc:
         now=datetime.now(timezone.utc).isoformat()
@@ -307,8 +355,21 @@ def health():
       "poll_interval_seconds":settings.poll_interval,"ntfy_configured":bool(settings.ntfy_topic),
       "last_poll":status["last_poll"],"last_success":status["last_success"],
       "last_error":status["last_error"],"sources":status["sources"],"universe_source":status["universe_source"],
+      "scanner_state":status["scanner_state"],"universe_count":status["universe_count"],
+      "raw_feed_items":status["raw_feed_items"],"matched_feed_items":status["matched_feed_items"],
+      "matched_symbols":status["matched_symbols"],"feed_match_stats":status["feed_match_stats"],
       "market_data_provider":"Angel One SmartAPI read-only" if settings.angel_market_data_enabled else "disabled",
       "market_data":status["market_data"]}
+
+@app.get("/api/ready")
+def readiness():
+    from fastapi.responses import JSONResponse
+    payload={"ready":status["scanner_state"]=="healthy",
+             "scanner_state":status["scanner_state"],
+             "universe_count":status["universe_count"],
+             "last_success":status["last_success"],
+             "sources":status["sources"]}
+    return JSONResponse(payload,status_code=200 if payload["ready"] else 503)
 
 @app.get("/api/market")
 def market():
