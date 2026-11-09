@@ -20,32 +20,55 @@ status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new
 def poll_once():
     if not poll_lock.acquire(blocking=False): return {"skipped":True,"reason":"poll already running"}
     try:
-        symbols,universe_source=get_fno_symbols()
-        company_map=get_fno_company_map(symbols)
-        rows,source_health=fetch_all_feeds()
+        poll_errors=[]
+        try:
+            symbols,universe_source=get_fno_symbols()
+        except Exception as exc:
+            symbols=set(settings.fno_symbols)
+            universe_source="FNO_SYMBOLS environment fallback" if symbols else "unavailable"
+            poll_errors.append("F&O universe: "+str(exc))
+            log.warning("F&O universe fetch failed: %s",exc)
+        company_map=get_fno_company_map(symbols) if symbols else {}
+        rows=[]
+        source_health={}
+        if symbols:
+            try:
+                rows,source_health=fetch_all_feeds()
+            except Exception as exc:
+                source_health={"all_feeds":{"ok":False,"error":str(exc)}}
+                poll_errors.append("NSE feeds: "+str(exc))
+                log.warning("NSE feeds unavailable; continuing market-data poll: %s",exc)
+        else:
+            source_health={"all_feeds":{"ok":False,"error":"No F&O symbols available; configure FNO_SYMBOLS"}}
         new_count=0
         for row in rows:
             event=normalize(row,symbols,company_map)
             if event and store.insert(event): new_count+=1
         # Read-only market snapshot. This adapter has no order/modify/cancel methods.
         # Only LTP, OHLC, percentage change and volume are persisted; OI is discarded.
-        if settings.angel_market_data_enabled:
+        if not settings.angel_market_data_enabled:
+            status["market_data"]={"state":"disabled","quotes":0,"last_quote_at":None,"error":None}
+        elif not angel_market_data.configured:
+            status["market_data"]={"state":"not_configured","quotes":0,"last_quote_at":None,
+                "error":"Set ANGEL_ONE_API_KEY, ANGEL_ONE_CLIENT_CODE, ANGEL_ONE_PASSWORD and ANGEL_ONE_TOTP_SECRET in Render"}
+        else:
             try:
-                quotes=angel_market_data.quotes(sorted(symbols))
+                quote_symbols=sorted(symbols) if symbols else ["NIFTY"]
+                quotes=angel_market_data.quotes(quote_symbols)
                 saved=store.save_market_quotes(quotes)
-                status["market_data"]={"state":"ok" if saved else ("configured_no_quotes" if angel_market_data.configured else "not_configured"),
+                status["market_data"]={"state":"ok" if saved else "no_quotes",
                     "quotes":saved,"last_quote_at":max((q["fetched_at"] for q in quotes.values()),default=None),"error":None}
             except Exception as exc:
                 status["market_data"]={"state":"error","quotes":0,"last_quote_at":None,"error":str(exc)[:240]}
+                poll_errors.append("Angel One: "+str(exc))
                 log.warning("Angel One read-only market-data poll failed: %s",exc)
-        else:
-            status["market_data"]={"state":"disabled","quotes":0,"last_quote_at":None,"error":None}
         for pending in store.pending_notifications(limit=50):
             if send(pending): store.mark_notified(pending["event_id"])
         now=datetime.now(timezone.utc).isoformat()
-        status.update(last_poll=now,last_success=now,last_error=None,sources=source_health,
-                      new_events=new_count,universe_source=universe_source)
-        return {"received":len(rows),"new_events":new_count,"sources":source_health}
+        status.update(last_poll=now,last_success=now,last_error="; ".join(poll_errors) or None,
+                      sources=source_health,new_events=new_count,universe_source=universe_source)
+        return {"received":len(rows),"new_events":new_count,"sources":source_health,
+                "market_data":status["market_data"],"errors":poll_errors}
     except Exception as exc:
         now=datetime.now(timezone.utc).isoformat()
         status.update(last_poll=now,last_error=str(exc))
