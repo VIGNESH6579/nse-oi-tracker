@@ -45,6 +45,11 @@ class Store:
             db.execute("UPDATE events SET notified=1 WHERE event_id=?", (event_id,))
             db.commit()
 
+    def pending_notifications(self, limit=50):
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM events WHERE notified=0 ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?", (limit,)).fetchall()
+            return [dict(row) for row in rows]
+
     def list_events(self, limit=100, symbol=None):
         with self.connect() as db:
             if symbol:
