@@ -1,32 +1,31 @@
-# NSE Company News Monitor
+# NSE Company Event & Results Monitor
 
-A focused monitor for NSE F&O company announcements and financial results. It polls the official NSE corporate-announcements feed, filters to configured F&O symbols, stores filings in SQLite, classifies event type and cautious potential impact, and sends deduplicated alerts to ntfy.
+Tracks official NSE RSS announcements for F&O companies, separates upcoming board meetings, results-published filings and sudden corporate announcements, stores/deduplicates events, and sends ntfy alerts.
 
-## What it does
-- Polls NSE corporate announcements; preserves filing timestamp and source attachment URL.
-- Filters to the F&O universe supplied through `FNO_SYMBOLS` or the official NSE market-lot CSV.
-- Classifies results, board meetings, orders/contracts, dividends, buybacks, acquisitions, fundraising, regulatory/legal and other filings.
-- Labels potential impact as positive/negative/mixed/uncertain using transparent keyword heuristics. This is not a price forecast or trading recommendation.
-- Stores events and notification state in SQLite.
-- Sends new events to ntfy when `NTFY_TOPIC` is configured.
-- Exposes a compact dashboard, JSON API and source health status.
+## Sources
+- Primary filing/event feed: official NSE RSS feeds (announcements, board meetings, financial results).
+- F&O universe: official NSE F&O market-lot CSV or explicit `FNO_SYMBOLS`.
+- NSE's normal JSON API is not used as the only source; if it returns 403, RSS feed health is shown independently. No proxy or anti-bot bypass is used.
+
+## Direction labels
+Results are explicitly marked RESULT PUBLISHED when the exchange feed identifies a results filing. Until structured reported figures can be extracted and compared with prior periods and expectations, direction remains NEUTRAL / unclassified with an explanation. A filing title alone is not enough to call a result bullish or bearish. This build does not yet claim price-confirmed impact.
+
+## Market data
+No market-price feed is currently configured. A price reaction layer requires a valid market-data provider/API credential. The app must label quote source, timestamp, delay and freshness rather than imply live prices. Do not treat a company filing's direction label as a price prediction.
 
 ## Run
 ```bash
-python -m venv .venv
-. .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Set `NTFY_TOPIC` to your topic name and optionally `NTFY_BASE_URL` / `NTFY_TOKEN`. Do not commit credentials. Set `FNO_SYMBOLS` to a comma-separated list if the NSE universe CSV is unavailable.
+Set `NTFY_TOPIC`, optionally `NTFY_TOKEN`, and if needed `FNO_SYMBOLS` (comma-separated). Keep secrets in Render environment variables, never in Git.
 
 ## API
 - `GET /` dashboard
-- `GET /api/events?limit=100&symbol=RELIANCE`
-- `GET /api/health` source, scheduler and database status
-- `POST /api/sync` trigger a poll manually
+- `GET /api/events?limit=100&symbol=RELIANCE&status_filter=RESULT%20PUBLISHED`
+- `GET /api/health`
+- `POST /api/sync`
 
-## Important limitations
-NSE may return HTTP 403 due to its Akamai protection. The app reports this as a source error, backs off, and does not use public proxies or attempt to bypass access controls. Polling is best-effort, not guaranteed real-time. Render Free instances can sleep and their local filesystem is ephemeral; use a persistent disk or external database for durable production history. Notifications require a reachable ntfy server and valid topic configuration. The impact label is a rough filing-text classification, not a prediction of next-session price movement.
+NSE RSS is an official exchange-published feed, but third-party feed-reader indexing suggests the archive announcements feed is active; actual access from this Render deployment must be verified. Render Free may sleep and local SQLite is ephemeral. For reliable continuous polling and durable history, use an always-on worker and persistent storage.
