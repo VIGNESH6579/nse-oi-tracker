@@ -279,3 +279,4 @@ def test_bse_fallback_feeds_are_configured_for_independent_exchange_coverage():
     assert "bse_board_meetings" in FEEDS
     assert "bse_financial_results" in FEEDS
     assert "bseindia.com" in FEEDS["bse_board_meetings"]
+\n\ndef test_health_endpoint_accepts_get_and_head_for_uptime_monitors():\n    from app.main import app\n\n    route = next(route for route in app.routes if getattr(route, "path", None) == "/api/health")\n    assert {"GET", "HEAD"}.issubset(route.methods)\n
