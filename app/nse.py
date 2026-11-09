@@ -232,8 +232,18 @@ def fetch_all_feeds(allowed=None, company_map=None):
     try:
         for name,url in FEEDS.items():
             try:
-                items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
                 is_bse = name.startswith("bse_")
+                if is_bse:
+                    session.headers.update({
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+                        "Referer": "https://www.bseindia.com/",
+                        "Origin": "https://www.bseindia.com",
+                    })
+                else:
+                    session.headers.pop("Referer", None)
+                    session.headers.pop("Origin", None)
+                    session.headers["User-Agent"] = "NSE-Company-News-Monitor/1.0 (RSS reader)"
+                items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
                 feed_kind = "board_meetings" if name == "bse_board_meetings" else ("financial_results" if name == "bse_financial_results" else "announcements")
                 for x in items:
                     x["feed_type"]=feed_kind
