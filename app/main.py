@@ -49,6 +49,9 @@ def poll_once():
                         universe_source,len(symbols),exc)
         log.info("F&O universe source=%s symbols=%d",universe_source,len(symbols))
         company_map=get_fno_company_map(symbols) if symbols else {}
+        unmapped_symbols=sorted(set(symbols)-set(company_map))
+        if unmapped_symbols:
+            log.warning("F&O symbols absent from NSE equity company master: %s",unmapped_symbols)
         if symbols and not company_map:
             log.warning("F&O company-name map is empty; symbol-only matching will miss name-only exchange filings")
         rows=[]
