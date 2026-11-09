@@ -41,6 +41,41 @@ def test_normalize_filters_unknown_symbol():
     assert normalize({"title": "Some Company", "description": "Corporate filing"}, {"XYZ"}) is None
 
 
+def test_fno_universe_uses_symbol_column_not_underlying_display_name(monkeypatch):
+    from types import SimpleNamespace
+    import app.nse as nse_module
+
+    class Response:
+        text = (
+            "UNDERLYING,SYMBOL,NOV-26,DEC-26\\n"
+            "360 ONE WAM LIMITED,360ONE,500,500\\n"
+            "COCHIN SHIPYARD LIMITED,COCHINSHIP,125,125\\n"
+            "KALYAN JEWELLERS INDIA LIMITED,KALYANKJIL,125,125\\n"
+            "NIFTY 50,NIFTY,75,75\\n"
+            "NIFTY BANK,BANKNIFTY,35,35\\n"
+        )
+
+        def raise_for_status(self):
+            return None
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(
+        nse_module,
+        "settings",
+        SimpleNamespace(
+            fno_symbols=frozenset({"RVNL", "RAIL VIKAS NIGAM LIMITED", "NIFTY BANK"}),
+            universe_csv_url="https://example.com/fno.csv",
+            nse_timeout=5,
+        ),
+    )
+    symbols, source = nse_module.get_fno_symbols(Session())
+    assert symbols == {"360ONE", "COCHINSHIP", "KALYANKJIL", "RVNL"}
+    assert "SYMBOL column" in source
+
+
 def test_fno_environment_symbols_are_additive_to_the_live_universe(monkeypatch):
     from types import SimpleNamespace
     import app.nse as nse_module
