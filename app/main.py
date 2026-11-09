@@ -33,7 +33,7 @@ def poll_once():
         source_health={}
         if symbols:
             try:
-                rows,source_health=fetch_all_feeds()
+                rows,source_health=fetch_all_feeds(symbols,company_map)
             except Exception as exc:
                 source_health={"all_feeds":{"ok":False,"error":str(exc)}}
                 poll_errors.append("NSE feeds: "+str(exc))
@@ -70,12 +70,20 @@ def poll_once():
                 quotes=angel_market_data.quotes(quote_symbols) if quote_symbols else {}
                 store.save_market_quotes(quotes)
                 stock_quotes=set(quote_symbols).intersection(quotes)
+                missing_tokens=getattr(angel_market_data,"last_missing_symbols",[])
+                unquoted=getattr(angel_market_data,"last_unquoted_symbols",[])
                 status["market_data"]={"state":"ok" if stock_quotes else "no_quotes",
                     "quotes":len(stock_quotes),
                     "last_quote_at":max((q["fetched_at"] for q in quotes.values()),default=None),
                     "error":None,
-                    "missing_symbols":getattr(angel_market_data,"last_missing_symbols",[]),
-                    "unquoted_symbols":getattr(angel_market_data,"last_unquoted_symbols",[])}
+                    "missing_symbols":missing_tokens,
+                    "unquoted_symbols":unquoted}
+                log.info(
+                    "Angel One quote poll: requested_stocks=%d quoted_stocks=%d missing_tokens=%s no_quote=%s",
+                    len(quote_symbols),len(stock_quotes),
+                    ",".join(missing_tokens) or "none",
+                    ",".join(unquoted) or "none"
+                )
             except Exception as exc:
                 status["market_data"]={"state":"error","quotes":0,"last_quote_at":None,"error":str(exc)[:240]}
                 poll_errors.append("Angel One: "+str(exc))
