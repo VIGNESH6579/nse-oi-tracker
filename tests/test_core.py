@@ -81,4 +81,15 @@ def test_duplicate_rss_items_are_suppressed_within_72_hours(tmp_path):
     duplicate["source_url"] = "https://example.com/filing/2"
     duplicate["filed_at"] = (now + timedelta(minutes=2)).isoformat()
     assert store.insert(duplicate) is False
+    # Same filing from a different NSE feed/category must still be deduplicated.
+    duplicate_category = dict(event)
+    duplicate_category["event_id"] = "third-id"
+    duplicate_category["category"] = "Corporate Announcement"
+    duplicate_category["filed_at"] = (now + timedelta(minutes=4)).isoformat()
+    assert store.insert(duplicate_category) is False
     assert len(store.list_events(20)) == 1
+
+
+def test_date_only_filing_does_not_gain_an_invented_time():
+    from app.nse import _date
+    assert _date("09-Nov-2026") == "2026-11-09"
