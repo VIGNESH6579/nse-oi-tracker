@@ -103,7 +103,7 @@ class Store:
             if len(unique)>=limit: break
         return unique
     def save_fno_universe(self,symbols):
-        clean=sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+        clean=sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip() and str(symbol).strip().upper() not in {"SYMBOL", "UNDERLYING", "CONTRACT"}})
         if not clean:
             return 0
         stamp=datetime.now(timezone.utc).isoformat()
@@ -116,6 +116,6 @@ class Store:
     def load_fno_universe(self):
         with self.connect() as db:
             rows=db.execute("SELECT symbol FROM fno_universe ORDER BY symbol").fetchall()
-        return [row["symbol"] for row in rows]
+        return [row["symbol"] for row in rows if row["symbol"] not in {"SYMBOL", "UNDERLYING", "CONTRACT"}]
     def count(self):
         with self.connect() as db: return db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
