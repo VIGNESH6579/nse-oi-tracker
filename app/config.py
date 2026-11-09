@@ -16,5 +16,6 @@ class Settings:
     ntfy_base_url: str = os.getenv("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
     ntfy_topic: str = os.getenv("NTFY_TOPIC", "").strip()
     ntfy_token: str = os.getenv("NTFY_TOKEN", "").strip()
+    angel_market_data_enabled: bool = os.getenv("ANGEL_MARKET_DATA_ENABLED", "1").strip().lower() in {"1","true","yes","on"}
 
 settings = Settings()
