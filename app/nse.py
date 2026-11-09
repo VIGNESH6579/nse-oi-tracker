@@ -20,18 +20,30 @@ def _session():
     return s
 
 def get_fno_symbols(session=None):
-    if settings.fno_symbols:
-        return set(settings.fno_symbols), "FNO_SYMBOLS environment"
+    # The exchange CSV is authoritative and changes when F&O constituents are
+    # introduced/excluded. FNO_SYMBOLS is an additive override, not a permanent
+    # replacement for the live list (which would silently omit new entrants).
     s=session or _session()
-    r=s.get(settings.universe_csv_url,timeout=settings.nse_timeout); r.raise_for_status()
-    reader=csv.DictReader(io.StringIO(r.text))
-    symbols=set()
-    for row in reader:
-        for key,value in row.items():
-            if key and key.strip().upper() in {"SYMBOL","UNDERLYING"} and value:
-                symbols.add(value.strip().upper()); break
-    if not symbols: raise RuntimeError("F&O universe CSV parsed but contained no symbols; set FNO_SYMBOLS")
-    return symbols,"NSE F&O market-lot CSV"
+    try:
+        r=s.get(settings.universe_csv_url,timeout=settings.nse_timeout)
+        r.raise_for_status()
+        reader=csv.DictReader(io.StringIO(r.text))
+        symbols=set()
+        for row in reader:
+            for key,value in row.items():
+                if key and key.strip().upper() in {"SYMBOL","UNDERLYING"} and value:
+                    symbols.add(value.strip().upper()); break
+        if not symbols:
+            raise RuntimeError("F&O universe CSV parsed but contained no symbols")
+        symbols.update(settings.fno_symbols)
+        source="NSE F&O market-lot CSV"
+        if settings.fno_symbols:
+            source+=" + FNO_SYMBOLS additions"
+        return symbols,source
+    except Exception:
+        if settings.fno_symbols:
+            return set(settings.fno_symbols),"FNO_SYMBOLS environment fallback (NSE CSV unavailable)"
+        raise
 
 def _tag(el,name):
     for child in el:
