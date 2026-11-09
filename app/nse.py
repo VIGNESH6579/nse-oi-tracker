@@ -38,6 +38,8 @@ def _valid_stock_symbol(value):
     # NSE equity trading symbols do not contain spaces. Keep common valid
     # characters such as &, hyphen and leading digits (e.g. M&M, BAJAJ-AUTO,
     # 360ONE); reject company and index display names.
+    if symbol in {"SYMBOL", "UNDERLYING", "CONTRACT"}:
+        return ""
     return symbol if re.fullmatch(r"[A-Z0-9&-]{1,20}", symbol) else ""
 
 
