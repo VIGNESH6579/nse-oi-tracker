@@ -20,8 +20,16 @@ status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new
 last_known_fno_symbols=set(store.load_fno_universe())
 
 def _fallback_universe(configured, cached):
-    configured_symbols=set(configured or ())
-    cached_symbols=set(cached or ())
+    reserved={"SYMBOL", "UNDERLYING", "CONTRACT"}
+    def clean(values):
+        return {
+            symbol for value in (values or ())
+            if (symbol := str(value).strip().upper())
+            and symbol not in reserved
+            and re.fullmatch(r"[A-Z0-9&-]{1,20}",symbol)
+        }
+    configured_symbols=clean(configured)
+    cached_symbols=clean(cached)
     if configured_symbols and cached_symbols:
         return configured_symbols | cached_symbols, "FNO_SYMBOLS + last-known-good F&O universe fallback"
     if configured_symbols:
