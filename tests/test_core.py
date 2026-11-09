@@ -47,12 +47,12 @@ def test_fno_universe_uses_symbol_column_not_underlying_display_name(monkeypatch
 
     class Response:
         text = (
-            "UNDERLYING,SYMBOL,NOV-26,DEC-26\\n"
-            "360 ONE WAM LIMITED,360ONE,500,500\\n"
-            "COCHIN SHIPYARD LIMITED,COCHINSHIP,125,125\\n"
-            "KALYAN JEWELLERS INDIA LIMITED,KALYANKJIL,125,125\\n"
-            "NIFTY 50,NIFTY,75,75\\n"
-            "NIFTY BANK,BANKNIFTY,35,35\\n"
+            "UNDERLYING,SYMBOL,NOV-26,DEC-26\n"
+            "360 ONE WAM LIMITED,360ONE,500,500\n"
+            "COCHIN SHIPYARD LIMITED,COCHINSHIP,125,125\n"
+            "KALYAN JEWELLERS INDIA LIMITED,KALYANKJIL,125,125\n"
+            "NIFTY 50,NIFTY,75,75\n"
+            "NIFTY BANK,BANKNIFTY,35,35\n"
         )
 
         def raise_for_status(self):
