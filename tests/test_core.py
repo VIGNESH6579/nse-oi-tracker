@@ -245,3 +245,28 @@ def test_instrument_master_caches_newly_relevant_stock_tokens(monkeypatch):
 def test_date_only_filing_does_not_gain_an_invented_time():
     from app.nse import _date
     assert _date("09-Nov-2026") == "2026-11-09"
+
+
+
+def test_event_calendar_fno_result_is_scheduled_without_inventing_filing_time():
+    from app.nse import _event_calendar_items
+
+    rows = [{
+        "symbol": "KALYANKJIL",
+        "company": "Kalyan Jewellers India Limited",
+        "date": "10-Nov-2026",
+        "purpose": "Financial Results",
+    }]
+    items = _event_calendar_items(rows, {"KALYANKJIL"})
+    assert len(items) == 1
+    event = normalize(items[0], {"KALYANKJIL"}, {"KALYANKJIL": "Kalyan Jewellers India Limited"})
+    assert event["symbol"] == "KALYANKJIL"
+    assert event["event_date"] == "2026-11-10"
+    assert event["event_status"] == "RESULT SCHEDULED"
+    assert event["filed_at"] is None
+
+
+def test_event_calendar_excludes_non_fno_company():
+    from app.nse import _event_calendar_items
+    rows = [{"symbol": "RELIANCE", "date": "10-Nov-2026", "purpose": "Financial Results"}]
+    assert _event_calendar_items(rows, {"KALYANKJIL"}) == []
