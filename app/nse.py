@@ -95,13 +95,31 @@ def _classify(title,details,feed_type):
     if is_result:
         direction="neutral"; rationale="Results filing detected; detailed financial figures and expectations are not yet compared."
         state="RESULT PUBLISHED"
-    elif any(x in text for x in ("rescheduled","postponed","proposed meeting date")):
-        direction="neutral"; rationale="Schedule update; direction cannot be inferred from the filing title."; state="UPCOMING / SCHEDULE UPDATE"
+    elif feed_type=="board_meetings" or any(x in text for x in ("proposed meeting date","board meeting to be held","board meeting scheduled")):
+        direction="neutral"; rationale="Scheduled corporate event. The event date must be checked against the filing; no price direction is implied."
+        state="UPCOMING"
+    elif any(x in text for x in ("rescheduled","postponed","cancelled","canceled")):
+        direction="neutral"; rationale="Schedule change; verify the revised date in the source filing."; state="SCHEDULE CHANGE"
     else:
         direction="unclassified"; rationale="Insufficient structured evidence for a directional view."; state="NEW EVENT"
     return category,state,direction,rationale
 
-def normalize(item,allowed):
+def get_fno_company_map(allowed):
+    url=NSE_ARCHIVE + "/content/equities/EQUITY_L.csv"
+    try:
+        with _session() as session:
+            response=session.get(url,timeout=settings.nse_timeout); response.raise_for_status()
+        mapping={}
+        for row in csv.DictReader(io.StringIO(response.text)):
+            symbol=(row.get("SYMBOL") or "").strip().upper()
+            name=(row.get("NAME OF COMPANY") or row.get("NAME_OF_COMPANY") or "").strip()
+            if symbol in allowed and name: mapping[symbol]=name
+        return mapping
+    except Exception as exc:
+        log.warning("Could not load NSE equity company-name map: %s",exc)
+        return {}
+
+def normalize(item,allowed,company_map=None):
     title=(item.get("title") or "").strip()
     details=(item.get("description") or "").strip()
     hay=(title+" "+details).upper()
@@ -110,7 +128,14 @@ def normalize(item,allowed):
     for candidate in allowed:
         if re.search(r"(?<![A-Z0-9])"+re.escape(candidate)+r"(?![A-Z0-9])",hay):
             symbol=candidate; break
-    # If no symbol is explicitly present, do not guess a company from a fuzzy match.
+    company_map=company_map or {}
+    if not symbol:
+        normalized=re.sub(r"[^A-Z0-9]","",hay)
+        matches=[]
+        for candidate,name in company_map.items():
+            alias=re.sub(r"[^A-Z0-9]","",name.upper())
+            if len(alias)>=8 and alias in normalized: matches.append(candidate)
+        if len(matches)==1: symbol=matches[0]
     if not symbol: return None
     filed=_date(item.get("published"))
     category,state,direction,rationale=_classify(title,details,item.get("feed_type",""))
