@@ -57,7 +57,7 @@ class Store:
               [(q["symbol"],q["ltp"],q.get("change_pct"),q.get("open"),q.get("high"),q.get("low"),
                 q.get("previous_close"),q.get("volume"),q.get("source","Angel One SmartAPI"),q["fetched_at"])
                for q in quotes.values()])
-            db.execute("DELETE FROM market_quotes WHERE fetched_at < datetime('now','-14 days')")
+            db.execute("DELETE FROM market_quotes WHERE julianday(fetched_at) < julianday('now','-14 days')")
             db.commit()
         return len(quotes)
     def latest_market_quotes(self):
