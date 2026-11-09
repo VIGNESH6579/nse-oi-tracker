@@ -29,8 +29,11 @@ def poll_once():
                 continue
             if store.insert(event):
                 new_count += 1
-                if send(event):
-                    store.mark_notified(event["event_id"])
+        # Retry pending notifications on later polls; a temporary ntfy outage
+        # must not permanently lose an alert after the event is stored.
+        for pending in store.pending_notifications(limit=50):
+            if send(pending):
+                store.mark_notified(pending["event_id"])
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         status.update(last_poll=now, last_success=now, last_error=None, source=source, new_events=new_count)
