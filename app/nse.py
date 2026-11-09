@@ -84,13 +84,13 @@ def _date(value):
 
 def _parse_event_date(text):
     """Extract a board/result meeting date only when the context indicates a meeting."""
-    cleaned = re.sub(r"\\b(\\d{1,2})(st|nd|rd|th)\\b", r"\\1", text or "", flags=re.I)
+    cleaned = re.sub(r"\b(\d{1,2})(st|nd|rd|th)\b", r"\1", text or "", flags=re.I)
     month = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
     patterns = [
-        r"\\b\\d{4}-\\d{1,2}-\\d{1,2}\\b",
-        r"\\b\\d{1,2}[/-]\\d{1,2}[/-]\\d{4}\\b",
-        rf"\\b\\d{{1,2}}(?:st|nd|rd|th)?[\\s-]+{month}[\\s,.-]+\\d{{4}}\\b",
-        rf"\\b{month}\\s+\\d{{1,2}}(?:st|nd|rd|th)?[,]?\\s+\\d{{4}}\\b",
+        r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b",
+        rf"\b\d{{1,2}}(?:st|nd|rd|th)?[\s-]+{month}[\s,.-]+\d{{4}}\b",
+        rf"\b{month}\s+\d{{1,2}}(?:st|nd|rd|th)?[,]?\s+\d{{4}}\b",
     ]
     candidates = []
     formats = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
@@ -98,7 +98,7 @@ def _parse_event_date(text):
                "%B %d %Y", "%b %d %Y")
     for pattern in patterns:
         for match in re.finditer(pattern, cleaned, flags=re.I):
-            raw = re.sub(r"(?i)(\\d)(st|nd|rd|th)\\b", r"\\1", match.group(0)).replace(",", " ")
+            raw = re.sub(r"(?i)(\d)(st|nd|rd|th)\b", r"\1", match.group(0)).replace(",", " ")
             parsed = None
             for fmt in formats:
                 try:
@@ -116,7 +116,7 @@ def _parse_event_date(text):
                 score += 3
             if re.search(r"(held|scheduled|convene|conduct|take place).{0,50}$", before):
                 score += 3
-            if re.search(r"^(?:\\s|,|:|-)*(?:as scheduled|for the meeting|meeting)", after):
+            if re.search(r"^(?:\s|,|:|-)*(?:as scheduled|for the meeting|meeting)", after):
                 score += 1
             if re.search(r"quarter ended|year ended|financial year|record date", context):
                 score -= 3
@@ -130,7 +130,7 @@ def _parse_event_date(text):
 
 def _dedupe_key(symbol, category, headline):
     normalized = re.sub(r"[^a-z0-9]+", " ", (headline or "").lower()).strip()
-    normalized = re.sub(r"\\s+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
     return hashlib.sha256(f"{symbol.upper()}|{category.lower()}|{normalized}".encode()).hexdigest()
 
 def _classify(title,details,feed_type,event_date=None):
