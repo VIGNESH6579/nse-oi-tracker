@@ -27,6 +27,7 @@ class AngelMarketData:
         self._jwt = ""
         self._login_at = 0.0
         self._tokens = {}
+        self._token_master_loaded = False
         self._lock = RLock()
         self._last_quote_at = 0.0
         try:
@@ -77,7 +78,7 @@ class AngelMarketData:
     def _load_tokens(self, symbols):
         wanted = {str(s).upper().strip() for s in symbols}
         missing = wanted - set(self._tokens)
-        if not missing:
+        if not missing or self._token_master_loaded:
             return
         response = requests.get(MASTER_URL, timeout=45)
         response.raise_for_status()
@@ -96,6 +97,7 @@ class AngelMarketData:
             elif name == "NIFTY 50" or raw == "NIFTY 50":
                 found["NIFTY"] = str(row.get("token", ""))
         self._tokens.update({k:v for k,v in found.items() if v})
+        self._token_master_loaded = True
 
     def quotes(self, symbols):
         """Fetch price/volume snapshots; intentionally discard OI and depth."""
