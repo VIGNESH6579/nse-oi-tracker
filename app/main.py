@@ -8,13 +8,14 @@ from .config import settings
 from .store import Store
 from .nse import fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
 from .notifier import send
+from .market_data import angel_market_data
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger(__name__)
 store=Store(settings.database_path)
 scheduler=BackgroundScheduler(timezone="Asia/Kolkata")
 poll_lock=threading.Lock()
-status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked"}
+status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","market_data":{"state":"not checked","quotes":0,"last_quote_at":None,"error":None}}
 
 def poll_once():
     if not poll_lock.acquire(blocking=False): return {"skipped":True,"reason":"poll already running"}
@@ -26,6 +27,19 @@ def poll_once():
         for row in rows:
             event=normalize(row,symbols,company_map)
             if event and store.insert(event): new_count+=1
+        # Read-only market snapshot. This adapter has no order/modify/cancel methods.
+        # Only LTP, OHLC, percentage change and volume are persisted; OI is discarded.
+        if settings.angel_market_data_enabled:
+            try:
+                quotes=angel_market_data.quotes(sorted(symbols))
+                saved=store.save_market_quotes(quotes)
+                status["market_data"]={"state":"ok" if saved else ("configured_no_quotes" if angel_market_data.configured else "not_configured"),
+                    "quotes":saved,"last_quote_at":max((q["fetched_at"] for q in quotes.values()),default=None),"error":None}
+            except Exception as exc:
+                status["market_data"]={"state":"error","quotes":0,"last_quote_at":None,"error":str(exc)[:240]}
+                log.warning("Angel One read-only market-data poll failed: %s",exc)
+        else:
+            status["market_data"]={"state":"disabled","quotes":0,"last_quote_at":None,"error":None}
         for pending in store.pending_notifications(limit=50):
             if send(pending): store.mark_notified(pending["event_id"])
         now=datetime.now(timezone.utc).isoformat()
@@ -67,6 +81,13 @@ def dashboard():
     results=store.list_events(100,status="RESULT PUBLISHED")
     sudden=store.list_events(100,status="NEW EVENT")
     all_events=store.list_events(100)
+    quotes=store.latest_market_quotes()
+    nifty=next((q for q in quotes if q["symbol"]=="NIFTY"),None)
+    def quote_row(q):
+        relative=(float(q.get("change_pct") or 0)-float(nifty.get("change_pct") or 0)) if nifty and q["symbol"]!="NIFTY" else None
+        rel=(" · "+("+" if relative>=0 else "")+f"{relative:.2f}% vs NIFTY") if relative is not None else ""
+        return f'<tr><td>{_esc(q["symbol"])}</td><td>{float(q["ltp"]):.2f}</td><td>{float(q.get("change_pct") or 0):+.2f}%</td><td>{int(q.get("volume") or 0):,}</td><td>{_esc(q.get("fetched_at"))}{_esc(rel)}</td></tr>'
+    market_rows="".join(quote_row(q) for q in quotes[:100]) or "<tr><td colspan=5>No Angel One quotes yet. Check credentials and symbol-token mapping.</td></tr>"
     source_lines="".join(f'<li>{_esc(k)}: {"OK · "+str(v.get("items",0))+" items" if v.get("ok") else "ERROR · "+_esc(v.get("error"))}</li>' for k,v in status["sources"].items()) or "<li>Waiting for first feed poll</li>"
     banner="SOURCE ERROR: "+_esc(status["last_error"]) if status["last_error"] else "Feeds report status individually below."
     return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -75,13 +96,18 @@ body{{font:15px system-ui;background:#0b1220;color:#e8edf5;margin:0;padding:24px
 h1{{margin-bottom:4px}}.sub,small,.why{{color:#9eacc2}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}
 .panel,article{{background:#141f32;border:1px solid #263750;border-radius:12px;padding:16px;margin:12px 0}}
 .meta{{color:#9ec5ff;font-size:12px;text-transform:uppercase;letter-spacing:.04em}}h3{{margin:8px 0}}
-a{{color:#8fc5ff}}.direction{{color:#f0d28a}}.alert{{color:#ffb4a8}}.tabs{{display:flex;gap:18px;flex-wrap:wrap}}
+a{{color:#8fc5ff}}table{{width:100%;border-collapse:collapse}}td,th{{padding:7px;text-align:left;border-bottom:1px solid #263750;font-size:13px}}.direction{{color:#f0d28a}}.alert{{color:#ffb4a8}}.tabs{{display:flex;gap:18px;flex-wrap:wrap}}
 </style></head><body><h1>Company Event & Results Monitor</h1><div class="sub">NSE F&O companies · scheduled events · sudden filings · results status · no automatic trade calls</div>
 <div class="grid"><div class="panel">Last poll<br><b>{_esc(status["last_poll"] or "not yet")}</b></div>
 <div class="panel">F&O universe<br><b>{_esc(status["universe_source"])}</b></div>
 <div class="panel">Stored events<br><b>{store.count()}</b></div>
 <div class="panel">New events last poll<br><b>{status["new_events"]}</b></div></div>
 <div class="panel"><b>Feed health</b><ul>{source_lines}</ul><div class="alert">{banner}</div></div>
+<h2>Market prices · Angel One read-only</h2>
+<div class="panel"><b>Market data status:</b> {_esc(status["market_data"]["state"])} · <b>Quotes:</b> {status["market_data"]["quotes"]} · <b>Fetched:</b> {_esc(status["market_data"].get("last_quote_at") or "not yet")}
+{("<p class='alert'>"+_esc(status["market_data"].get("error"))+"</p>") if status["market_data"].get("error") else ""}
+<p class="why">Price change and traded volume are market context, not proof that a filing caused the move. Relative change is stock % change minus NIFTY 50 % change. Quote time is fetch time.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Symbol</th><th>LTP</th><th>Change</th><th>Volume</th><th>Fetched / relative move</th></tr></thead><tbody>{market_rows}</tbody></table></div></div>
 <h2>Upcoming events</h2>{''.join(_card(e) for e in upcoming) or '<p>No upcoming event records found in the feeds yet.</p>'}
 <h2>Results published</h2>{''.join(_card(e) for e in results) or '<p>No new results filings found yet.</p>'}
 <h2>Sudden / latest news events</h2>{''.join(_card(e) for e in sudden) or '<p>No new events found yet.</p>'}
@@ -99,7 +125,12 @@ def health():
       "poll_interval_seconds":settings.poll_interval,"ntfy_configured":bool(settings.ntfy_topic),
       "last_poll":status["last_poll"],"last_success":status["last_success"],
       "last_error":status["last_error"],"sources":status["sources"],"universe_source":status["universe_source"],
-      "market_data_provider":"not configured"}
+      "market_data_provider":"Angel One SmartAPI read-only" if settings.angel_market_data_enabled else "disabled",
+      "market_data":status["market_data"]}
+
+@app.get("/api/market")
+def market():
+    return {"provider":"Angel One SmartAPI read-only","quotes":store.latest_market_quotes(),"status":status["market_data"]}
 
 @app.post("/api/sync")
 def sync(): return poll_once()
