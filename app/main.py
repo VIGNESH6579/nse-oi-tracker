@@ -47,6 +47,7 @@ def poll_once():
             poll_errors.append("F&O universe: "+str(exc))
             log.warning("F&O universe fetch failed; fallback=%s symbols=%d error=%s",
                         universe_source,len(symbols),exc)
+        log.info("F&O universe source=%s symbols=%d",universe_source,len(symbols))
         company_map=get_fno_company_map(symbols) if symbols else {}
         if symbols and not company_map:
             log.warning("F&O company-name map is empty; symbol-only matching will miss name-only exchange filings")
