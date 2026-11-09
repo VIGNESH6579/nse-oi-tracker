@@ -172,6 +172,7 @@ def fetch_event_calendar_api(allowed):
         "index": "equities",
         "from_date": (today - timedelta(days=60)).strftime("%d-%m-%Y"),
         "to_date": (today + timedelta(days=90)).strftime("%d-%m-%Y"),
+        "fo_sec": "true",
     }
     with requests.Session() as session:
         session.headers.update({
@@ -202,8 +203,8 @@ def fetch_event_calendar_api(allowed):
         purpose = str(row.get("purpose") or row.get("PURPOSE") or "").strip()
         details = str(row.get("details") or row.get("DETAILS") or "").strip()
         company = str(row.get("company") or row.get("COMPANY") or "").strip()
-        meeting_date = str(row.get("date") or row.get("DATE") or
-                           row.get("event_date") or row.get("meeting_date") or "").strip()
+        meeting_date = str(row.get("date") or row.get("DATE") or row.get("event_date") or
+                           row.get("meeting_date") or row.get("bm_date") or "").strip()
         if not meeting_date:
             continue
         # Calendar records are schedules, not proof that results were filed.
@@ -213,7 +214,7 @@ def fetch_event_calendar_api(allowed):
             "description": (agenda + " | " if agenda else "") + "Meeting date: " + meeting_date,
             "link": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
             "published": "",
-            "feed_type": "board_meetings",
+            "feed_type": "event_calendar",
             "source_name": "NSE Corporate Event Calendar",
         })
     return items
@@ -344,9 +345,9 @@ def _dedupe_key(symbol, category, headline):
 
 def _classify(title,details,feed_type,event_date=None):
     text=(title+" "+details).lower()
-    is_board = feed_type=="board_meetings" or "board meeting" in text or "meeting of the board" in text
+    is_board = feed_type in {"board_meetings", "event_calendar"} or "board meeting" in text or "meeting of the board" in text
     result_terms = ("financial results","quarterly results","audited results","unaudited results","standalone results","consolidated results")
-    result_agenda = any(x in text for x in result_terms) and any(x in text for x in ("consider","approve","approval","to take on record","meeting"))
+    result_agenda = any(x in text for x in result_terms) and (feed_type=="event_calendar" or any(x in text for x in ("consider","approve","approval","to take on record","meeting")))
     if is_board and result_agenda: category="Financial Results"
     elif is_board: category="Board Meeting"
     elif feed_type=="financial_results" or any(x in text for x in result_terms): category="Financial Results"
