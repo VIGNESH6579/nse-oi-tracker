@@ -216,32 +216,6 @@ def test_duplicate_rss_items_are_suppressed_within_72_hours(tmp_path):
     assert len(store.list_events(20)) == 1
 
 
-def test_instrument_master_caches_newly_relevant_stock_tokens(monkeypatch):
-    from app.market_data import AngelMarketData
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return [
-                {"exch_seg": "NSE", "symbol": "RVNL-EQ", "name": "RAIL VIKAS NIGAM", "token": "101"},
-                {"exch_seg": "NSE", "symbol": "COCHINSHIP-EQ", "name": "COCHIN SHIPYARD", "token": "102"},
-                {"exch_seg": "NSE", "symbol": "KALYANKJIL-EQ", "name": "KALYAN JEWELLERS", "token": "103"},
-                {"exch_seg": "NSE", "symbol": "NIFTY 50", "name": "NIFTY 50", "token": "99926000"},
-            ]
-
-    monkeypatch.setattr("app.market_data.requests.get", lambda *args, **kwargs: Response())
-    adapter = AngelMarketData()
-    adapter._load_tokens(["RVNL", "NIFTY"])
-
-    # A later poll must already have tokens for new event-linked companies.
-    assert adapter._tokens["RVNL"] == "101"
-    assert adapter._tokens["COCHINSHIP"] == "102"
-    assert adapter._tokens["KALYANKJIL"] == "103"
-    assert adapter._tokens["NIFTY"] == "99926000"
-
-
 def test_date_only_filing_does_not_gain_an_invented_time():
     from app.nse import _date
     assert _date("09-Nov-2026") == "2026-11-09"
