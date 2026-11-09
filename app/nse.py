@@ -31,14 +31,6 @@ def _session():
         "Accept-Language":"en-US,en;q=0.9",
         "Connection":"keep-alive",
     })
-    try:
-        # Prime an ordinary NSE session to receive its normal cookies before
-        # requesting the permitted F&O reference file or corporate API.
-        prime=s.get("https://www.nseindia.com",timeout=settings.nse_timeout)
-        if prime.status_code >= 400:
-            log.warning("NSE homepage session prime returned HTTP %s",prime.status_code)
-    except requests.RequestException as exc:
-        log.warning("NSE homepage session prime failed; continuing with direct request: %s",exc)
     return s
 
 def _valid_stock_symbol(value):
