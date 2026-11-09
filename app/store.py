@@ -18,6 +18,11 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_filed_at ON events(filed_at DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_symbol ON events(symbol)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_status ON events(event_status)")
+            db.execute("""CREATE TABLE IF NOT EXISTS market_quotes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, ltp REAL NOT NULL,
+              change_pct REAL, open REAL, high REAL, low REAL, previous_close REAL,
+              volume INTEGER, source TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_market_quotes_symbol_time ON market_quotes(symbol,fetched_at DESC)")
             db.commit()
     @contextmanager
     def connect(self):
@@ -43,5 +48,23 @@ class Store:
         if status: sql+=" AND event_status=?"; args.append(status)
         sql+=" ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?"; args.append(limit)
         with self.connect() as db: return [dict(x) for x in db.execute(sql,args).fetchall()]
+    def save_market_quotes(self, quotes):
+        if not quotes: return 0
+        with self.connect() as db:
+            db.executemany("""INSERT INTO market_quotes
+              (symbol,ltp,change_pct,open,high,low,previous_close,volume,source,fetched_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?)""",
+              [(q["symbol"],q["ltp"],q.get("change_pct"),q.get("open"),q.get("high"),q.get("low"),
+                q.get("previous_close"),q.get("volume"),q.get("source","Angel One SmartAPI"),q["fetched_at"])
+               for q in quotes.values()])
+            db.execute("DELETE FROM market_quotes WHERE fetched_at < datetime('now','-14 days')")
+            db.commit()
+        return len(quotes)
+    def latest_market_quotes(self):
+        with self.connect() as db:
+            rows=db.execute("""SELECT q.* FROM market_quotes q
+              JOIN (SELECT symbol,MAX(fetched_at) AS latest FROM market_quotes GROUP BY symbol) x
+              ON q.symbol=x.symbol AND q.fetched_at=x.latest ORDER BY q.symbol""").fetchall()
+            return [dict(x) for x in rows]
     def count(self):
         with self.connect() as db: return db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
