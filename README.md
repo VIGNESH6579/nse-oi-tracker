@@ -4,6 +4,8 @@ Tracks official NSE RSS announcements for F&O companies, separates upcoming boar
 
 ## Sources
 - Primary filing/event feed: official NSE RSS feeds (announcements, board meetings, financial results).
+- Independent fallback: official BSE RSS feeds for announcements, board meetings and financial results. Events are matched back to the NSE F&O ticker universe using company names and known aliases.
+- Structured NSE board-meetings and event-calendar APIs are attempted as supplements, but Render currently receives HTTP 403 from these endpoints; BSE RSS is used as the independent fallback.
 - F&O universe: official NSE F&O market-lot CSV or explicit `FNO_SYMBOLS`.
 - NSE's normal JSON API is not used as the only source; if it returns 403, RSS feed health is shown independently. No proxy or anti-bot bypass is used.
 
@@ -34,4 +36,4 @@ Set `NTFY_TOPIC`, optionally `NTFY_TOKEN`, and if needed `FNO_SYMBOLS` (comma-se
 - `GET /api/health`
 - `POST /api/sync`
 
-NSE RSS is an official exchange-published feed, but third-party feed-reader indexing suggests the archive announcements feed is active; actual access from this Render deployment must be verified. Render Free may sleep and local SQLite is ephemeral. For reliable continuous polling and durable history, use an always-on worker and persistent storage.
+NSE and BSE RSS feeds are exchange-published sources. Actual reachability and item counts are shown independently in the dashboard's Data status panel. Render Free may sleep and local SQLite is ephemeral. For reliable continuous polling and durable history, use an always-on worker and persistent storage.
