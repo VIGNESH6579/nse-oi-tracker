@@ -190,6 +190,27 @@ def get_fno_company_map(allowed):
         log.warning("Could not load NSE equity company-name map: %s",exc)
         return {}
 
+def _company_match_key(value):
+    # NSE RSS sometimes abbreviates "India Limited" as "IND LTD".
+    # Removing these legal suffix tokens allows equivalent names to match.
+    ignored = {"INDIA", "IND", "LIMITED", "LTD", "PRIVATE", "PVT", "COMPANY", "CO"}
+    words = re.findall(r"[A-Z0-9]+", str(value or "").upper())
+    return "".join(word for word in words if word not in ignored)
+
+
+KNOWN_COMPANY_ALIASES = {
+    "COCHINSHIP": ("COCHIN SHIPYARD LIMITED", "COCHIN SHIPYARD LTD"),
+    "KALYANKJIL": ("KALYAN JEWELLERS INDIA LIMITED", "KALYAN JEWELLERS IND LTD",
+                   "KALYAN JEWELLERS"),
+    "RVNL": ("RAIL VIKAS NIGAM LIMITED", "RAIL VIKAS NIGAM LTD"),
+}
+KNOWN_COMPANY_NAMES = {
+    "COCHINSHIP": "Cochin Shipyard Limited",
+    "KALYANKJIL": "Kalyan Jewellers India Limited",
+    "RVNL": "Rail Vikas Nigam Limited",
+}
+
+
 def normalize(item,allowed,company_map=None):
     title=(item.get("title") or "").strip()
     details=(item.get("description") or "").strip()
@@ -201,12 +222,21 @@ def normalize(item,allowed,company_map=None):
             symbol=candidate; break
     company_map=company_map or {}
     if not symbol:
-        normalized=re.sub(r"[^A-Z0-9]","",hay)
-        matches=[]
+        normalized=_company_match_key(hay)
+        matches=set()
         for candidate,name in company_map.items():
-            alias=re.sub(r"[^A-Z0-9]","",name.upper())
-            if len(alias)>=8 and alias in normalized: matches.append(candidate)
-        if len(matches)==1: symbol=matches[0]
+            alias=_company_match_key(name)
+            if candidate in allowed and len(alias)>=8 and alias in normalized:
+                matches.add(candidate)
+        # Known NSE legal-name variants cover filings where the RSS title uses
+        # abbreviations and the equity master uses a different company-name form.
+        for candidate,aliases in KNOWN_COMPANY_ALIASES.items():
+            if candidate in allowed and any(
+                len(_company_match_key(alias))>=8 and _company_match_key(alias) in normalized
+                for alias in aliases
+            ):
+                matches.add(candidate)
+        if len(matches)==1: symbol=next(iter(matches))
     if not symbol: return None
     filed=_date(item.get("published"))
     event_date=_parse_event_date(title+" "+details)
@@ -214,7 +244,8 @@ def normalize(item,allowed,company_map=None):
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
     dedupe_key=_dedupe_key(symbol,category,title)
-    return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"dedupe_key":dedupe_key,"symbol":symbol,"company":company_map.get(symbol,symbol),"event_date":event_date,
+    company = company_map.get(symbol) or KNOWN_COMPANY_NAMES.get(symbol) or symbol
+    return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"dedupe_key":dedupe_key,"symbol":symbol,"company":company,"event_date":event_date,
       "category":category,"impact":direction,"headline":title or "NSE filing","details":details,
       "filed_at":filed,"source_url":url,"event_status":state,"rationale":rationale,
       "source_name":item.get("source_name","NSE RSS"),"feed_type":item.get("feed_type","")}
