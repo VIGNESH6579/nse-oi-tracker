@@ -92,230 +92,178 @@ def _esc(v):
     import html
     return html.escape(str(v or ""), quote=True)
 
+def _now_ist():
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Asia/Kolkata"))
+
 def _display_time(value):
-    if not value:
-        return "Time not supplied"
+    if not value: return "Time not supplied by exchange feed"
     try:
         from zoneinfo import ZoneInfo
         dt=datetime.fromisoformat(str(value).replace("Z","+00:00"))
-        if dt.tzinfo is None:
-            dt=dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
-    except Exception:
-        return str(value)
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y · %I:%M %p IST")
+    except Exception: return str(value)
 
-def _event_labels(event):
-    state=str(event.get("event_status") or "").upper()
-    labels={
-        "UPCOMING":"Board meeting notice",
-        "RESULT PUBLISHED":"Results filing detected",
-        "NEW EVENT":"New company announcement",
-        "SCHEDULE CHANGE":"Schedule change",
-    }
+def _display_event_date(value):
+    try: return datetime.strptime(str(value)[:10],"%Y-%m-%d").strftime("%d %b %Y")
+    except Exception: return "Date not identified in filing"
+
+def _is_recent_or_scheduled(event,today):
+    event_date=str(event.get("event_date") or "")
+    if event_date and event_date>=today: return True
+    stamp=event.get("filed_at") or event.get("created_at")
+    if not stamp: return False
+    try:
+        dt=datetime.fromisoformat(str(stamp).replace("Z","+00:00"))
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        return 0 <= (_now_ist()-dt.astimezone(_now_ist().tzinfo)).total_seconds() <= 72*3600
+    except Exception: return False
+
+def _impact_label(event):
     impact=str(event.get("impact") or "unclassified").lower()
-    impact_labels={
-        "bullish":"Potentially positive",
-        "bearish":"Potentially negative",
-        "neutral":"Impact not assessed",
-        "mixed":"Mixed indicators",
-        "unclassified":"Impact not assessed",
-    }
-    return labels.get(state,state.replace("_"," ").title()), impact_labels.get(impact,"Impact not assessed"), impact
+    if event.get("event_status")=="RESULT PUBLISHED":
+        if impact=="bullish": return "Result view: Potentially positive","positive"
+        if impact=="bearish": return "Result view: Potentially negative","negative"
+        if impact=="mixed": return "Result view: Mixed","mixed"
+        return "Result direction: Not assessed","neutral"
+    return ({"bullish":("Potentially positive","positive"),"bearish":("Potentially negative","negative"),
+             "mixed":("Mixed indicators","mixed")}.get(impact,("Impact not assessed","neutral")))
 
-def _card(event):
-    event_type, impact_label, impact = _event_labels(event)
-    symbol=_esc(event.get("symbol"))
-    category=_esc(event.get("category"))
-    headline=_esc(event.get("headline") or "Company filing")
-    details=_esc(event.get("details"))
-    rationale=_esc(event.get("rationale") or "No impact assessment is available.")
-    filed=_esc(_display_time(event.get("filed_at")))
-    source=_esc(event.get("source_name") or "Exchange filing")
-    source_url=_esc(event.get("source_url") or "https://www.nseindia.com/")
-    searchable=_esc(" ".join(str(event.get(k) or "") for k in ("symbol","category","headline","details","event_status")))
-    if impact=="bullish":
-        impact_class="impact-positive"
-    elif impact=="bearish":
-        impact_class="impact-negative"
-    elif impact=="mixed":
-        impact_class="impact-mixed"
-    else:
-        impact_class="impact-neutral"
+def _card(event,quote_map=None,nifty_pct=None):
+    quote_map=quote_map or {}
+    symbol=str(event.get("symbol") or "")
+    company=str(event.get("company") or "")
+    if not company or company in (symbol,str(event.get("headline") or "")): company=symbol
+    state=str(event.get("event_status") or "")
+    labels={"RESULT SCHEDULED TODAY":"Results scheduled today","RESULT SCHEDULED":"Results scheduled",
+            "RESULT DATE NOT CONFIRMED":"Result agenda · date unclear","RESULT PUBLISHED":"Results published",
+            "NEW EVENT":"New company announcement","BOARD MEETING NOTICE":"Board meeting notice",
+            "UPCOMING":"Board meeting notice","SCHEDULE CHANGE":"Schedule changed"}
+    status_label=labels.get(state,state.replace("_"," ").title())
+    filed=event.get("filed_at")
+    if state=="RESULT PUBLISHED": date_line="Published on: "+_display_time(filed)
+    elif event.get("event_date"):
+        date_line="Scheduled date: "+_display_event_date(event.get("event_date"))
+        if filed: date_line+=" · Notice filed: "+_display_time(filed)
+    else: date_line="Exchange filing time: "+_display_time(filed)
+    details=str(event.get("details") or "").strip()
+    if len(details)>260: details=details[:257].rsplit(" ",1)[0]+"..."
+    impact_label,impact_class=_impact_label(event)
+    q=quote_map.get(symbol)
+    if q:
+        pct=float(q.get("change_pct") or 0)
+        movement="Up" if pct>0 else ("Down" if pct<0 else "Flat")
+        market_line=f'Current market: ₹{float(q.get("ltp") or 0):,.2f} · {movement} {abs(pct):.2f}% today'
+        if nifty_pct is not None:
+            relative=pct-float(nifty_pct)
+            market_line+=f' · {"+" if relative>=0 else ""}{relative:.2f}% vs NIFTY 50'
+    else: market_line="Price snapshot not available for this stock"
+    searchable=_esc(" ".join(str(event.get(k) or "") for k in ("symbol","company","category","headline","details","event_status")))
+    link=_esc(event.get("source_url") or "https://www.nseindia.com/")
     return f"""<article class="event-card" data-search="{searchable}">
-      <div class="event-topline"><span class="symbol-chip">{symbol}</span><span class="category-label">{category}</span><span class="event-state">{_esc(event_type)}</span></div>
-      <h3>{headline}</h3>
-      {f'<p class="event-details">{details}</p>' if details else ''}
-      <div class="impact-row"><span class="impact-pill {impact_class}">{_esc(impact_label)}</span><span class="impact-explain">{rationale}</span></div>
-      <div class="event-footer"><span>{filed} · {source}</span><a href="{source_url}" target="_blank" rel="noopener noreferrer">View original filing ↗</a></div>
+      <div class="topline"><span class="symbol">{_esc(symbol)}</span><strong>{_esc(company)}</strong><span class="state">{_esc(status_label)}</span></div>
+      <h3>{_esc(event.get("headline") or "Company filing")}</h3>
+      {f'<p class="details">{_esc(details)}</p>' if details else ''}
+      <p class="date">{_esc(date_line)}</p>
+      <div class="impact"><span class="impact-{impact_class}">{_esc(impact_label)}</span><span class="market">{_esc(market_line)}</span></div>
+      <div class="foot"><span>{_esc(event.get("source_name") or "NSE")}</span><a href="{link}" target="_blank" rel="noopener noreferrer">Open original filing ↗</a></div>
     </article>"""
 
-def _section(title, subtitle, events, empty_text, anchor):
-    cards="".join(_card(e) for e in events)
-    return f"""<section class="content-section" id="{anchor}">
-      <div class="section-heading"><div><h2>{title}</h2><p>{subtitle}</p></div><span class="count-pill">{len(events)} items</span></div>
-      <div class="event-list">{cards or f'<div class="empty-state">{empty_text}</div>'}</div>
+def _section(title,subtitle,events,empty,anchor,quote_map,nifty_pct):
+    cards="".join(_card(e,quote_map,nifty_pct) for e in events)
+    return f"""<section class="section" id="{anchor}">
+      <header><div><h2>{title}</h2><p>{subtitle}</p></div><span class="count">{len(events)}</span></header>
+      <div class="cards">{cards or f'<div class="empty">{empty}</div>'}</div>
     </section>"""
 
 @app.get("/",response_class=HTMLResponse)
 def dashboard():
-    board_notices=store.list_events(100,status="UPCOMING")
-    results=store.list_events(100,status="RESULT PUBLISHED")
-    sudden=store.list_events(100,status="NEW EVENT")
-    all_events=store.list_events(100)
-    quotes=store.latest_market_quotes()
-    nifty=next((q for q in quotes if q["symbol"]=="NIFTY"),None)
-
-    def quote_row(q):
-        is_index=q["symbol"]=="NIFTY"
-        relative=None
-        if nifty and not is_index:
-            relative=float(q.get("change_pct") or 0)-float(nifty.get("change_pct") or 0)
+    today=_now_ist().date().isoformat()
+    recent=[e for e in store.list_events(500) if _is_recent_or_scheduled(e,today)]
+    results_today=[e for e in recent if e.get("event_status")=="RESULT SCHEDULED TODAY" or
+                   (e.get("event_status")=="RESULT SCHEDULED" and e.get("event_date")==today)]
+    results_future=[e for e in recent if e.get("event_status")=="RESULT SCHEDULED" and e.get("event_date") and e.get("event_date")>today]
+    results_published=[e for e in recent if e.get("event_status")=="RESULT PUBLISHED"]
+    news=[e for e in recent if e.get("event_status")=="NEW EVENT"]
+    board=[e for e in recent if e.get("event_status") in ("BOARD MEETING NOTICE","UPCOMING","RESULT DATE NOT CONFIRMED")]
+    event_symbols={str(e.get("symbol") or "").upper() for e in recent if e.get("symbol")}
+    all_quotes=store.latest_market_quotes()
+    quote_map={q["symbol"]:q for q in all_quotes if q.get("symbol") in event_symbols}
+    nifty=next((q for q in all_quotes if q.get("symbol")=="NIFTY"),None)
+    nifty_pct=float(nifty.get("change_pct") or 0) if nifty else None
+    rows=[]
+    for symbol in sorted(event_symbols):
+        q=quote_map.get(symbol)
+        matching=[e for e in recent if str(e.get("symbol") or "").upper()==symbol]
+        company=next((str(e.get("company")) for e in matching if e.get("company") and e.get("company") not in (symbol,str(e.get("headline") or ""))),symbol)
+        if not q:
+            rows.append(f'<tr data-search="{_esc(symbol+" "+company)}"><td><b>{_esc(company)}</b><small>{_esc(symbol)}</small></td><td colspan="5" class="muted">No Angel One quote received</td></tr>')
+            continue
         change=float(q.get("change_pct") or 0)
-        change_class="positive" if change>0 else ("negative" if change<0 else "flat")
-        relative_text="—" if relative is None else f'{"+" if relative>=0 else ""}{relative:.2f}%'
-        relative_class="" if relative is None else ("positive" if relative>0 else ("negative" if relative<0 else "flat"))
-        display_symbol="NIFTY 50" if is_index else _esc(q["symbol"])
-        fetched=_esc(_display_time(q.get("fetched_at")))
-        searchable=_esc(q["symbol"]+" "+display_symbol)
-        return f"""<tr data-search="{searchable}">
-          <td><strong>{display_symbol}</strong>{" <span class='index-tag'>INDEX</span>" if is_index else ""}</td>
-          <td class="price-cell">₹{float(q["ltp"]):,.2f}</td>
-          <td><span class="number-change {change_class}">{change:+.2f}%</span></td>
-          <td>{int(q.get("volume") or 0):,}</td>
-          <td><span class="number-change {relative_class}">{relative_text}</span></td>
-          <td class="time-cell">{fetched}</td>
-        </tr>"""
-
-    market_rows="".join(quote_row(q) for q in quotes) or '<tr><td colspan="6" class="table-empty">No prices received yet. Check the Angel One connection status below.</td></tr>'
-    market_state=status.get("market_data") or {}
-    md_state=str(market_state.get("state") or "not checked")
-    md_labels={
-        "ok":("Prices received","status-good"),
-        "not_configured":("Credentials needed","status-warn"),
-        "configured_no_quotes":("No quotes received","status-warn"),
-        "no_quotes":("No quotes received","status-warn"),
-        "error":("Connection error","status-bad"),
-        "disabled":("Price tracking off","status-muted"),
-        "not checked":("Waiting for first check","status-muted"),
-    }
-    md_label,md_class=md_labels.get(md_state,(md_state.replace("_"," ").title(),"status-muted"))
-    md_error=_esc(market_state.get("error"))
-    market_time=_esc(_display_time(market_state.get("last_quote_at")))
-    if md_error and md_state in ("not_configured","error"):
-        md_message=md_error
-    elif md_state=="ok":
-        md_message="Angel One market quotes received. The table shows the latest saved snapshot."
-    else:
-        md_message="Prices will appear here after a successful read-only Angel One quote request."
-    health_items=[]
+        relative=change-nifty_pct if nifty_pct is not None else None
+        cc="up" if change>0 else ("down" if change<0 else "flat")
+        rc="up" if relative is not None and relative>0 else ("down" if relative is not None and relative<0 else "flat")
+        rows.append(f'''<tr data-search="{_esc(symbol+" "+company)}"><td><b>{_esc(company)}</b><small>{_esc(symbol)}</small></td>
+          <td><b>₹{float(q["ltp"]):,.2f}</b></td><td class="{cc}">{change:+.2f}%</td><td>{int(q.get("volume") or 0):,}</td>
+          <td class="{rc}">{"—" if relative is None else f"{relative:+.2f}%"}</td><td class="muted">{_esc(_display_time(q.get("fetched_at")))}</td></tr>''')
+    market_rows="".join(rows) or '<tr><td colspan="6" class="muted empty-row">No recent company news. Unrelated F&O stock prices are intentionally hidden.</td></tr>'
+    md=status.get("market_data") or {}
+    md_state=str(md.get("state") or "not checked")
+    labels={"ok":("Connected","good"),"not_configured":("Credentials needed","warn"),"configured_no_quotes":("No quotes received","warn"),
+            "no_quotes":("No quotes received","warn"),"error":("Connection error","bad"),"disabled":("Tracking off","muted"),
+            "not checked":("Waiting for first check","muted")}
+    md_label,md_class=labels.get(md_state,(md_state.replace("_"," ").title(),"muted"))
+    feeds=[]
     for name,feed in status.get("sources",{}).items():
         ok=bool(feed.get("ok"))
-        label=name.replace("_"," ").title()
-        detail=(f'{int(feed.get("items",0))} items received' if ok else str(feed.get("error") or "Source unavailable"))
-        health_items.append(f'<div class="source-item"><span class="source-dot {"dot-good" if ok else "dot-bad"}"></span><div><strong>{_esc(label)}</strong><small>{_esc(detail)}</small></div><span class="source-state {"status-good" if ok else "status-bad"}">{"Working" if ok else "Issue"}</span></div>')
-    if not health_items:
-        health_items.append('<div class="empty-state compact">Feed status will appear after the first polling cycle.</div>')
-    feed_error=_esc(status.get("last_error"))
-    feed_notice=(f'<div class="notice notice-warn"><strong>Some checks need attention</strong><p>{feed_error}</p></div>' if feed_error else "")
-    last_check=_esc(_display_time(status.get("last_poll")))
+        detail=f'{int(feed.get("items",0))} items received' if ok else str(feed.get("error") or "Source unavailable")
+        feeds.append(f'<div class="feed"><i class="dot {"green" if ok else "red"}"></i><div><b>{_esc(name.replace("_"," ").title())}</b><small>{_esc(detail)}</small></div><span class="badge {"good" if ok else "bad"}">{"OK" if ok else "Issue"}</span></div>')
+    if not feeds: feeds.append('<div class="empty">Feed status will appear after the first poll.</div>')
+    poll_time=_esc(_display_time(status.get("last_poll")))
+    quote_time=_esc(_display_time(md.get("last_quote_at")))
     interval=max(1,round(settings.poll_interval/60))
-    ntfy_text="Notifications configured" if settings.ntfy_topic else "Notifications not configured"
-    ntfy_class="status-good" if settings.ntfy_topic else "status-warn"
-    events_summary=len(board_notices)+len(results)+len(sudden)
-    all_cards="".join(_card(e) for e in all_events[:30])
-    all_section=f"""<section class="content-section" id="all-events"><div class="section-heading"><div><h2>All recent filings</h2><p>Combined list of the latest announcements and results notices</p></div><span class="count-pill">{min(30,len(all_events))} shown</span></div><div class="event-list">{all_cards or '<div class="empty-state">No company filings have been saved yet.</div>'}</div></section>"""
-
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f4f6fa"><title>Company News & Results Monitor</title>
-<style>
-:root{{--bg:#f4f6fa;--surface:#fff;--ink:#172235;--muted:#66758a;--line:#e4e9f0;--blue:#2459a6;--blue-soft:#edf4ff;--green:#18794e;--green-bg:#eaf7f0;--red:#b42318;--red-bg:#fff0ef;--amber:#966000;--amber-bg:#fff6df;--shadow:0 2px 10px rgba(20,40,70,.045)}}
-*{{box-sizing:border-box}}html{{scroll-behavior:smooth;scroll-padding-top:88px}}body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}}
-a{{color:var(--blue);text-decoration:none}}a:hover{{text-decoration:underline}}
-.shell{{max-width:1240px;margin:0 auto;padding:24px 22px 60px}}
-.topbar{{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:22px}}
-.brand{{display:flex;align-items:center;gap:10px;font-weight:750;letter-spacing:-.02em}}.brand-mark{{width:36px;height:36px;border-radius:10px;background:#1d4f91;color:#fff;display:grid;place-items:center;font-weight:800}}
-.brand small{{display:block;color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.04em;text-transform:uppercase}}
-.top-status{{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}}.live-dot{{width:8px;height:8px;border-radius:50%;background:#2d9b68;display:inline-block}}
-.hero{{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:26px 28px;box-shadow:var(--shadow)}}
-.eyebrow{{text-transform:uppercase;font-size:11px;letter-spacing:.12em;font-weight:750;color:var(--blue)}}h1{{font-size:clamp(26px,4vw,36px);letter-spacing:-.04em;line-height:1.15;margin:7px 0 8px}}.hero-copy{{color:var(--muted);max-width:760px;margin:0}}
-.hero-meta{{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}}.meta-chip{{background:#f1f4f8;color:#46566d;border-radius:30px;padding:6px 11px;font-size:12px;font-weight:650}}
-.nav{{position:sticky;top:0;z-index:10;display:flex;gap:7px;overflow-x:auto;padding:12px 0;background:rgba(244,246,250,.94);backdrop-filter:blur(10px)}}.nav a{{white-space:nowrap;color:#45546a;font-size:13px;font-weight:650;padding:8px 12px;border-radius:9px}}.nav a:hover{{background:#e8eef7;text-decoration:none}}
-.overview{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}}
-.metric{{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px 17px;box-shadow:var(--shadow)}}.metric-label{{color:var(--muted);font-size:12px;font-weight:650}}.metric-value{{font-size:27px;line-height:1.2;font-weight:780;letter-spacing:-.04em;margin-top:5px}}.metric-note{{font-size:11px;color:var(--muted);margin-top:3px}}
-.panel{{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);margin-top:14px}}
-.panel-heading{{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}}.panel-heading h2,.section-heading h2{{font-size:18px;letter-spacing:-.025em;margin:0}}.panel-heading p,.section-heading p{{font-size:12px;color:var(--muted);margin:3px 0 0}}
-.status-pill,.count-pill,.event-state,.impact-pill{{border-radius:30px;display:inline-flex;align-items:center;font-weight:700;font-size:11px;padding:5px 9px;white-space:nowrap}}
-.status-good{{color:var(--green);background:var(--green-bg)}}.status-warn{{color:var(--amber);background:var(--amber-bg)}}.status-bad{{color:var(--red);background:var(--red-bg)}}.status-muted{{color:#58677c;background:#eef1f5}}
-.notice{{padding:12px 14px;border-radius:11px;margin-top:12px;font-size:13px}}.notice p{{margin:3px 0 0}}.notice-warn{{background:var(--amber-bg);color:#75500b;border:1px solid #f1dfb4}}
-.source-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}}.source-item{{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;align-items:flex-start;gap:8px;min-width:0}}.source-item>div{{min-width:0;flex:1}}.source-item strong{{font-size:12px;display:block}}.source-item small{{font-size:11px;color:var(--muted);display:block;overflow-wrap:anywhere;margin-top:2px}}.source-state{{font-size:10px;padding:3px 6px;border-radius:20px}}.source-dot{{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}}.dot-good{{background:#229764}}.dot-bad{{background:#d54d45}}
-.content-section{{margin-top:30px}}.section-heading{{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}}.count-pill{{background:#edf1f6;color:#4c5c72}}
-.event-list{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}}.event-card{{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:16px 17px;box-shadow:var(--shadow);min-width:0}}.event-topline{{display:flex;gap:7px;align-items:center;flex-wrap:wrap}}.symbol-chip{{background:var(--blue-soft);color:#1d4f91;border-radius:6px;padding:3px 7px;font-size:11px;font-weight:800}}.category-label{{font-size:11px;color:var(--muted);font-weight:650}}.event-state{{margin-left:auto;background:#f0f2f6;color:#56657a;font-size:10px}}.event-card h3{{font-size:15px;line-height:1.4;margin:12px 0 6px;letter-spacing:-.01em}}.event-details{{font-size:13px;color:#526176;margin:0 0 10px;overflow-wrap:anywhere}}
-.impact-row{{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-top:12px}}.impact-pill{{font-size:10px}}.impact-positive{{background:var(--green-bg);color:var(--green)}}.impact-negative{{background:var(--red-bg);color:var(--red)}}.impact-mixed{{background:var(--amber-bg);color:var(--amber)}}.impact-neutral{{background:#eff2f6;color:#58677c}}.impact-explain{{font-size:11px;color:var(--muted);flex:1;min-width:150px}}
-.event-footer{{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px;margin-top:13px;font-size:11px;color:var(--muted)}}.event-footer a{{font-weight:700;white-space:nowrap}}
-.empty-state{{background:var(--surface);border:1px dashed #ccd5e1;color:var(--muted);padding:23px;border-radius:12px;font-size:13px;text-align:center;grid-column:1/-1}}.empty-state.compact{{padding:12px;text-align:left}}
-.market-summary{{display:flex;gap:9px;flex-wrap:wrap;align-items:center}}.market-explain{{color:var(--muted);font-size:12px;margin:10px 0 12px}}
-.table-wrap{{overflow-x:auto;border:1px solid var(--line);border-radius:10px}}table{{width:100%;border-collapse:collapse;min-width:760px}}th,td{{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}}th{{color:#627188;background:#f7f9fc;font-size:10px;text-transform:uppercase;letter-spacing:.06em}}tr:last-child td{{border-bottom:0}}.price-cell{{font-weight:750;font-variant-numeric:tabular-nums}}.number-change{{font-weight:750;font-variant-numeric:tabular-nums}}.positive{{color:var(--green)}}.negative{{color:var(--red)}}.flat{{color:#66758a}}.index-tag{{background:#eef1f5;color:#64748a;border-radius:4px;padding:2px 5px;font-size:9px;font-weight:750}}.time-cell{{color:var(--muted);font-size:11px}}.table-empty{{text-align:center;color:var(--muted);padding:20px}}
-.search-row{{display:flex;gap:10px;margin:14px 0 0}}.search-input{{width:100%;border:1px solid #d5dde8;background:#fff;padding:10px 13px;border-radius:9px;font:inherit;font-size:13px;outline:none}}.search-input:focus{{border-color:#6190c9;box-shadow:0 0 0 3px #dceaff}}.search-help{{font-size:11px;color:var(--muted);margin-top:6px}}.hidden-by-search{{display:none!important}}
-.note-box{{background:#f7f9fc;border-left:3px solid #8caed8;padding:10px 12px;border-radius:0 8px 8px 0;color:#526176;font-size:12px;margin-top:12px}}
-.footer{{margin-top:35px;border-top:1px solid var(--line);padding-top:15px;color:var(--muted);font-size:11px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}}
-@media(max-width:800px){{.overview{{grid-template-columns:repeat(2,minmax(0,1fr))}}.source-grid{{grid-template-columns:1fr}}.event-list{{grid-template-columns:1fr}}.shell{{padding:15px 13px 40px}}.hero{{padding:21px 18px}}.panel{{padding:15px}}}}
-@media(max-width:440px){{.topbar{{align-items:flex-start}}.top-status{{font-size:10px}}.metric{{padding:12px}}.metric-value{{font-size:23px}}.event-state{{margin-left:0}}.event-footer{{display:block}}.event-footer a{{display:inline-block;margin-top:6px}}}}
-</style></head>
-<body><div class="shell">
-  <div class="topbar"><div class="brand"><span class="brand-mark">N</span><div>Market Watch Desk<small>NSE F&O company monitor</small></div></div><div class="top-status"><span class="live-dot"></span> Scheduled checks every {interval} min</div></div>
-  <header class="hero"><div class="eyebrow">Company announcements · results · market prices</div><h1>Company News & Results</h1>
-    <p class="hero-copy">A single place to see which F&O companies have board-meeting notices, published results or fresh announcements — alongside their latest share-price snapshot.</p>
-    <div class="hero-meta"><span class="meta-chip">Last checked: {last_check}</span><span class="meta-chip {_esc(ntfy_class)}">{_esc(ntfy_text)}</span><span class="meta-chip">Read-only market data</span></div>
-  </header>
-  <nav class="nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#prices">Share prices</a><a href="#board-notices">Board meetings</a><a href="#results">Results published</a><a href="#latest-news">Latest news</a><a href="#all-events">All filings</a><a href="#data-health">Data status</a></nav>
-
-  <section id="overview" class="overview">
-    <div class="metric"><div class="metric-label">Board meeting notices</div><div class="metric-value">{len(board_notices)}</div><div class="metric-note">Check the filing for the meeting date</div></div>
-    <div class="metric"><div class="metric-label">Results published</div><div class="metric-value">{len(results)}</div><div class="metric-note">Exchange results notices detected</div></div>
-    <div class="metric"><div class="metric-label">New company announcements</div><div class="metric-value">{len(sudden)}</div><div class="metric-note">Recent filings classified as news</div></div>
-    <div class="metric"><div class="metric-label">Companies with price quotes</div><div class="metric-value">{sum(1 for q in quotes if q["symbol"]!="NIFTY")}</div><div class="metric-note">Latest saved Angel One snapshots</div></div>
-  </section>
-
-  <section id="prices" class="panel">
-    <div class="panel-heading"><div><h2>Share prices</h2><p>Latest Angel One quote snapshot for the tracked F&O shares</p></div><span class="status-pill {md_class}">{_esc(md_label)}</span></div>
-    <div class="market-summary"><span class="meta-chip">Provider: Angel One SmartAPI</span><span class="meta-chip">Quotes saved: {int(market_state.get("quotes") or 0)}</span><span class="meta-chip">Fetched: {market_time}</span></div>
-    <p class="market-explain">Change = today’s percentage move. Relative to NIFTY = the share’s move minus NIFTY 50’s move. Volume = shares traded as reported in the quote. These figures provide context; they do not prove that a particular news item caused the price move.</p>
-    <div class="table-wrap"><table><thead><tr><th>Company / Index</th><th>Last traded price</th><th>Day change</th><th>Volume</th><th>Vs NIFTY 50</th><th>Quote fetched at</th></tr></thead><tbody>{market_rows}</tbody></table></div>
-    <div class="note-box">{_esc(md_message)} Prices are snapshots, not a tick-by-tick chart. A blank table means no successful quote has been saved yet.</div>
-  </section>
-
-  <div class="search-row"><input class="search-input" id="quickSearch" type="search" placeholder="Search a symbol or company announcement (e.g. RELIANCE, results, order)..." aria-label="Search dashboard"></div><div class="search-help" id="searchFeedback">Search filters the visible price rows and company-filing cards.</div>
-
-  {_section("Board meeting notices","The exchange feed has identified these board-meeting notices. Open the filing to confirm the exact meeting date.",board_notices,"No board-meeting notices are saved yet.","board-notices")}
-  {_section("Results published","A results filing was detected. 'Impact not assessed' means the reported figures have not yet been compared with prior results and expectations.",results,"No results filings have been detected yet.","results")}
-  {_section("Latest company news","Fresh announcements such as orders, management changes, regulatory items and corporate actions.",sudden,"No new company announcements are saved yet.","latest-news")}
-  {all_section}
-
-  <section id="data-health" class="panel"><div class="panel-heading"><div><h2>Data connection status</h2><p>Check this section when prices or announcements are missing</p></div></div>
-    <div class="source-grid">{"".join(health_items)}</div>
-    {feed_notice}
-    <div class="note-box">Angel One is used only to read market quotes. This app has no order-placement, order-modification or order-cancellation feature. An event’s impact label is a preliminary assessment, not a guaranteed prediction.</div>
-    <div class="footer"><span>Last check: {last_check}</span><span>Source timestamp and quote-fetch time may differ from publication time.</span><span><a href="/api/health">Technical health details</a> · <a href="/api/market">Market data API</a></span></div>
-  </section>
+    notification="ntfy alerts enabled" if settings.ntfy_topic else "ntfy alerts not configured"
+    notify_class="good" if settings.ntfy_topic else "warn"
+    error=_esc(status.get("last_error"))
+    error_html=f'<div class="notice">{error}</div>' if error else ""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Intraday Company News Watch</title><style>
+:root{{--bg:#f4f6fa;--white:#fff;--ink:#172235;--muted:#68778b;--line:#e3e9f0;--blue:#2459a6;--green:#17794c;--red:#b42318;--amber:#936000}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}}a{{color:var(--blue);text-decoration:none}}a:hover{{text-decoration:underline}}.wrap{{max-width:1120px;margin:auto;padding:18px 16px 45px}}
+.brand{{display:flex;align-items:center;gap:9px;font-weight:750}}.mark{{background:#1d4f91;color:white;border-radius:9px;width:34px;height:34px;display:grid;place-items:center}}.brand small{{display:block;font-size:10px;color:var(--muted);font-weight:500;text-transform:uppercase}}.bar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px}}.muted{{color:var(--muted)}}.subtop{{font-size:11px;color:var(--muted)}}
+.hero,.panel,.metric,.event-card{{background:var(--white);border:1px solid var(--line);border-radius:13px}}.hero{{padding:20px 22px}}.eyebrow{{font-size:10px;color:var(--blue);font-weight:800;letter-spacing:.1em;text-transform:uppercase}}h1{{font-size:clamp(24px,4vw,32px);margin:5px 0;letter-spacing:-.04em}}.hero p{{color:var(--muted);margin:0;max-width:760px}}.chips{{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}}.chip,.badge,.count,.state{{border-radius:30px;padding:4px 8px;font-size:10px;font-weight:700;background:#eff2f6;color:#536276}}
+.good{{background:#eaf7f0;color:var(--green)}}.warn{{background:#fff6df;color:var(--amber)}}.bad{{background:#fff0ef;color:var(--red)}}.muted-badge{{background:#eff2f6;color:#536276}}
+nav{{display:flex;gap:5px;overflow:auto;position:sticky;top:0;background:#f4f6faef;padding:10px 0;z-index:5}}nav a{{white-space:nowrap;padding:6px 9px;border-radius:7px;font-size:11px;color:#46566d}}nav a:hover{{background:#e7edf6;text-decoration:none}}
+.metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:12px 0}}.metric{{padding:11px 13px}}.metric label{{font-size:11px;color:var(--muted);font-weight:650}}.metric b{{display:block;font-size:24px;line-height:1.2;margin-top:3px}}.metric small{{font-size:10px;color:var(--muted)}}
+.section{{margin-top:22px}}.section header{{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;gap:10px}}h2{{font-size:17px;margin:0;letter-spacing:-.02em}}.section header p{{font-size:11px;color:var(--muted);margin:2px 0 0}}.cards{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}}
+.event-card{{padding:13px 14px;min-width:0}}.topline{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}.symbol{{background:#edf4ff;color:#1d4f91;border-radius:5px;padding:3px 7px;font-size:10px;font-weight:800}}.topline strong{{font-size:12px}}.state{{margin-left:auto;font-size:9px}}.event-card h3{{font-size:13px;line-height:1.4;margin:9px 0 5px}}.details{{font-size:11px;color:#526176;margin:0}}.date{{font-size:11px;color:#40536b;font-weight:700;margin:8px 0}}.impact{{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-top:8px}}.impact-positive{{background:#eaf7f0;color:var(--green)}}.impact-negative{{background:#fff0ef;color:var(--red)}}.impact-mixed{{background:#fff6df;color:var(--amber)}}.impact-neutral{{background:#eff2f6;color:#536276}}.impact span{{font-size:10px;font-weight:750;border-radius:6px;padding:4px 7px}}.market{{font-size:10px;color:#334b67;background:#f4f7fb;border:1px solid #e6edf5;border-radius:6px;padding:4px 7px}}.foot{{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:7px;margin-top:9px;font-size:10px;color:var(--muted)}.foot a{{font-weight:700}}
+.panel{{padding:15px;margin-top:12px}}.panel-head{{display:flex;justify-content:space-between;gap:10px;align-items:center}}.panel-head p{{font-size:11px;color:var(--muted);margin:3px 0}}.explain{{font-size:11px;color:var(--muted);margin:8px 0}}.table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:8px}}table{{width:100%;border-collapse:collapse;min-width:680px}}th,td{{font-size:11px;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}}th{{background:#f7f9fc;color:#64748b;text-transform:uppercase;letter-spacing:.05em;font-size:9px}}tr:last-child td{{border-bottom:0}}td small{{display:block;font-size:9px;color:var(--muted)}}.up{{color:var(--green);font-weight:750}}.down{{color:var(--red);font-weight:750}}.flat{{color:var(--muted)}}.empty{{padding:18px;text-align:center;color:var(--muted);font-size:11px;grid-column:1/-1;border:1px dashed #ccd5e1;border-radius:9px}}.empty-row{{text-align:center;white-space:normal}}.note{{margin-top:9px;padding:9px 11px;border-left:3px solid #8caed8;background:#f7f9fc;color:#526176;font-size:10px}}.feeds{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:9px}}.feed{{border:1px solid var(--line);border-radius:8px;padding:8px;display:flex;align-items:flex-start;gap:7px;min-width:0}}.feed div{{flex:1;min-width:0}}.feed b{{display:block;font-size:10px}}.feed small{{display:block;font-size:9px;color:var(--muted);overflow-wrap:anywhere}}.dot{{width:7px;height:7px;border-radius:50%;margin-top:4px;flex-shrink:0}}.green{{background:#219566}}.red{{background:#d54d45}}.notice{{background:#fff6df;color:#75500b;padding:9px;border-radius:8px;font-size:10px;margin-top:9px}}.search{{margin:14px 0 0}}input{{width:100%;padding:9px 11px;border:1px solid #d4dce7;border-radius:8px;font:inherit;font-size:11px}}.search small{{font-size:10px;color:var(--muted)}}.hide{{display:none!important}}.footer{{font-size:10px;color:var(--muted);margin-top:12px;display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap}}
+@media(max-width:720px){{.metrics{{grid-template-columns:repeat(2,minmax(0,1fr))}}.cards{{grid-template-columns:1fr}}.feeds{{grid-template-columns:1fr}}.wrap{{padding:12px 10px 35px}}.hero{{padding:16px}}}}
+</style></head><body><div class="wrap">
+<div class="bar"><div class="brand"><span class="mark">N</span><div>Intraday News Watch<small>NSE F&O company monitor</small></div></div><span class="subtop">Poll: {interval} min · Last check: {poll_time}</span></div>
+<section class="hero"><div class="eyebrow">Stock-specific exchange filings only</div><h1>Today’s Company Events</h1><p>Results expected today, results already published, and fresh company announcements — with price movement only for the affected stocks.</p><div class="chips"><span class="chip {_esc(notify_class)}">{_esc(notification)}</span><span class="chip">Angel One · read-only</span><span class="chip">All dates / times in IST</span></div></section>
+<nav><a href="#today-results">Results today</a><a href="#published-results">Published results</a><a href="#company-news">Fresh news</a><a href="#price-watch">Relevant prices</a><a href="#upcoming-results">Upcoming results</a><a href="#data-status">Data status</a></nav>
+<div class="metrics">
+<div class="metric"><label>Results scheduled today</label><b>{len(results_today)}</b><small>From board meeting notices</small></div>
+<div class="metric"><label>Results published</label><b>{len(results_published)}</b><small>Exchange result filings</small></div>
+<div class="metric"><label>Fresh company news</label><b>{len(news)}</b><small>Recent F&O announcements</small></div>
+<div class="metric"><label>News-linked stocks</label><b>{len(event_symbols)}</b><small>{sum(1 for s in event_symbols if s in quote_map)} prices available</small></div>
 </div>
-<script>
-(function(){{
-  const search=document.getElementById("quickSearch");
-  const feedback=document.getElementById("searchFeedback");
-  if(!search)return;
-  search.addEventListener("input",function(){{
-    const q=search.value.trim().toLowerCase();
-    let visible=0;
-    document.querySelectorAll("[data-search]").forEach(function(node){{
-      const match=!q||(node.getAttribute("data-search")||"").toLowerCase().includes(q);
-      node.classList.toggle("hidden-by-search",!match);
-      if(match)visible++;
-    }});
-    feedback.textContent=q?("Showing "+visible+" matching price rows / company filings."): "Search filters the visible price rows and company-filing cards.";
-  }});
-}})();
-</script>
+<div class="search"><input id="quickSearch" type="search" placeholder="Search company, symbol or headline — e.g. RELIANCE, results, order"><small id="searchFeedback">Filters events and the related stock-price table.</small></div>
+{_section("Results scheduled for today","Board notices indicate that results are on today’s agenda. The filing may not state the exact release time.",results_today,"No result-related board meeting is scheduled for today in the collected filings.","today-results",quote_map,nifty_pct)}
+{_section("Results published","Publication time is taken from the exchange feed and displayed in IST. Result direction is not guessed without analysing the reported numbers.",results_published,"No results filings detected in the recent feed window.","published-results",quote_map,nifty_pct)}
+{_section("Fresh company news","Only recent announcements matched to tracked F&O companies are listed.",news,"No recent company-specific announcements found.","company-news",quote_map,nifty_pct)}
+<section class="panel" id="price-watch"><div class="panel-head"><div><h2>Prices for stocks with recent news</h2><p>Other F&O stock prices are intentionally hidden.</p></div><span class="badge {_esc(md_class)}">{_esc(md_label)}</span></div>
+<p class="explain">LTP = last traded price · Day change = today’s move · Vs NIFTY = stock change minus NIFTY 50 change · Volume = traded quantity. This is market context, not proof that a filing caused the move.</p>
+<div class="table-wrap"><table><thead><tr><th>Company / symbol</th><th>LTP</th><th>Day change</th><th>Volume</th><th>Vs NIFTY 50</th><th>Quote fetched</th></tr></thead><tbody>{market_rows}</tbody></table></div>
+<div class="note">Angel One status: {_esc(md_label)} · Last quote fetch: {quote_time}. Quotes are snapshots, not tick-by-tick prices.</div></section>
+{_section("Upcoming result dates","Future results-related board meetings identified from exchange notices.",results_future,"No future result dates were identified in recent notices.","upcoming-results",quote_map,nifty_pct)}
+{_section("Other board meeting notices","Board meeting filings without a confirmed results agenda. Open the original filing to verify the date and agenda.",board,"No other recent board meeting notices found.","other-board",quote_map,nifty_pct)}
+<section class="panel" id="data-status"><div class="panel-head"><div><h2>Data status</h2><p>Check this when a result, announcement or share price is missing.</p></div></div><div class="feeds">{"".join(feeds)}</div>{error_html}
+<div class="note">Angel One is used only for market prices and volume. There is no order placement, modification or cancellation. A scheduled results notice is not a published result. A result’s direction is left unassessed until the financial figures can be compared.</div>
+<div class="footer"><span>Last poll: {poll_time}</span><span>Exchange publication time may differ from the instant a filing became visible to every investor.</span><span><a href="/api/health">Technical status</a> · <a href="/api/market">Market data</a></span></div></section>
+</div><script>(function(){{const s=document.getElementById("quickSearch"),f=document.getElementById("searchFeedback");if(!s)return;s.addEventListener("input",function(){{const q=s.value.trim().toLowerCase();let n=0;document.querySelectorAll("[data-search]").forEach(function(x){{const ok=!q||(x.getAttribute("data-search")||"").toLowerCase().includes(q);x.classList.toggle("hide",!ok);if(ok)n++;}});f.textContent=q?("Showing "+n+" matching event / price rows."):"Filters events and the related stock-price table.";}});}})();</script>
 </body></html>"""
 
 @app.get("/api/events")
