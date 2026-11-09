@@ -9,14 +9,13 @@ from .config import settings
 from .store import Store
 from .nse import fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
 from .notifier import send
-from .market_data import angel_market_data
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger(__name__)
 store=Store(settings.database_path)
 scheduler=BackgroundScheduler(timezone="Asia/Kolkata")
 poll_lock=threading.Lock()
-status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","universe_count":0,"raw_feed_items":0,"matched_feed_items":0,"matched_symbols":[],"feed_match_stats":{},"scanner_state":"starting","market_data":{"state":"not checked","quotes":0,"last_quote_at":None,"error":None,"missing_symbols":[],"unquoted_symbols":[]}}
+status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","universe_count":0,"raw_feed_items":0,"matched_feed_items":0,"matched_symbols":[],"feed_match_stats":{},"scanner_state":"starting"}
 last_known_fno_symbols=set()
 
 def _fallback_universe(configured, cached):
@@ -84,40 +83,6 @@ def poll_once():
         )
         if unmatched_sample:
             log.info("NSE filing unmatched sample (feed, title): %s",unmatched_sample)
-        # Read-only market snapshot. This adapter has no order/modify/cancel methods.
-        # Only LTP, OHLC, percentage change and volume are persisted; OI is discarded.
-        if not settings.angel_market_data_enabled:
-            status["market_data"]={"state":"disabled","quotes":0,"last_quote_at":None,"error":None}
-        elif not angel_market_data.configured:
-            status["market_data"]={"state":"not_configured","quotes":0,"last_quote_at":None,
-                "error":"Set ANGEL_ONE_API_KEY, ANGEL_ONE_CLIENT_CODE, ANGEL_ONE_PASSWORD and ANGEL_ONE_TOTP_SECRET in Render",
-                "missing_symbols":[],"unquoted_symbols":[]}
-        else:
-            try:
-                # Fetch only shares with recent company filings / scheduled result notices.
-                # NIFTY 50 is added internally by the read-only adapter as a benchmark.
-                quote_symbols=store.symbols_with_recent_news(days=3)
-                quotes=angel_market_data.quotes(quote_symbols) if quote_symbols else {}
-                store.save_market_quotes(quotes)
-                stock_quotes=set(quote_symbols).intersection(quotes)
-                missing_tokens=getattr(angel_market_data,"last_missing_symbols",[])
-                unquoted=getattr(angel_market_data,"last_unquoted_symbols",[])
-                status["market_data"]={"state":"ok" if stock_quotes else "no_quotes",
-                    "quotes":len(stock_quotes),
-                    "last_quote_at":max((q["fetched_at"] for q in quotes.values()),default=None),
-                    "error":None,
-                    "missing_symbols":missing_tokens,
-                    "unquoted_symbols":unquoted}
-                log.info(
-                    "Angel One quote poll: requested_stocks=%d quoted_stocks=%d missing_tokens=%s no_quote=%s",
-                    len(quote_symbols),len(stock_quotes),
-                    ",".join(missing_tokens) or "none",
-                    ",".join(unquoted) or "none"
-                )
-            except Exception as exc:
-                status["market_data"]={"state":"error","quotes":0,"last_quote_at":None,"error":str(exc)[:240]}
-                poll_errors.append("Angel One: "+str(exc))
-                log.warning("Angel One read-only market-data poll failed: %s",exc)
         for pending in store.pending_notifications(limit=50):
             if send(pending): store.mark_notified(pending["event_id"])
         now=datetime.now(timezone.utc).isoformat()
@@ -142,7 +107,7 @@ def poll_once():
         )
         return {"received":len(rows),"matched":matched_count,"new_events":new_count,
                 "sources":source_health,"scanner_state":status["scanner_state"],
-                "market_data":status["market_data"],"errors":poll_errors}
+                "errors":poll_errors}
     except Exception as exc:
         now=datetime.now(timezone.utc).isoformat()
         status.update(last_poll=now,last_error=str(exc))
@@ -205,8 +170,7 @@ def _impact_label(event):
     return ({"bullish":("Potentially positive","positive"),"bearish":("Potentially negative","negative"),
              "mixed":("Mixed indicators","mixed")}.get(impact,("Impact not assessed","neutral")))
 
-def _card(event,quote_map=None,nifty_pct=None):
-    quote_map=quote_map or {}
+def _card(event):
     symbol=str(event.get("symbol") or "")
     company=str(event.get("company") or "")
     if not company or company in (symbol,str(event.get("headline") or "")): company=symbol
@@ -221,20 +185,10 @@ def _card(event,quote_map=None,nifty_pct=None):
     elif event.get("event_date"):
         date_line="Scheduled date: "+_display_event_date(event.get("event_date"))
         if filed: date_line+=" · Notice filed: "+_display_time(filed)
-    elif state=="NEW EVENT": date_line="NSE filing date/time: "+_display_time(filed)
     else: date_line="Exchange filing date/time: "+_display_time(filed)
     details=str(event.get("details") or "").strip()
     if len(details)>260: details=details[:257].rsplit(" ",1)[0]+"..."
     impact_label,impact_class=_impact_label(event)
-    q=quote_map.get(symbol)
-    if q:
-        pct=float(q.get("change_pct") or 0)
-        movement="Up" if pct>0 else ("Down" if pct<0 else "Flat")
-        market_line=f'Current market: ₹{float(q.get("ltp") or 0):,.2f} · {movement} {abs(pct):.2f}% today'
-        if nifty_pct is not None:
-            relative=pct-float(nifty_pct)
-            market_line+=f' · {"+" if relative>=0 else ""}{relative:.2f}% vs NIFTY 50'
-    else: market_line="Price snapshot not available for this stock"
     searchable=_esc(" ".join(str(event.get(k) or "") for k in ("symbol","company","category","headline","details","event_status")))
     link=_esc(event.get("source_url") or "https://www.nseindia.com/")
     return f"""<article class="event-card" data-search="{searchable}">
@@ -242,12 +196,12 @@ def _card(event,quote_map=None,nifty_pct=None):
       <h3>{_esc(event.get("headline") or "Company filing")}</h3>
       {f'<p class="details">{_esc(details)}</p>' if details else ''}
       <p class="date">{_esc(date_line)}</p>
-      <div class="impact"><span class="impact-{impact_class}">{_esc(impact_label)}</span><span class="market">{_esc(market_line)}</span></div>
+      <div class="impact"><span class="impact-{impact_class}">{_esc(impact_label)}</span></div>
       <div class="foot"><span>{_esc(event.get("source_name") or "NSE")}</span><a href="{link}" target="_blank" rel="noopener noreferrer">Open original filing ↗</a></div>
     </article>"""
 
-def _section(title,subtitle,events,empty,anchor,quote_map,nifty_pct):
-    cards="".join(_card(e,quote_map,nifty_pct) for e in events)
+def _section(title,subtitle,events,empty,anchor):
+    cards="".join(_card(e) for e in events)
     return f"""<section class="section" id="{anchor}">
       <header><div><h2>{title}</h2><p>{subtitle}</p></div><span class="count">{len(events)}</span></header>
       <div class="cards">{cards or f'<div class="empty">{empty}</div>'}</div>
@@ -265,32 +219,6 @@ def dashboard():
     news=[e for e in recent if e.get("event_status")=="NEW EVENT"]
     board=[e for e in recent if e.get("event_status") in ("BOARD MEETING NOTICE","UPCOMING","RESULT DATE NOT CONFIRMED")]
     event_symbols={str(e.get("symbol") or "").upper() for e in recent if e.get("symbol")}
-    all_quotes=store.latest_market_quotes()
-    quote_map={q["symbol"]:q for q in all_quotes if q.get("symbol") in event_symbols}
-    nifty=next((q for q in all_quotes if q.get("symbol")=="NIFTY"),None)
-    nifty_pct=float(nifty.get("change_pct") or 0) if nifty else None
-    rows=[]
-    for symbol in sorted(event_symbols):
-        q=quote_map.get(symbol)
-        matching=[e for e in recent if str(e.get("symbol") or "").upper()==symbol]
-        company=next((str(e.get("company")) for e in matching if e.get("company") and e.get("company") not in (symbol,str(e.get("headline") or ""))),symbol)
-        if not q:
-            rows.append(f'<tr data-search="{_esc(symbol+" "+company)}"><td><b>{_esc(company)}</b><small>{_esc(symbol)}</small></td><td colspan="5" class="muted">No Angel One quote received</td></tr>')
-            continue
-        change=float(q.get("change_pct") or 0)
-        relative=change-nifty_pct if nifty_pct is not None else None
-        cc="up" if change>0 else ("down" if change<0 else "flat")
-        rc="up" if relative is not None and relative>0 else ("down" if relative is not None and relative<0 else "flat")
-        rows.append(f'''<tr data-search="{_esc(symbol+" "+company)}"><td><b>{_esc(company)}</b><small>{_esc(symbol)}</small></td>
-          <td><b>₹{float(q["ltp"]):,.2f}</b></td><td class="{cc}">{change:+.2f}%</td><td>{int(q.get("volume") or 0):,}</td>
-          <td class="{rc}">{"—" if relative is None else f"{relative:+.2f}%"}</td><td class="muted">{_esc(_display_time(q.get("fetched_at")))}</td></tr>''')
-    market_rows="".join(rows) or '<tr><td colspan="6" class="muted empty-row">No recent company news. Unrelated F&O stock prices are intentionally hidden.</td></tr>'
-    md=status.get("market_data") or {}
-    md_state=str(md.get("state") or "not checked")
-    labels={"ok":("Connected","good"),"not_configured":("Credentials needed","warn"),"configured_no_quotes":("No quotes received","warn"),
-            "no_quotes":("No quotes received","warn"),"error":("Connection error","bad"),"disabled":("Tracking off","muted"),
-            "not checked":("Waiting for first check","muted")}
-    md_label,md_class=labels.get(md_state,(md_state.replace("_"," ").title(),"muted"))
     feeds=[]
     for name,feed in status.get("sources",{}).items():
         ok=bool(feed.get("ok"))
@@ -298,7 +226,6 @@ def dashboard():
         feeds.append(f'<div class="feed"><i class="dot {"green" if ok else "red"}"></i><div><b>{_esc(name.replace("_"," ").title())}</b><small>{_esc(detail)}</small></div><span class="badge {"good" if ok else "bad"}">{"OK" if ok else "Issue"}</span></div>')
     if not feeds: feeds.append('<div class="empty">Feed status will appear after the first poll.</div>')
     poll_time=_esc(_display_time(status.get("last_poll")))
-    quote_time=_esc(_display_time(md.get("last_quote_at")))
     interval=max(1,round(settings.poll_interval/60))
     notification="ntfy alerts enabled" if settings.ntfy_topic else "ntfy alerts not configured"
     notify_class="good" if settings.ntfy_topic else "warn"
@@ -319,28 +246,24 @@ nav{{display:flex;gap:5px;overflow:auto;position:sticky;top:0;background:#f4f6fa
 @media(max-width:720px){{.metrics{{grid-template-columns:repeat(2,minmax(0,1fr))}}.cards{{grid-template-columns:1fr}}.feeds{{grid-template-columns:1fr}}.wrap{{padding:12px 10px 35px}}.hero{{padding:16px}}}}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand"><span class="mark">N</span><div>Intraday News Watch<small>NSE F&O company monitor</small></div></div><span class="subtop">Poll: {interval} min · Last check: {poll_time}</span></div>
-<section class="hero"><div class="eyebrow">Stock-specific exchange filings only</div><h1>Today’s Company Events</h1><p>Results expected today, results already published, and fresh company announcements — with price movement only for the affected stocks.</p><div class="chips"><span class="chip {_esc(notify_class)}">{_esc(notification)}</span><span class="chip">Angel One · read-only</span><span class="chip">All dates / times in IST</span></div></section>
-<nav><a href="#today-results">Results today</a><a href="#published-results">Published results</a><a href="#company-news">Fresh news</a><a href="#price-watch">Relevant prices</a><a href="#upcoming-results">Upcoming results</a><a href="#data-status">Data status</a></nav>
+<section class="hero"><div class="eyebrow">Stock-specific exchange filings only</div><h1>Today’s Company Events</h1><p>Results expected today, results already published, and fresh company announcements — for NSE F&O companies.</p><div class="chips"><span class="chip {_esc(notify_class)}">{_esc(notification)}</span><span class="chip">All dates / times in IST</span></div></section>
+<nav><a href="#today-results">Results today</a><a href="#published-results">Published results</a><a href="#company-news">Fresh news</a><a href="#upcoming-results">Upcoming results</a><a href="#data-status">Data status</a></nav>
 <div class="metrics">
 <div class="metric"><label>Results scheduled today</label><b>{len(results_today)}</b><small>From board meeting notices</small></div>
 <div class="metric"><label>Results published</label><b>{len(results_published)}</b><small>Exchange result filings</small></div>
 <div class="metric"><label>Fresh company news</label><b>{len(news)}</b><small>Recent F&O announcements</small></div>
-<div class="metric"><label>News-linked stocks</label><b>{len(event_symbols)}</b><small>{sum(1 for s in event_symbols if s in quote_map)} prices available</small></div>
+<div class="metric"><label>News-linked stocks</label><b>{len(event_symbols)}</b><small>Unique F&O companies in recent filings</small></div>
 </div>
-<div class="search"><input id="quickSearch" type="search" placeholder="Search company, symbol or headline — e.g. RELIANCE, results, order"><small id="searchFeedback">Filters events and the related stock-price table.</small></div>
-{_section("Results scheduled for today","Board notices indicate that results are on today’s agenda. The filing may not state the exact release time.",results_today,"No result-related board meeting is scheduled for today in the collected filings.","today-results",quote_map,nifty_pct)}
-{_section("Results published","Publication time is taken from the exchange feed and displayed in IST. Result direction is not guessed without analysing the reported numbers.",results_published,"No results filings detected in the recent feed window.","published-results",quote_map,nifty_pct)}
-{_section("Fresh company news","Every card shows the NSE feed filing date and time in IST when supplied by the exchange; missing times are never guessed.",news,"No recent company-specific announcements found.","company-news",quote_map,nifty_pct)}
-<section class="panel" id="price-watch"><div class="panel-head"><div><h2>Prices for stocks with recent news</h2><p>Other F&O stock prices are intentionally hidden.</p></div><span class="badge {_esc(md_class)}">{_esc(md_label)}</span></div>
-<p class="explain">LTP = last traded price · Day change = today’s move · Vs NIFTY = stock change minus NIFTY 50 change · Volume = traded quantity. This is market context, not proof that a filing caused the move.</p>
-<div class="table-wrap"><table><thead><tr><th>Company / symbol</th><th>LTP</th><th>Day change</th><th>Volume</th><th>Vs NIFTY 50</th><th>Quote fetched</th></tr></thead><tbody>{market_rows}</tbody></table></div>
-<div class="note">Angel One status: {_esc(md_label)} · Last quote fetch: {quote_time}. Quotes are snapshots, not tick-by-tick prices.</div></section>
-{_section("Upcoming result dates","Future results-related board meetings identified from exchange notices.",results_future,"No future result dates were identified in recent notices.","upcoming-results",quote_map,nifty_pct)}
-{_section("Other board meeting notices","Board meeting filings without a confirmed results agenda. Open the original filing to verify the date and agenda.",board,"No other recent board meeting notices found.","other-board",quote_map,nifty_pct)}
+<div class="search"><input id="quickSearch" type="search" placeholder="Search company, symbol or headline — e.g. RELIANCE, results, order"><small id="searchFeedback">Filters company events and filings.</small></div>
+{_section("Results scheduled for today","Board notices indicate that results are on today’s agenda. The filing may not state the exact release time.",results_today,"No result-related board meeting is scheduled for today in the collected filings.","today-results")}
+{_section("Results published","Publication time is taken from the exchange feed and displayed in IST. Result direction is not guessed without analysing the reported numbers.",results_published,"No results filings detected in the recent feed window.","published-results")}
+{_section("Fresh company news","Every card shows the NSE feed filing date and time in IST when supplied by the exchange; missing times are never guessed.",news,"No recent company-specific announcements found.","company-news")}
+{_section("Upcoming result dates","Future results-related board meetings identified from exchange notices.",results_future,"No future result dates were identified in recent notices.","upcoming-results")}
+{_section("Other board meeting notices","Board meeting filings without a confirmed results agenda. Open the original filing to verify the date and agenda.",board,"No other recent board meeting notices found.","other-board")}
 <section class="panel" id="data-status"><div class="panel-head"><div><h2>Data status</h2><p>Check this when a result, announcement or share price is missing.</p></div></div><div class="feeds">{"".join(feeds)}</div>{error_html}
-<div class="note">Angel One is used only for market prices and volume. There is no order placement, modification or cancellation. A scheduled results notice is not a published result. A result’s direction is left unassessed until the financial figures can be compared.</div>
-<div class="footer"><span>Last poll: {poll_time}</span><span>Exchange publication time may differ from the instant a filing became visible to every investor.</span><span><a href="/api/health">Technical status</a> · <a href="/api/market">Market data</a></span></div></section>
-</div><script>(function(){{const s=document.getElementById("quickSearch"),f=document.getElementById("searchFeedback");if(!s)return;s.addEventListener("input",function(){{const q=s.value.trim().toLowerCase();let n=0;document.querySelectorAll("[data-search]").forEach(function(x){{const ok=!q||(x.getAttribute("data-search")||"").toLowerCase().includes(q);x.classList.toggle("hide",!ok);if(ok)n++;}});f.textContent=q?("Showing "+n+" matching event / price rows."):"Filters events and the related stock-price table.";}});}})();</script>
+<div class="note">A scheduled results notice is not a published result. A result’s direction is left unassessed until the financial figures can be compared.</div>
+<div class="footer"><span>Last poll: {poll_time}</span><span>Exchange publication time may differ from the instant a filing became visible to every investor.</span><span><a href="/api/health">Technical status</a></span></div></section>
+</div><script>(function(){{const s=document.getElementById("quickSearch"),f=document.getElementById("searchFeedback");if(!s)return;s.addEventListener("input",function(){{const q=s.value.trim().toLowerCase();let n=0;document.querySelectorAll("[data-search]").forEach(function(x){{const ok=!q||(x.getAttribute("data-search")||"").toLowerCase().includes(q);x.classList.toggle("hide",!ok);if(ok)n++;}});f.textContent=q?("Showing "+n+" matching company events."):"Filters events and the related stock-price table.";}});}})();</script>
 </body></html>"""
 
 @app.get("/api/events")
@@ -358,8 +281,7 @@ def health():
       "scanner_state":status["scanner_state"],"universe_count":status["universe_count"],
       "raw_feed_items":status["raw_feed_items"],"matched_feed_items":status["matched_feed_items"],
       "matched_symbols":status["matched_symbols"],"feed_match_stats":status["feed_match_stats"],
-      "market_data_provider":"Angel One SmartAPI read-only" if settings.angel_market_data_enabled else "disabled",
-      "market_data":status["market_data"]}
+}
 
 @app.get("/api/ready")
 def readiness():
@@ -370,10 +292,6 @@ def readiness():
              "last_success":status["last_success"],
              "sources":status["sources"]}
     return JSONResponse(payload,status_code=200 if payload["ready"] else 503)
-
-@app.get("/api/market")
-def market():
-    return {"provider":"Angel One SmartAPI read-only","quotes":store.latest_market_quotes(),"status":status["market_data"]}
 
 @app.post("/api/sync")
 def sync(): return poll_once()
