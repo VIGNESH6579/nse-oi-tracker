@@ -4,6 +4,33 @@ from app.nse import _classify, _parse_event_date, normalize
 from app.store import Store
 
 
+def test_nse_board_meeting_api_items_keep_symbol_and_broadcast_time():
+    from app.nse import _board_meeting_api_items, _date
+
+    rows = [{
+        "bm_symbol": "KALYANKJIL",
+        "bm_date": "10-Nov-2026",
+        "bm_purpose": "KALYAN JEWELLERS IND LTD has informed the Exchange about Board Meeting to be held on 10-Nov-2026 to consider and approve the Financial Results.",
+        "bm_desc": "Board Meeting Intimation",
+        "bm_timestamp": "22-Oct-2026 11:43:03",
+        "sm_name": "Kalyan Jewellers India Limited",
+        "attachment": "https://nsearchives.nseindia.com/corporate/test.xml",
+    }]
+    items = _board_meeting_api_items(rows, {"KALYANKJIL"})
+    assert len(items) == 1
+    assert items[0]["feed_type"] == "board_meetings"
+    assert items[0]["title"].startswith("KALYANKJIL")
+    assert _date(items[0]["published"]) == "2026-10-22T06:13:03+00:00"
+
+
+def test_nse_board_meeting_api_rejects_non_fno_symbols():
+    from app.nse import _board_meeting_api_items
+
+    rows = [{"bm_symbol": "RELIANCE", "bm_date": "10-Nov-2026",
+             "bm_purpose": "Financial Results", "bm_desc": "Board Meeting Intimation"}]
+    assert _board_meeting_api_items(rows, {"KALYANKJIL"}) == []
+
+
 def test_financial_results_feed_marks_published_but_does_not_guess_direction():
     category, state, direction, reason = _classify(
         "Financial results for quarter ended", "", "financial_results"
