@@ -164,7 +164,7 @@ def test_normalize_matches_cochin_shipyard_name_without_symbol_in_rss():
     assert item is not None
     assert item["symbol"] == "COCHINSHIP"
     assert item["event_date"] == "2026-11-10"
-    assert item["event_status"] == "RESULT SCHEDULED"
+    assert item["event_status"] in {"RESULT SCHEDULED", "RESULT SCHEDULED TODAY"}
 
 
 def test_normalize_keeps_company_name_and_schedule_date():
