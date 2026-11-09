@@ -14,6 +14,11 @@ FEEDS = {
     "announcements": NSE_ARCHIVE + "/content/RSS/Online_announcements.xml",
     "board_meetings": NSE_ARCHIVE + "/content/RSS/Board_Meetings.xml",
     "financial_results": NSE_ARCHIVE + "/content/RSS/Financial_Results.xml",
+    # Independent exchange feeds: useful when NSE's JSON endpoints are blocked
+    # from a hosting provider. These remain public BSE RSS endpoints.
+    "bse_announcements": "https://www.bseindia.com/data/xml/announcements.aspx",
+    "bse_board_meetings": "https://beta.bseindia.com/Data/XML/BoardMeetingsFeed.xml",
+    "bse_financial_results": "https://www.bseindia.com/Data/XML/FinancialResultsFeed.aspx",
 }
 
 def _session():
@@ -228,7 +233,11 @@ def fetch_all_feeds(allowed=None, company_map=None):
         for name,url in FEEDS.items():
             try:
                 items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
-                for x in items: x["feed_type"]=name; x["source_name"]="NSE RSS"
+                is_bse = name.startswith("bse_")
+                feed_kind = "board_meetings" if name == "bse_board_meetings" else ("financial_results" if name == "bse_financial_results" else "announcements")
+                for x in items:
+                    x["feed_type"]=feed_kind
+                    x["source_name"]="BSE RSS" if is_bse else "NSE RSS"
                 output.extend(items)
             except Exception as exc:
                 health[name]={"ok":False,"error":str(exc)}
