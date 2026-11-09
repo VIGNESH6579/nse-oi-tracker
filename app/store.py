@@ -3,9 +3,10 @@ from contextlib import contextmanager
 from datetime import datetime,timezone
 
 def _event_key(symbol,category,headline):
+    # A duplicate can arrive through a different RSS feed/category.
     normalized=re.sub(r"[^a-z0-9]+"," ",(headline or "").lower()).strip()
     normalized=re.sub(r"\s+"," ",normalized)
-    return hashlib.sha256(f"{str(symbol).upper()}|{str(category).lower()}|{normalized}".encode()).hexdigest()
+    return hashlib.sha256(f"{str(symbol).upper()}|{normalized}".encode()).hexdigest()
 
 class Store:
     def __init__(self,path):
