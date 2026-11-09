@@ -1,114 +1,122 @@
-import csv
-import hashlib
-import io
-import logging
-import time
-from datetime import datetime
+import csv, hashlib, io, logging, re, time, xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin
 import requests
 from .config import settings
 
 log = logging.getLogger(__name__)
-BASE = "https://www.nseindia.com"
-ANNOUNCEMENTS = BASE + "/api/corporate-announcements?index=equities"
+NSE_ARCHIVE = "https://nsearchives.nseindia.com"
+FEEDS = {
+    "announcements": NSE_ARCHIVE + "/content/RSS/Online_announcements.xml",
+    "board_meetings": NSE_ARCHIVE + "/content/RSS/Board_Meetings.xml",
+    "financial_results": NSE_ARCHIVE + "/content/RSS/Financial_Results.xml",
+}
 
 def _session():
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": BASE + "/",
-        "Connection": "keep-alive",
-    })
+    s=requests.Session()
+    s.headers.update({"User-Agent":"NSE-Company-News-Monitor/1.0 (RSS reader; contact: operator)",
+                      "Accept":"application/rss+xml, application/xml, text/xml, */*"})
     return s
 
 def get_fno_symbols(session=None):
     if settings.fno_symbols:
-        return set(settings.fno_symbols), "environment"
-    s = session or _session()
-    r = s.get(settings.universe_csv_url, timeout=settings.nse_timeout)
-    r.raise_for_status()
-    reader = csv.DictReader(io.StringIO(r.text))
-    symbols = set()
+        return set(settings.fno_symbols), "FNO_SYMBOLS environment"
+    s=session or _session()
+    r=s.get(settings.universe_csv_url,timeout=settings.nse_timeout); r.raise_for_status()
+    reader=csv.DictReader(io.StringIO(r.text))
+    symbols=set()
     for row in reader:
-        for key, value in row.items():
-            if key and key.strip().upper() in {"SYMBOL", "UNDERLYING"} and value:
-                symbols.add(value.strip().upper())
-                break
-    if not symbols:
-        raise RuntimeError("Could not parse symbols from official NSE F&O market-lot CSV; set FNO_SYMBOLS explicitly")
-    return symbols, "nse-market-lot-csv"
+        for key,value in row.items():
+            if key and key.strip().upper() in {"SYMBOL","UNDERLYING"} and value:
+                symbols.add(value.strip().upper()); break
+    if not symbols: raise RuntimeError("F&O universe CSV parsed but contained no symbols; set FNO_SYMBOLS")
+    return symbols,"NSE F&O market-lot CSV"
 
-def fetch_announcements():
-    last_error = None
-    for attempt in range(settings.nse_retries):
-        s = _session()
-        try:
-            # NSE requires a session cookie before API requests.
-            s.get(BASE, timeout=settings.nse_timeout)
-            r = s.get(ANNOUNCEMENTS, timeout=settings.nse_timeout)
-            if r.status_code == 403:
-                raise PermissionError("NSE returned HTTP 403 (Akamai/access restriction)")
-            r.raise_for_status()
-            payload = r.json()
-            if not isinstance(payload, list):
-                raise ValueError("Unexpected NSE announcements response shape")
-            return payload
-        except Exception as exc:
-            last_error = exc
-            log.warning("NSE announcement poll failed (attempt %s/%s): %s", attempt+1, settings.nse_retries, exc)
-            if attempt + 1 < settings.nse_retries:
-                time.sleep(min(2 ** attempt, 8))
-        finally:
-            s.close()
-    raise RuntimeError(str(last_error))
-
-def _pick(row, *keys):
-    for key in keys:
-        value = row.get(key)
-        if value not in (None, ""):
-            return str(value).strip()
+def _tag(el,name):
+    for child in el:
+        if child.tag.split("}")[-1].lower()==name.lower():
+            return (child.text or "").strip()
     return ""
 
-def classify(headline: str, details: str):
-    text = (headline + " " + details).lower()
-    rules = [
-        ("Financial Results", ("financial results","unaudited financial","audited financial","quarterly results","board meeting to consider")),
-        ("Board Meeting", ("board meeting","meeting of board")),
-        ("Order / Contract", ("order","contract","letter of award","loa","work order")),
-        ("Dividend", ("dividend","interim dividend","final dividend")),
-        ("Buyback", ("buyback","buy-back","share repurchase")),
-        ("Acquisition / Merger", ("acquisition","acquire","merger","amalgamation","subsidiary")),
-        ("Fundraising", ("fund raising","fundraise","preferential issue","qip","rights issue","qualified institutions")),
-        ("Regulatory / Legal", (" sebi "," sebi","nclt","court","regulatory","penalty","investigation","show cause")),
-        ("Credit Rating", ("credit rating","rating rationale","rating action")),
-    ]
-    for category, terms in rules:
-        if any(term in text for term in terms):
-            break
+def fetch_feed(session,url):
+    r=session.get(url,timeout=settings.nse_timeout); r.raise_for_status()
+    root=ET.fromstring(r.content)
+    items=[]
+    for item in root.iter():
+        if item.tag.split("}")[-1].lower() not in {"item","entry"}: continue
+        title=_tag(item,"title")
+        desc=_tag(item,"description") or _tag(item,"summary") or _tag(item,"content")
+        link=_tag(item,"link")
+        if not link:
+            for child in item:
+                if child.tag.split("}")[-1].lower()=="link":
+                    link=child.attrib.get("href",""); break
+        pub=_tag(item,"pubDate") or _tag(item,"published") or _tag(item,"updated")
+        items.append({"title":title,"description":re.sub("<[^>]+>"," ",desc),
+                      "link":urljoin(url,link),"published":pub})
+    return items
+
+def fetch_all_feeds():
+    session=_session(); output=[]; health={}
+    try:
+        for name,url in FEEDS.items():
+            try:
+                items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
+                for x in items: x["feed_type"]=name; x["source_name"]="NSE RSS"
+                output.extend(items)
+            except Exception as exc:
+                health[name]={"ok":False,"error":str(exc)}
+                log.warning("NSE RSS %s failed: %s",name,exc)
+    finally: session.close()
+    if not output: raise RuntimeError("All official NSE RSS feeds failed: "+str(health))
+    return output,health
+
+def _date(value):
+    if not value: return None
+    try: return parsedate_to_datetime(value).astimezone(timezone.utc).isoformat()
+    except Exception:
+        for fmt in ("%d-%b-%Y","%d-%m-%Y","%d/%m/%Y","%Y-%m-%d"):
+            try: return datetime.strptime(value.strip(),fmt).replace(tzinfo=timezone.utc).isoformat()
+            except ValueError: pass
+    return None
+
+def _classify(title,details,feed_type):
+    text=(title+" "+details).lower()
+    if feed_type=="board_meetings" or "board meeting" in text: category="Board Meeting"
+    elif feed_type=="financial_results" or any(x in text for x in ("financial results","quarterly results","audited results","unaudited results")): category="Financial Results"
+    elif any(x in text for x in ("dividend","record date","split","bonus issue")): category="Corporate Action"
+    elif any(x in text for x in ("order","letter of award","work order","contract")): category="Order / Contract"
+    elif any(x in text for x in ("resignation","appointed as","ceo","managing director","key managerial")): category="Management Change"
+    elif any(x in text for x in ("sebi","nclt","court","penalty","investigation","show cause","default")): category="Regulatory / Legal"
+    elif any(x in text for x in ("acquisition","merger","amalgamation","buyback","fund raising","qip","rights issue","credit rating")): category="Corporate Action"
+    else: category="Corporate Announcement"
+    is_result=category=="Financial Results" and any(x in text for x in ("result","financial","quarter","audited","unaudited"))
+    if is_result:
+        direction="neutral"; rationale="Results filing detected; detailed financial figures and expectations are not yet compared."
+        state="RESULT PUBLISHED"
+    elif any(x in text for x in ("rescheduled","postponed","proposed meeting date")):
+        direction="neutral"; rationale="Schedule update; direction cannot be inferred from the filing title."; state="UPCOMING / SCHEDULE UPDATE"
     else:
-        category = "Corporate Announcement"
-    positive = ("large order","order received","dividend","upgrade","acquisition of","profit increased","record profit")
-    negative = ("default","fraud","resignation","penalty","downgrade","loss widened","insolvency","rating downgraded")
-    pos = any(term in text for term in positive)
-    neg = any(term in text for term in negative)
-    impact = "mixed" if pos and neg else "potentially positive" if pos else "potentially negative" if neg else "uncertain"
-    return category, impact
+        direction="unclassified"; rationale="Insufficient structured evidence for a directional view."; state="NEW EVENT"
+    return category,state,direction,rationale
 
-def normalize(row: dict, allowed: set[str]):
-    symbol = _pick(row, "symbol", "sm_symbol", "symbol_name").upper()
-    if not symbol or symbol not in allowed:
-        return None
-    headline = _pick(row, "desc", "subject", "sm_name", "headline") or "NSE corporate announcement"
-    details = _pick(row, "attchmntText", "details", "description")
-    filed = _pick(row, "an_dt", "broadcast_date", "timestamp", "date")
-    raw_url = _pick(row, "attchmntFile", "attachment", "url")
-    source = urljoin(BASE, raw_url) if raw_url else BASE + "/companies-listing/corporate-filings-announcements"
-    stable = "|".join((symbol, filed, headline, raw_url))
-    event_id = hashlib.sha256(stable.encode("utf-8")).hexdigest()
-    category, impact = classify(headline, details)
-    return {"event_id":event_id,"symbol":symbol,"company":_pick(row,"sm_name","company_name"),
-            "category":category,"impact":impact,"headline":headline,"details":details,
-            "filed_at":filed,"source_url":source}
-
+def normalize(item,allowed):
+    title=(item.get("title") or "").strip()
+    details=(item.get("description") or "").strip()
+    hay=(title+" "+details).upper()
+    symbol=""
+    # RSS entries sometimes carry the trading symbol in their text.
+    for candidate in allowed:
+        if re.search(r"(?<![A-Z0-9])"+re.escape(candidate)+r"(?![A-Z0-9])",hay):
+            symbol=candidate; break
+    # If no symbol is explicitly present, do not guess a company from a fuzzy match.
+    if not symbol: return None
+    filed=_date(item.get("published"))
+    category,state,direction,rationale=_classify(title,details,item.get("feed_type",""))
+    url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
+    ident="|".join((symbol,filed or "",title,url))
+    return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"symbol":symbol,"company":title,
+      "category":category,"impact":direction,"headline":title or "NSE filing","details":details,
+      "filed_at":filed,"source_url":url,"event_status":state,"rationale":rationale,
+      "source_name":item.get("source_name","NSE RSS"),"feed_type":item.get("feed_type","")}
