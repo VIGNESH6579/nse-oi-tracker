@@ -1,12 +1,15 @@
 import csv, hashlib, io, logging, re, time, xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 import requests
 from .config import settings
 
 log = logging.getLogger(__name__)
 NSE_ARCHIVE = "https://nsearchives.nseindia.com"
+NSE_SITE = "https://www.nseindia.com"
+NSE_BOARD_MEETINGS_API = NSE_SITE + "/api/corporate-board-meetings"
 FEEDS = {
     "announcements": NSE_ARCHIVE + "/content/RSS/Online_announcements.xml",
     "board_meetings": NSE_ARCHIVE + "/content/RSS/Board_Meetings.xml",
@@ -99,7 +102,60 @@ def fetch_feed(session,url):
                       "link":urljoin(url,link),"published":pub})
     return items
 
-def fetch_all_feeds():
+def _board_meeting_api_items(payload, allowed):
+    records = payload if isinstance(payload, list) else (
+        (payload or {}).get("data") or (payload or {}).get("records") or []
+    )
+    items = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        symbol = _valid_stock_symbol(row.get("bm_symbol"))
+        if not symbol or symbol not in allowed:
+            continue
+        purpose = str(row.get("bm_purpose") or "").strip()
+        meeting_date = str(row.get("bm_date") or "").strip()
+        if meeting_date:
+            purpose = (purpose + " | " if purpose else "") + "Meeting date: " + meeting_date
+        items.append({
+            "title": symbol + " " + str(row.get("bm_desc") or "Board Meeting Intimation"),
+            "description": purpose,
+            "link": str(row.get("attachment") or ""),
+            "published": str(row.get("bm_timestamp") or ""),
+            "feed_type": "board_meetings",
+            "source_name": "NSE Corporate Board Meetings",
+        })
+    return items
+
+
+def fetch_board_meetings_api(allowed):
+    # Official NSE board-meeting API supplements RSS because the RSS list can
+    # omit older notices for future meetings. Use a normal cookie/session
+    # handshake only; no proxy, challenge bypass or scraping workaround.
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    params = {
+        "index": "equities",
+        "fo_sec": "true",
+        "from_date": today.strftime("%d-%m-%Y"),
+        "to_date": (today + timedelta(days=60)).strftime("%d-%m-%Y"),
+    }
+    with requests.Session() as session:
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": NSE_SITE + "/companies-listing/corporate-filings-board-meetings",
+            "Origin": NSE_SITE,
+        })
+        home = session.get(NSE_SITE, timeout=settings.nse_timeout)
+        home.raise_for_status()
+        response = session.get(NSE_BOARD_MEETINGS_API, params=params, timeout=settings.nse_timeout)
+        response.raise_for_status()
+        items = _board_meeting_api_items(response.json(), allowed)
+        return items
+
+
+def fetch_all_feeds(allowed=None, company_map=None):
     session=_session(); output=[]; health={}
     try:
         for name,url in FEEDS.items():
@@ -111,12 +167,49 @@ def fetch_all_feeds():
                 health[name]={"ok":False,"error":str(exc)}
                 log.warning("NSE RSS %s failed: %s",name,exc)
     finally: session.close()
+
+    # Keep the official structured board-meeting feed as a supplement to RSS.
+    # Do not duplicate a symbol/date/category already captured from RSS.
+    if allowed:
+        try:
+            api_items = fetch_board_meetings_api(allowed)
+            rss_keys = set()
+            if company_map is not None:
+                for raw in output:
+                    event = normalize(raw, allowed, company_map)
+                    if event and event.get("event_date"):
+                        rss_keys.add((event["symbol"], event["event_date"], event["category"]))
+                unique_items = []
+                for raw in api_items:
+                    event = normalize(raw, allowed, company_map)
+                    key = (event["symbol"], event["event_date"], event["category"]) if event else None
+                    if key and key in rss_keys:
+                        continue
+                    if key:
+                        rss_keys.add(key)
+                    unique_items.append(raw)
+                api_items = unique_items
+            output.extend(api_items)
+            health["board_meetings_api"]={"ok":True,"items":len(api_items)}
+        except Exception as exc:
+            health["board_meetings_api"]={"ok":False,"error":str(exc)}
+            log.warning("NSE board-meetings API unavailable; retaining RSS results: %s",exc)
+
     if not output: raise RuntimeError("All official NSE RSS feeds failed: "+str(health))
     return output,health
 
 def _date(value):
     if not value: return None
     raw=str(value).strip()
+    # NSE board-meeting API supplies local IST broadcast timestamps in
+    # "DD-Mon-YYYY HH:MM:SS" format; convert them to UTC for consistent storage.
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            return dt.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
     # Preserve date-only feed values as dates; do not invent midnight UTC.
     for fmt in ("%d-%b-%Y","%d-%m-%Y","%d/%m/%Y","%Y-%m-%d"):
         try: return datetime.strptime(raw,fmt).date().isoformat()
