@@ -159,6 +159,37 @@ def fetch_board_meetings_api(allowed):
 
 
 
+
+def _event_calendar_items(payload, allowed):
+    records = payload if isinstance(payload, list) else (
+        (payload or {}).get("data") or (payload or {}).get("records") or
+        (payload or {}).get("events") or []
+    )
+    items = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        symbol = _valid_stock_symbol(row.get("symbol") or row.get("SYMBOL"))
+        if not symbol or symbol not in allowed:
+            continue
+        purpose = str(row.get("purpose") or row.get("PURPOSE") or "").strip()
+        details = str(row.get("details") or row.get("DETAILS") or "").strip()
+        company = str(row.get("company") or row.get("COMPANY") or "").strip()
+        meeting_date = str(row.get("date") or row.get("DATE") or row.get("event_date") or
+                           row.get("meeting_date") or row.get("bm_date") or "").strip()
+        if not meeting_date:
+            continue
+        agenda = " | ".join(x for x in (purpose, details) if x)
+        items.append({
+            "title": " ".join(x for x in (symbol, company, purpose or "Board Meeting") if x),
+            "description": (agenda + " | " if agenda else "") + "Meeting date: " + meeting_date,
+            "link": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
+            "published": "",
+            "feed_type": "event_calendar",
+            "source_name": "NSE Corporate Event Calendar",
+        })
+    return items
+
 def fetch_event_calendar_api(allowed):
     """Fetch NSE's separate corporate event calendar.
 
@@ -189,35 +220,7 @@ def fetch_event_calendar_api(allowed):
         response.raise_for_status()
         payload = response.json()
 
-    records = payload if isinstance(payload, list) else (
-        (payload or {}).get("data") or (payload or {}).get("records") or
-        (payload or {}).get("events") or []
-    )
-    items = []
-    for row in records:
-        if not isinstance(row, dict):
-            continue
-        symbol = _valid_stock_symbol(row.get("symbol") or row.get("SYMBOL"))
-        if not symbol or symbol not in allowed:
-            continue
-        purpose = str(row.get("purpose") or row.get("PURPOSE") or "").strip()
-        details = str(row.get("details") or row.get("DETAILS") or "").strip()
-        company = str(row.get("company") or row.get("COMPANY") or "").strip()
-        meeting_date = str(row.get("date") or row.get("DATE") or row.get("event_date") or
-                           row.get("meeting_date") or row.get("bm_date") or "").strip()
-        if not meeting_date:
-            continue
-        # Calendar records are schedules, not proof that results were filed.
-        agenda = " | ".join(x for x in (purpose, details) if x)
-        items.append({
-            "title": " ".join(x for x in (symbol, company, purpose or "Board Meeting") if x),
-            "description": (agenda + " | " if agenda else "") + "Meeting date: " + meeting_date,
-            "link": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
-            "published": "",
-            "feed_type": "event_calendar",
-            "source_name": "NSE Corporate Event Calendar",
-        })
-    return items
+    return _event_calendar_items(payload, allowed)
 
 def fetch_all_feeds(allowed=None, company_map=None):
     session=_session(); output=[]; health={}
