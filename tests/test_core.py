@@ -294,9 +294,6 @@ def test_nse_session_uses_browser_compatible_headers(monkeypatch):
     class FakeSession:
         def __init__(self):
             self.headers = {}
-        def get(self, url, timeout):
-            self.primed_url = url
-            return type("Response", (), {"status_code": 200})()
 
     fake = FakeSession()
     monkeypatch.setattr(nse.requests, "Session", lambda: fake)
@@ -304,4 +301,3 @@ def test_nse_session_uses_browser_compatible_headers(monkeypatch):
     assert session is fake
     assert "Mozilla/5.0" in session.headers["User-Agent"]
     assert "text/csv" in session.headers["Accept"]
-    assert session.primed_url == "https://www.nseindia.com"
