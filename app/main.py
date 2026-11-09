@@ -16,7 +16,7 @@ store=Store(settings.database_path)
 scheduler=BackgroundScheduler(timezone="Asia/Kolkata")
 poll_lock=threading.Lock()
 status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","universe_count":0,"raw_feed_items":0,"matched_feed_items":0,"matched_symbols":[],"feed_match_stats":{},"scanner_state":"starting"}
-last_known_fno_symbols=set()
+last_known_fno_symbols=set(store.load_fno_universe())
 
 def _fallback_universe(configured, cached):
     configured_symbols=set(configured or ())
@@ -36,6 +36,10 @@ def poll_once():
             symbols,universe_source=get_fno_symbols()
             if symbols:
                 last_known_fno_symbols=set(symbols)
+                try:
+                    store.save_fno_universe(symbols)
+                except Exception as cache_exc:
+                    log.warning("Could not persist last-known-good F&O universe: %s",cache_exc)
         except Exception as exc:
             symbols,universe_source=_fallback_universe(settings.fno_symbols,last_known_fno_symbols)
             poll_errors.append("F&O universe: "+str(exc))
