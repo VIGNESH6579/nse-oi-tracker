@@ -74,12 +74,17 @@ def fetch_all_feeds():
 
 def _date(value):
     if not value: return None
-    try: return parsedate_to_datetime(value).astimezone(timezone.utc).isoformat()
+    raw=str(value).strip()
+    # Preserve date-only feed values as dates; do not invent midnight UTC.
+    for fmt in ("%d-%b-%Y","%d-%m-%Y","%d/%m/%Y","%Y-%m-%d"):
+        try: return datetime.strptime(raw,fmt).date().isoformat()
+        except ValueError: pass
+    try:
+        parsed=parsedate_to_datetime(raw)
+        if parsed.tzinfo is None: parsed=parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
     except Exception:
-        for fmt in ("%d-%b-%Y","%d-%m-%Y","%d/%m/%Y","%Y-%m-%d"):
-            try: return datetime.strptime(value.strip(),fmt).replace(tzinfo=timezone.utc).isoformat()
-            except ValueError: pass
-    return None
+        return None
 
 
 def _parse_event_date(text):
@@ -129,9 +134,10 @@ def _parse_event_date(text):
 
 
 def _dedupe_key(symbol, category, headline):
+    # Category may differ between NSE feeds for the same filing; key by symbol + title.
     normalized = re.sub(r"[^a-z0-9]+", " ", (headline or "").lower()).strip()
     normalized = re.sub(r"\s+", " ", normalized)
-    return hashlib.sha256(f"{symbol.upper()}|{category.lower()}|{normalized}".encode()).hexdigest()
+    return hashlib.sha256(f"{symbol.upper()}|{normalized}".encode()).hexdigest()
 
 def _classify(title,details,feed_type,event_date=None):
     text=(title+" "+details).lower()
