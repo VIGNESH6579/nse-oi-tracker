@@ -98,12 +98,15 @@ def _now_ist():
 
 def _display_time(value):
     if not value: return "Time not supplied by exchange feed"
+    raw=str(value).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}",raw):
+        return _display_event_date(raw)+" · time not supplied by exchange feed"
     try:
         from zoneinfo import ZoneInfo
-        dt=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
         if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y · %I:%M %p IST")
-    except Exception: return str(value)
+    except Exception: return raw
 
 def _display_event_date(value):
     try: return datetime.strptime(str(value)[:10],"%Y-%m-%d").strftime("%d %b %Y")
