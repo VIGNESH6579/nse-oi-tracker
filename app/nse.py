@@ -158,6 +158,66 @@ def fetch_board_meetings_api(allowed):
         return items
 
 
+
+def fetch_event_calendar_api(allowed):
+    """Fetch NSE's separate corporate event calendar.
+
+    Unlike the board-meetings listing, this calendar is designed to retain
+    upcoming meeting dates. It may not expose the original filing timestamp;
+    in that case filed_at stays empty and the UI must say that time was not
+    supplied rather than substituting the poll time.
+    """
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    params = {
+        "index": "equities",
+        "from_date": (today - timedelta(days=60)).strftime("%d-%m-%Y"),
+        "to_date": (today + timedelta(days=90)).strftime("%d-%m-%Y"),
+    }
+    with requests.Session() as session:
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
+            "Origin": NSE_SITE,
+        })
+        home = session.get(NSE_SITE, timeout=settings.nse_timeout)
+        home.raise_for_status()
+        response = session.get(NSE_SITE + "/api/event-calendar", params=params,
+                               timeout=settings.nse_timeout)
+        response.raise_for_status()
+        payload = response.json()
+
+    records = payload if isinstance(payload, list) else (
+        (payload or {}).get("data") or (payload or {}).get("records") or
+        (payload or {}).get("events") or []
+    )
+    items = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        symbol = _valid_stock_symbol(row.get("symbol") or row.get("SYMBOL"))
+        if not symbol or symbol not in allowed:
+            continue
+        purpose = str(row.get("purpose") or row.get("PURPOSE") or "").strip()
+        details = str(row.get("details") or row.get("DETAILS") or "").strip()
+        company = str(row.get("company") or row.get("COMPANY") or "").strip()
+        meeting_date = str(row.get("date") or row.get("DATE") or
+                           row.get("event_date") or row.get("meeting_date") or "").strip()
+        if not meeting_date:
+            continue
+        # Calendar records are schedules, not proof that results were filed.
+        agenda = " | ".join(x for x in (purpose, details) if x)
+        items.append({
+            "title": " ".join(x for x in (symbol, company, purpose or "Board Meeting") if x),
+            "description": (agenda + " | " if agenda else "") + "Meeting date: " + meeting_date,
+            "link": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
+            "published": "",
+            "feed_type": "board_meetings",
+            "source_name": "NSE Corporate Event Calendar",
+        })
+    return items
+
 def fetch_all_feeds(allowed=None, company_map=None):
     session=_session(); output=[]; health={}
     try:
@@ -171,32 +231,37 @@ def fetch_all_feeds(allowed=None, company_map=None):
                 log.warning("NSE RSS %s failed: %s",name,exc)
     finally: session.close()
 
-    # Keep the official structured board-meeting feed as a supplement to RSS.
-    # Do not duplicate a symbol/date/category already captured from RSS.
+    # Structured board-meetings API supplies filing timestamps when available.
+    # The separate NSE Event Calendar is a second official schedule source; it
+    # can preserve future meeting dates even when a board-meetings RSS/API view
+    # has a shorter retention window. Neither source's poll time is a filing time.
     if allowed:
-        try:
-            api_items = fetch_board_meetings_api(allowed)
-            rss_keys = set()
-            if company_map is not None:
-                for raw in output:
-                    event = normalize(raw, allowed, company_map)
-                    if event and event.get("event_date"):
-                        rss_keys.add((event["symbol"], event["event_date"], event["category"]))
+        known = set()
+        if company_map is not None:
+            for raw in output:
+                event = normalize(raw, allowed, company_map)
+                if event and event.get("event_date"):
+                    known.add((event["symbol"], event["event_date"], event["category"]))
+        for source_key, fetcher in (
+            ("board_meetings_api", fetch_board_meetings_api),
+            ("event_calendar_api", fetch_event_calendar_api),
+        ):
+            try:
+                fetched = fetcher(allowed)
                 unique_items = []
-                for raw in api_items:
-                    event = normalize(raw, allowed, company_map)
-                    key = (event["symbol"], event["event_date"], event["category"]) if event else None
-                    if key and key in rss_keys:
+                for raw in fetched:
+                    event = normalize(raw, allowed, company_map or {})
+                    key = (event["symbol"], event["event_date"], event["category"]) if event and event.get("event_date") else None
+                    if key and key in known:
                         continue
                     if key:
-                        rss_keys.add(key)
+                        known.add(key)
                     unique_items.append(raw)
-                api_items = unique_items
-            output.extend(api_items)
-            health["board_meetings_api"]={"ok":True,"items":len(api_items)}
-        except Exception as exc:
-            health["board_meetings_api"]={"ok":False,"error":str(exc)}
-            log.warning("NSE board-meetings API unavailable; retaining RSS results: %s",exc)
+                output.extend(unique_items)
+                health[source_key] = {"ok": True, "items": len(unique_items)}
+            except Exception as exc:
+                health[source_key] = {"ok": False, "error": str(exc)}
+                log.warning("NSE %s unavailable; retaining other sources: %s", source_key, exc)
 
     if not output: raise RuntimeError("All official NSE RSS feeds failed: "+str(health))
     return output,health
