@@ -33,6 +33,10 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_symbol ON events(symbol)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_status ON events(event_status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_dedupe ON events(dedupe_key)")
+            db.execute("""CREATE TABLE IF NOT EXISTS fno_universe (
+              symbol TEXT PRIMARY KEY, updated_at TEXT NOT NULL)""")
+            # Remove the legacy quote table from the previous broker-based app.
+            db.execute("DROP TABLE IF EXISTS market_quotes")
             db.commit()
     @contextmanager
     def connect(self):
@@ -98,5 +102,20 @@ class Store:
             unique.append(row)
             if len(unique)>=limit: break
         return unique
+    def save_fno_universe(self,symbols):
+        clean=sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
+        if not clean:
+            return 0
+        stamp=datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            db.execute("DELETE FROM fno_universe")
+            db.executemany("INSERT INTO fno_universe(symbol,updated_at) VALUES (?,?)",
+                           [(symbol,stamp) for symbol in clean])
+            db.commit()
+        return len(clean)
+    def load_fno_universe(self):
+        with self.connect() as db:
+            rows=db.execute("SELECT symbol FROM fno_universe ORDER BY symbol").fetchall()
+        return [row["symbol"] for row in rows]
     def count(self):
         with self.connect() as db: return db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
