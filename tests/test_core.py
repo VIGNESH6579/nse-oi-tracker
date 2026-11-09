@@ -41,6 +41,34 @@ def test_normalize_filters_unknown_symbol():
     assert normalize({"title": "Some Company", "description": "Corporate filing"}, {"XYZ"}) is None
 
 
+def test_fno_environment_symbols_are_additive_to_the_live_universe(monkeypatch):
+    from types import SimpleNamespace
+    import app.nse as nse_module
+
+    class Response:
+        text = "SYMBOL,CONTRACT\nRVNL,XX\nCOCHINSHIP,YY\n"
+
+        def raise_for_status(self):
+            return None
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(
+        nse_module,
+        "settings",
+        SimpleNamespace(
+            fno_symbols=frozenset({"CUSTOMTEST"}),
+            universe_csv_url="https://example.com/fno.csv",
+            nse_timeout=5,
+        ),
+    )
+    symbols, source = nse_module.get_fno_symbols(Session())
+    assert {"RVNL", "COCHINSHIP", "CUSTOMTEST"}.issubset(symbols)
+    assert "NSE F&O market-lot CSV" in source
+
+
 def test_company_name_matching_handles_ind_ltd_abbreviation_for_fno_stocks():
     item = normalize(
         {
