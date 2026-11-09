@@ -18,6 +18,7 @@ def send(event: dict) -> bool:
     try:
         response = requests.post(url, data=body.encode("utf-8"), headers=headers, timeout=15)
         response.raise_for_status()
+        log.info("ntfy delivery succeeded: symbol=%s event_id=%s",event.get("symbol"),event.get("event_id"))
         return True
     except requests.RequestException:
         log.exception("ntfy delivery failed for %s", event.get("event_id"))
