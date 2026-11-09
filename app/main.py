@@ -20,11 +20,13 @@ last_known_fno_symbols=set(store.load_fno_universe())
 
 def _fallback_universe(configured, cached):
     configured_symbols=set(configured or ())
+    cached_symbols=set(cached or ())
+    if configured_symbols and cached_symbols:
+        return configured_symbols | cached_symbols, "FNO_SYMBOLS + last-known-good F&O universe fallback"
     if configured_symbols:
         return configured_symbols, "FNO_SYMBOLS environment fallback"
-    cached_symbols=set(cached or ())
     if cached_symbols:
-        return cached_symbols, "in-memory last-known-good F&O universe"
+        return cached_symbols, "last-known-good F&O universe fallback"
     return set(), "unavailable"
 
 def poll_once():
