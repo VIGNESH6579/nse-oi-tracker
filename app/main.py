@@ -299,7 +299,7 @@ nav{{display:flex;gap:5px;overflow:auto;position:sticky;top:0;background:#f4f6fa
 def events(limit:int=Query(100,ge=1,le=500),symbol:str|None=None,status_filter:str|None=None):
     return {"events":store.list_events(limit,symbol,status_filter)}
 
-@app.get("/api/health")
+# UptimeRobot sends HEAD by default. Register HEAD explicitly so the monitor receives\n# the same successful status as GET; ASGI suppresses the response body for HEAD.\n@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     return {"ok":True,"app":settings.app_name,"database_events":store.count(),
       "poll_interval_seconds":settings.poll_interval,"ntfy_configured":bool(settings.ntfy_topic),
