@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 from .config import settings
 from .store import Store
-from .nse import fetch_all_feeds, get_fno_symbols, normalize
+from .nse import fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
 from .notifier import send
 
 logging.basicConfig(level=logging.INFO)
@@ -20,10 +20,11 @@ def poll_once():
     if not poll_lock.acquire(blocking=False): return {"skipped":True,"reason":"poll already running"}
     try:
         symbols,universe_source=get_fno_symbols()
+        company_map=get_fno_company_map(symbols)
         rows,source_health=fetch_all_feeds()
         new_count=0
         for row in rows:
-            event=normalize(row,symbols)
+            event=normalize(row,symbols,company_map)
             if event and store.insert(event): new_count+=1
         for pending in store.pending_notifications(limit=50):
             if send(pending): store.mark_notified(pending["event_id"])
