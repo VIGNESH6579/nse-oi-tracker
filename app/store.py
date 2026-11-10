@@ -2,11 +2,11 @@ import os,sqlite3,re,hashlib
 from contextlib import contextmanager
 from datetime import datetime,timezone
 
-def _event_key(symbol,category,headline):
+def _event_key(symbol,category,headline,event_date=None):
     # A duplicate can arrive through a different RSS feed/category.
     normalized=re.sub(r"[^a-z0-9]+"," ",(headline or "").lower()).strip()
     normalized=re.sub(r"\s+"," ",normalized)
-    return hashlib.sha256(f"{str(symbol).upper()}|{normalized}".encode()).hexdigest()
+    return hashlib.sha256((str(symbol).upper() + "|" + normalized + "|" + str(event_date or "")).encode()).hexdigest()
 
 class Store:
     def __init__(self,path):
@@ -25,10 +25,10 @@ class Store:
                 if name not in cols: db.execute(f"ALTER TABLE events ADD COLUMN {name} {typ}")
             # Rebuild keys for every stored event so legacy category-based keys
             # are migrated to the feed-independent symbol + headline fingerprint.
-            rows=db.execute("SELECT event_id,symbol,category,headline FROM events").fetchall()
+            rows=db.execute("SELECT event_id,symbol,category,headline,event_date FROM events").fetchall()
             for row in rows:
                 db.execute("UPDATE events SET dedupe_key=? WHERE event_id=?",
-                           (_event_key(row["symbol"],row["category"],row["headline"]),row["event_id"]))
+                           (_event_key(row["symbol"],row["category"],row["headline"],row["event_date"]),row["event_id"]))
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_filed_at ON events(filed_at DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_symbol ON events(symbol)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_events_status ON events(event_status)")
@@ -44,7 +44,7 @@ class Store:
         try: yield db
         finally: db.close()
     def insert(self,x):
-        key=x.get("dedupe_key") or _event_key(x["symbol"],x["category"],x["headline"])
+        key=x.get("dedupe_key") or _event_key(x["symbol"],x["category"],x["headline"],x.get("event_date"))
         with self.connect() as db:
             duplicate=db.execute("""SELECT 1 FROM events
               WHERE dedupe_key=? AND julianday(COALESCE(filed_at,created_at))>=julianday('now','-3 days')
