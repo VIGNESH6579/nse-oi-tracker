@@ -263,7 +263,7 @@ def _dashboard_news_events(events):
             if event.get("event_status") in {"NEW EVENT", "SUDDEN EVENT"}]
 
 
-@app.get("/",response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def dashboard():
     today=_now_ist().date().isoformat()
     recent=[e for e in store.list_events(500) if _is_recent_or_scheduled(e,today)]
