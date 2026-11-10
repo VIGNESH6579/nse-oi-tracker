@@ -627,3 +627,27 @@ def test_source_403_uses_thirty_minute_retry_backoff(monkeypatch):
     assert health["ok"] is False
     assert health["retry_in_seconds"] == 1800
     assert nse_module._SOURCE_RETRY_AFTER["blocked-new"] == 2300.0
+
+
+def test_store_enables_wal_for_concurrent_dashboard_reads(tmp_path):
+    store = Store(str(tmp_path / "wal.db"))
+    with store.connect() as db:
+        mode = db.execute("PRAGMA journal_mode").fetchone()[0]
+        timeout = db.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert mode.lower() == "wal"
+    assert timeout == 15000
+
+
+def test_successful_empty_feeds_are_not_reported_as_total_outage(monkeypatch):
+    import app.nse as nse_module
+
+    monkeypatch.setattr(nse_module, "FEEDS", {"announcements": "https://example.com/rss"})
+    monkeypatch.setattr(nse_module, "fetch_feed", lambda session, url: [])
+    monkeypatch.setattr(nse_module, "fetch_board_meetings_api", lambda allowed: [])
+    monkeypatch.setattr(nse_module, "fetch_event_calendar_api", lambda allowed: [])
+    nse_module._SOURCE_CACHE.pop("announcements", None)
+    nse_module._SOURCE_RETRY_AFTER.pop("announcements", None)
+    nse_module._SOURCE_FAILURES.pop("announcements", None)
+    rows, health = nse_module.fetch_all_feeds(set(), {})
+    assert rows == []
+    assert health["announcements"]["ok"] is True
