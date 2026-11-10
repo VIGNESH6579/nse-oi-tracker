@@ -63,7 +63,7 @@ class Store:
         with self.connect() as db: db.execute("UPDATE events SET notified=1 WHERE event_id=?",(event_id,)); db.commit()
     def pending_notifications(self,limit=50):
         with self.connect() as db:
-            rows=[dict(x) for x in db.execute("SELECT * FROM events WHERE notified=0 ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?",(max(limit*5,limit),)).fetchall()]
+            rows=[dict(x) for x in db.execute("SELECT * FROM events WHERE notified=0 AND julianday(created_at)>=julianday('now','-1 day') ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?",(max(limit*5,limit),)).fetchall()]
         unique=[]; seen={}
         for row in rows:
             key=row.get("dedupe_key") or _event_key(row["symbol"],row["category"],row["headline"])
