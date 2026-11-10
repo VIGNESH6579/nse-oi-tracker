@@ -13,6 +13,7 @@ class Settings:
     nse_retries: int = max(1, min(5, int(os.getenv("NSE_MAX_RETRIES", "3"))))
     universe_csv_url: str = os.getenv("FNO_UNIVERSE_CSV_URL", "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv")
     fno_symbols: frozenset[str] = frozenset(x.strip().upper() for x in os.getenv("FNO_SYMBOLS", "").split(",") if x.strip())
+    fallback_fno_symbols: frozenset[str] = frozenset(x.strip().upper() for x in os.getenv("FNO_FALLBACK_SYMBOLS", "").split(",") if x.strip())
     ntfy_base_url: str = os.getenv("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
     ntfy_topic: str = os.getenv("NTFY_TOPIC", "").strip()
     ntfy_token: str = os.getenv("NTFY_TOKEN", "").strip()
