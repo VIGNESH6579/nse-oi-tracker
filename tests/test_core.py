@@ -339,3 +339,26 @@ def test_same_headline_with_revised_meeting_date_is_not_deduplicated(tmp_path):
                    filed_at=(now + timedelta(minutes=5)).isoformat())
     assert store.insert(first) is True
     assert store.insert(revised) is True
+
+
+
+def test_notification_queue_ignores_stale_unnotified_backlog(tmp_path):
+    store = Store(str(tmp_path / "events.db"))
+    event = {
+        "event_id": "stale-alert",
+        "symbol": "XYZ",
+        "company": "XYZ Limited",
+        "category": "Corporate Announcement",
+        "impact": "unclassified",
+        "headline": "Old filing",
+        "details": "",
+        "filed_at": None,
+        "source_url": "https://example.com/old",
+        "event_status": "NEW EVENT",
+    }
+    assert store.insert(event) is True
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    with store.connect() as db:
+        db.execute("UPDATE events SET created_at=? WHERE event_id=?", (old, "stale-alert"))
+        db.commit()
+    assert store.pending_notifications(limit=10) == []
