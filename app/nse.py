@@ -254,7 +254,7 @@ def fetch_all_feeds(allowed=None, company_map=None):
                         "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
                     })
                 items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
-                feed_kind = "board_meetings" if name == "bse_board_meetings" else ("financial_results" if name == "bse_financial_results" else "announcements")
+                feed_kind = ("board_meetings" if name in {"board_meetings", "bse_board_meetings"} else ("financial_results" if name in {"financial_results", "bse_financial_results"} else "announcements"))
                 for x in items:
                     x["feed_type"]=feed_kind
                     x["source_name"]="BSE RSS" if is_bse else "NSE RSS"
@@ -379,11 +379,11 @@ def _classify(title,details,feed_type,event_date=None):
     text=(title+" "+details).lower()
     is_board = feed_type in {"board_meetings", "event_calendar"} or "board meeting" in text or "meeting of the board" in text
     result_terms = ("financial results","quarterly results","audited results","unaudited results","standalone results","consolidated results")
-    has_result = any(x in text for x in result_terms) or bool(re.search(r"\\bq[1-4]\\s*(?:fy)?\\s*20?\\d{2}\\s*results\\b", text))
+    has_result = any(x in text for x in result_terms) or bool(re.search(r"\bq[1-4]\s*(?:fy)?\s*20?\d{2}\s*results\b", text))
     result_agenda = has_result and (feed_type=="event_calendar" or any(x in text for x in ("consider","approve","approval","to take on record","meeting","scheduled")))
     is_outcome = any(x in text for x in ("outcome of board meeting","results declared","financial results approved","approved the financial results","statement of standalone and consolidated"))
-    result_release = has_result and (feed_type=="financial_results" or is_outcome or
-        ("financial results" in text and not result_agenda and not is_board))
+    result_release = (feed_type=="financial_results") or (has_result and (is_outcome or
+        ("financial results" in text and not result_agenda and not is_board)))
     if is_board and result_agenda and not is_outcome: category="Financial Results"
     elif has_result: category="Financial Results"
     elif any(x in text for x in ("dividend","record date","split","bonus issue")): category="Corporate Action"
@@ -396,10 +396,10 @@ def _classify(title,details,feed_type,event_date=None):
     direction="unassessed"
     rationale="Direction not assessed: the exchange feed did not include comparable financial figures. Do not infer a trade direction from the filing headline alone."
     if result_release:
-        profit_down = bool(re.search(r"(?:net profit|profit after tax|\\bpat\\b).{0,70}(?:down|declin\\w*|fell|decreas\\w*|lower).{0,20}\\d+(?:\\.\\d+)?\\s*%", text))
-        profit_up = bool(re.search(r"(?:net profit|profit after tax|\\bpat\\b).{0,70}(?:up|increas\\w*|grew|higher).{0,20}\\d+(?:\\.\\d+)?\\s*%", text))
-        revenue_down = bool(re.search(r"(?:revenue|sales).{0,70}(?:down|declin\\w*|fell|decreas\\w*|lower).{0,20}\\d+(?:\\.\\d+)?\\s*%", text))
-        revenue_up = bool(re.search(r"(?:revenue|sales).{0,70}(?:up|increas\\w*|grew|higher).{0,20}\\d+(?:\\.\\d+)?\\s*%", text))
+        profit_down = bool(re.search(r"(?:net profit|profit after tax|\bpat\b).{0,70}(?:down|declin\w*|fell|decreas\w*|lower).{0,20}\d+(?:\.\d+)?\s*%", text))
+        profit_up = bool(re.search(r"(?:net profit|profit after tax|\bpat\b).{0,70}(?:up|increas\w*|grew|higher).{0,20}\d+(?:\.\d+)?\s*%", text))
+        revenue_down = bool(re.search(r"(?:revenue|sales).{0,70}(?:down|declin\w*|fell|decreas\w*|lower).{0,20}\d+(?:\.\d+)?\s*%", text))
+        revenue_up = bool(re.search(r"(?:revenue|sales).{0,70}(?:up|increas\w*|grew|higher).{0,20}\d+(?:\.\d+)?\s*%", text))
         if profit_down and revenue_down: direction="bearish"; rationale="Net profit and revenue are both reported lower in the available comparison. This is a negative results signal, not a price prediction."
         elif profit_up and revenue_up: direction="bullish"; rationale="Net profit and revenue are both reported higher in the available comparison. This is a positive results signal, not a price prediction."
         elif profit_down and revenue_up or profit_up and revenue_down: direction="mixed"; rationale="Revenue and profit signals conflict in the available comparison; treat the result as mixed."
