@@ -400,27 +400,24 @@ def test_nse_rss_uses_browser_user_agent_instead_of_bot_identifier(monkeypatch):
             self.headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36"
             }
-            self.calls = 0
-
-        def get(self, url, **kwargs):
-            class Response:
-                content = b"<rss><channel></channel></rss>"
-
-                def raise_for_status(self):
-                    return None
-            self.calls += 1
-            return Response()
 
         def close(self):
             return None
 
     session = FakeSession()
+    observed = []
+
+    def fake_fetch_feed(s, url):
+        if "nsearchives.nseindia.com" in url:
+            observed.append((s.headers.get("User-Agent"), s.headers.get("Referer")))
+            return [{"title": "test filing", "description": "", "link": url, "published": ""}]
+        return []
+
     monkeypatch.setattr(nse, "_session", lambda: session)
-    monkeypatch.setattr(nse, "fetch_feed", lambda s, url: (
-        [] if "nsearchives.nseindia.com" in url else []
-    ))
+    monkeypatch.setattr(nse, "fetch_feed", fake_fetch_feed)
     monkeypatch.setattr(nse, "fetch_board_meetings_api", lambda allowed: [])
     monkeypatch.setattr(nse, "fetch_event_calendar_api", lambda allowed: [])
     nse.fetch_all_feeds({"RELIANCE"}, {})
-    assert "Mozilla/5.0" in session.headers["User-Agent"]
-    assert "NSE-Company-News-Monitor" not in session.headers["User-Agent"]
+    assert observed
+    assert all("Mozilla/5.0" in ua and "NSE-Company-News-Monitor" not in ua for ua, _ in observed)
+    assert all(referer == "https://www.nseindia.com/" for _, referer in observed)
