@@ -158,20 +158,18 @@ def fetch_board_meetings_api(allowed):
         "from_date": (today - timedelta(days=60)).strftime("%d-%m-%Y"),
         "to_date": (today + timedelta(days=60)).strftime("%d-%m-%Y"),
     }
-    with requests.Session() as session:
+    # Request the JSON resource directly first. A homepage cookie handshake is
+    # counterproductive on Render when NSE blocks the homepage with HTTP 403:
+    # it prevents even attempting the actual API endpoint.
+    with _session() as session:
         session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
             "Referer": NSE_SITE + "/companies-listing/corporate-filings-board-meetings",
             "Origin": NSE_SITE,
         })
-        home = session.get(NSE_SITE, timeout=settings.nse_timeout)
-        home.raise_for_status()
         response = session.get(NSE_BOARD_MEETINGS_API, params=params, timeout=settings.nse_timeout)
         response.raise_for_status()
-        items = _board_meeting_api_items(response.json(), allowed)
-        return items
+        return _board_meeting_api_items(response.json(), allowed)
 
 
 
@@ -221,11 +219,9 @@ def fetch_event_calendar_api(allowed):
         "to_date": (today + timedelta(days=90)).strftime("%d-%m-%Y"),
         "fo_sec": "true",
     }
-    with requests.Session() as session:
+    with _session() as session:
         session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
             "Referer": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
             "Origin": NSE_SITE,
         })
@@ -249,9 +245,14 @@ def fetch_all_feeds(allowed=None, company_map=None):
                         "Origin": "https://www.bseindia.com",
                     })
                 else:
-                    session.headers.pop("Referer", None)
-                    session.headers.pop("Origin", None)
-                    session.headers["User-Agent"] = "NSE-Company-News-Monitor/1.0 (RSS reader)"
+                    # NSE's edge protection rejects generic bot-style RSS user agents.
+                    # Keep a mainstream browser UA and identify the NSE site as the referrer.
+                    session.headers.update({
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+                        "Referer": "https://www.nseindia.com/",
+                        "Origin": "https://www.nseindia.com",
+                        "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
+                    })
                 items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
                 feed_kind = "board_meetings" if name == "bse_board_meetings" else ("financial_results" if name == "bse_financial_results" else "announcements")
                 for x in items:
