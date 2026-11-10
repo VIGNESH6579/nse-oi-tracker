@@ -579,40 +579,72 @@ KNOWN_COMPANY_ALIASES = {
     "KALYANKJIL": ("KALYAN JEWELLERS INDIA LIMITED", "KALYAN JEWELLERS IND LTD",
                    "KALYAN JEWELLERS"),
     "RVNL": ("RAIL VIKAS NIGAM LIMITED", "RAIL VIKAS NIGAM LTD"),
+    "ONGC": ("OIL AND NATURAL GAS CORPORATION", "OIL AND NATURAL GAS CORPORATION LIMITED"),
+    "OIL": ("OIL INDIA LIMITED", "OIL INDIA LTD"),
 }
 KNOWN_COMPANY_NAMES = {
     "COCHINSHIP": "Cochin Shipyard Limited",
     "KALYANKJIL": "Kalyan Jewellers India Limited",
     "RVNL": "Rail Vikas Nigam Limited",
+    "ONGC": "Oil and Natural Gas Corporation Limited",
+    "OIL": "Oil India Limited",
 }
+EXCHANGE_NAME_SYMBOLS = {"BSE", "NSE", "MCX", "SEBI"}
+
+
+def _symbol_mentioned(candidate, hay):
+    if not re.search(r"(?<![A-Z0-9])"+re.escape(candidate)+r"(?![A-Z0-9])", hay):
+        return False
+    if candidate == "OIL" and "NATURAL GAS" in hay:
+        return False
+    if candidate in EXCHANGE_NAME_SYMBOLS:
+        if re.search(r"\b(?:INFORMED|INFORM|TO THE|ON THE|WITH THE|SUBMITTED TO)\s+"+re.escape(candidate)+r"\b", hay):
+            return False
+        if not re.search(
+            r"(?:^|\n|\|\s*)"+re.escape(candidate)+r"(?:\s+(?:LIMITED|LTD|CORPORATION)|$|[^A-Z0-9])",
+            hay,
+        ) and not re.search(r"\b"+re.escape(candidate)+r"\s+(?:LIMITED|LTD)\b", hay):
+            return False
+    return True
+
+
+def _match_company_name(hay, allowed, company_map):
+    normalized=_company_match_key(hay)
+    scored=[]
+    for candidate,name in (company_map or {}).items():
+        alias=_company_match_key(name)
+        if candidate in allowed and len(alias)>=8 and alias in normalized:
+            scored.append((len(alias), candidate))
+    for candidate,aliases in KNOWN_COMPANY_ALIASES.items():
+        if candidate not in allowed:
+            continue
+        for alias in aliases:
+            key=_company_match_key(alias)
+            if len(key)>=8 and key in normalized:
+                scored.append((len(key), candidate))
+    if not scored:
+        return ""
+    scored.sort(reverse=True)
+    best_len, best = scored[0]
+    others={symbol for length,symbol in scored if symbol!=best and length>=best_len-2}
+    if others:
+        return ""
+    return best
 
 
 def normalize(item,allowed,company_map=None):
     title=(item.get("title") or "").strip()
     details=(item.get("description") or "").strip()
     hay=(title+" "+details).upper()
-    symbol=""
-    # RSS entries sometimes carry the trading symbol in their text.
-    for candidate in allowed:
-        if re.search(r"(?<![A-Z0-9])"+re.escape(candidate)+r"(?![A-Z0-9])",hay):
-            symbol=candidate; break
     company_map=company_map or {}
+    # Prefer legal-name matching so short tickers like BSE/OIL are not taken
+    # from "informed BSE" or "Oil and Natural Gas Corporation".
+    symbol=_match_company_name(hay, allowed, company_map)
     if not symbol:
-        normalized=_company_match_key(hay)
-        matches=set()
-        for candidate,name in company_map.items():
-            alias=_company_match_key(name)
-            if candidate in allowed and len(alias)>=8 and alias in normalized:
-                matches.add(candidate)
-        # Known NSE legal-name variants cover filings where the RSS title uses
-        # abbreviations and the equity master uses a different company-name form.
-        for candidate,aliases in KNOWN_COMPANY_ALIASES.items():
-            if candidate in allowed and any(
-                len(_company_match_key(alias))>=8 and _company_match_key(alias) in normalized
-                for alias in aliases
-            ):
-                matches.add(candidate)
-        if len(matches)==1: symbol=next(iter(matches))
+        for candidate in allowed:
+            if _symbol_mentioned(candidate, hay):
+                symbol=candidate
+                break
     if not symbol: return None
     from .finance import parse_period_from_text
     filed=_date(item.get("published"))

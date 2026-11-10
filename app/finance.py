@@ -41,6 +41,16 @@ ROUTINE_TEXT = (
     "voting results",
     "scrutinizer",
     "intimation of book closure",
+    "analyst / investor meet",
+    "analyst/ investor meet",
+    "analyst/investor meet",
+    "schedule of analyst",
+    "investor meet",
+    "analyst meet",
+    "conference call",
+    "other business matters",
+    "general updates",
+    "newspaper",
 )
 RESULT_ANCILLARY = (
     "transcript",

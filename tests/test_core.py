@@ -677,7 +677,7 @@ def test_sudden_events_are_in_dashboard_news_section():
         {"event_status": "RESULT PUBLISHED", "symbol": "DEF"},
         {"event_status": "RESULT SCHEDULED", "symbol": "GHI"},
     ]
-    assert {event["symbol"] for event in _dashboard_news_events(events)} == {"XYZ", "ABC"}
+    assert {event["symbol"] for event in _dashboard_news_events(events)} == {"ABC"}
 
 
 def test_homepage_route_is_bound_to_dashboard_not_helper():

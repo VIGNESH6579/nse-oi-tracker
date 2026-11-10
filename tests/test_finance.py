@@ -176,14 +176,57 @@ def test_official_url_allowlist():
     assert not is_official_document_url("file:///etc/passwd")
 
 
-def test_homepage_and_health_payload_do_not_require_live_feeds():
+def test_homepage_and_health_payload_do_not_require_live_feeds(monkeypatch):
     from app.main import app, dashboard, health
+    import app.main as main_module
 
+    monkeypatch.setattr(main_module, "get_quotes", lambda symbols: {})
     homepage = next(route for route in app.routes if getattr(route, "path", None) == "/")
     assert homepage.methods == {"GET", "HEAD"}
     html = dashboard()
     assert "Today" in html
+    assert "Sudden material news" in html
     payload = health()
     assert payload["ok"] is True
     assert payload["database"]["persistent"] is False
     assert "status" in payload
+
+
+def test_informed_bse_does_not_map_to_bse_stock():
+    item = normalize(
+        {
+            "title": "Ekennis Software Service Ltd (543475)",
+            "description": "Ekennis Software Service Ltd has informed BSE that the meeting of the Board is scheduled.",
+            "published": "Tue, 10 Nov 2026 13:00:00 +0530",
+            "link": "https://www.bseindia.com/example.pdf",
+            "feed_type": "announcements",
+        },
+        {"BSE", "RELIANCE"},
+        {"BSE": "BSE Limited", "RELIANCE": "Reliance Industries Limited"},
+    )
+    assert item is None
+
+
+def test_ongc_is_not_matched_as_oil_india():
+    item = normalize(
+        {
+            "title": "Oil and Natural Gas Corporation Ltd (500312)",
+            "description": "Schedule of Analyst/ Investor Meet",
+            "published": "Tue, 10 Nov 2026 13:00:00 +0530",
+            "link": "https://www.bseindia.com/example.pdf",
+            "feed_type": "announcements",
+        },
+        {"OIL", "ONGC"},
+        {"OIL": "Oil India Limited", "ONGC": "Oil and Natural Gas Corporation Limited"},
+    )
+    assert item is not None
+    assert item["symbol"] == "ONGC"
+    assert item["event_status"] == "ROUTINE"
+
+
+def test_quote_formatter_shows_percent_move():
+    from app.prices import format_quote
+    html = format_quote({"ltp": 1234.5, "change_pct": 1.25})["html"]
+    assert "1,234.50" in html or "1,234.5" in html
+    assert "+1.25%" in html
+    assert "up" in html
