@@ -14,6 +14,10 @@ class Store:
         parent=os.path.dirname(path)
         if parent: os.makedirs(parent,exist_ok=True)
         with self.connect() as db:
+            # WAL lets dashboard/API readers continue while the poller commits
+            # new filings. busy_timeout absorbs brief concurrent read/write locks.
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=NORMAL")
             db.execute("""CREATE TABLE IF NOT EXISTS events (
               event_id TEXT PRIMARY KEY,symbol TEXT NOT NULL,company TEXT,category TEXT NOT NULL,impact TEXT NOT NULL,
               headline TEXT NOT NULL,details TEXT,filed_at TEXT,source_url TEXT,created_at TEXT NOT NULL,
@@ -41,6 +45,7 @@ class Store:
     @contextmanager
     def connect(self):
         db=sqlite3.connect(self.path,timeout=15); db.row_factory=sqlite3.Row
+        db.execute("PRAGMA busy_timeout=15000")
         try: yield db
         finally: db.close()
     def insert(self,x):
