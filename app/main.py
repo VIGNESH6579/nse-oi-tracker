@@ -152,6 +152,15 @@ async def lifespan(app:FastAPI):
 
 app=FastAPI(title=settings.app_name,version="2.0.0",lifespan=lifespan)
 
+@app.middleware("http")
+async def prevent_stale_dashboard_cache(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 def _esc(v):
     import html
     return html.escape(str(v or ""), quote=True)
