@@ -678,3 +678,11 @@ def test_sudden_events_are_in_dashboard_news_section():
         {"event_status": "RESULT SCHEDULED", "symbol": "GHI"},
     ]
     assert {event["symbol"] for event in _dashboard_news_events(events)} == {"XYZ", "ABC"}
+
+
+def test_homepage_route_is_bound_to_dashboard_not_helper():
+    from app.main import app, dashboard
+
+    homepage = next(route for route in app.routes if getattr(route, "path", None) == "/")
+    assert homepage.endpoint is dashboard
+    assert homepage.methods == {"GET"}
