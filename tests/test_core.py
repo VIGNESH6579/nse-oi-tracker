@@ -669,10 +669,12 @@ def test_company_master_backoff_does_not_retry_when_cache_is_empty(monkeypatch):
 
 
 def test_sudden_events_are_in_dashboard_news_section():
-    import app.main as main_module
+    from app.main import _dashboard_news_events
 
-    source = main_module.dashboard.__globals__
-    # The dashboard's classification is tested through the event status selector
-    # rather than spinning up the scheduler or making network requests.
-    statuses = {"NEW EVENT", "SUDDEN EVENT"}
-    assert "SUDDEN EVENT" in statuses
+    events = [
+        {"event_status": "NEW EVENT", "symbol": "XYZ"},
+        {"event_status": "SUDDEN EVENT", "symbol": "ABC"},
+        {"event_status": "RESULT PUBLISHED", "symbol": "DEF"},
+        {"event_status": "RESULT SCHEDULED", "symbol": "GHI"},
+    ]
+    assert {event["symbol"] for event in _dashboard_news_events(events)} == {"XYZ", "ABC"}
