@@ -19,13 +19,13 @@ cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Set `NTFY_TOPIC`, optionally `NTFY_TOKEN`, and if needed `FNO_SYMBOLS` (comma-separated). Keep secrets in Render environment variables, never in Git.
+Set `NTFY_TOPIC`, optionally `NTFY_TOKEN`, and if needed `FNO_SYMBOLS` (comma-separated). To enable manual sync, set a long random `SYNC_TOKEN` in Render and send it only in the `X-Sync-Token` header. Keep secrets in Render environment variables, never in Git.
 
 ## API
 - `GET /` dashboard
 - `GET /api/events?limit=100&symbol=RELIANCE&status_filter=RESULT%20PUBLISHED`
 - `GET /api/health` (liveness and scanner diagnostics)
 - `GET /api/ready` (scanner readiness; 503 when no valid F&O scan is available)
-- `POST /api/sync`
+- `POST /api/sync` is disabled unless `SYNC_TOKEN` is configured; when enabled it requires the `X-Sync-Token` header.
 
 NSE and BSE RSS feeds are exchange-published sources. Actual reachability and item counts are shown independently in the dashboard's Data status panel. Render Free may sleep and local SQLite is ephemeral. For reliable continuous polling and durable history, use an always-on worker and persistent storage.
