@@ -61,6 +61,10 @@ def get_fno_symbols(session=None):
         valid for item in settings.fno_symbols
         if (valid := _valid_stock_symbol(item))
     }
+    fallback = {
+        valid for item in getattr(settings, "fallback_fno_symbols", ())
+        if (valid := _valid_stock_symbol(item))
+    }
     try:
         r=s.get(settings.universe_csv_url,headers={
             "Accept":"text/csv,application/csv,*/*;q=0.8",
@@ -92,6 +96,8 @@ def get_fno_symbols(session=None):
     except Exception:
         if configured:
             return configured,"FNO_SYMBOLS environment fallback (NSE CSV unavailable; valid tickers only)"
+        if fallback:
+            return fallback,"FNO_FALLBACK_SYMBOLS static recovery universe (NSE CSV unavailable)"
         raise
 
 def _tag(el,name):
@@ -99,6 +105,64 @@ def _tag(el,name):
         if child.tag.split("}")[-1].lower()==name.lower():
             return (child.text or "").strip()
     return ""
+
+
+
+# Per-process source backoff and short-lived cache. A blocked exchange endpoint
+# should not be hammered every five minutes; cached RSS items remain usable
+# for up to one hour while the source is retried periodically.
+_SOURCE_CACHE = {}
+_SOURCE_RETRY_AFTER = {}
+_SOURCE_FAILURES = {}
+_SOURCE_CACHE_MAX_AGE = 3600
+
+
+def _fetch_source(name, fetcher):
+    now = time.monotonic()
+    cached = _SOURCE_CACHE.get(name)
+    retry_at = _SOURCE_RETRY_AFTER.get(name, 0.0)
+    if now < retry_at:
+        if cached and now - cached["at"] <= _SOURCE_CACHE_MAX_AGE:
+            items = [dict(item) for item in cached["items"]]
+            return items, {
+                "ok": False, "stale": True, "items": len(items),
+                "error": "Using recent cached feed during source retry cooldown",
+                "retry_in_seconds": max(1, int(retry_at - now)),
+            }
+        return [], {
+            "ok": False, "items": 0,
+            "error": "Source retry cooldown active; no recent cached feed",
+            "retry_in_seconds": max(1, int(retry_at - now)),
+        }
+    try:
+        items = fetcher()
+        copied = [dict(item) for item in items]
+        _SOURCE_CACHE[name] = {"at": now, "items": copied}
+        _SOURCE_FAILURES[name] = 0
+        _SOURCE_RETRY_AFTER.pop(name, None)
+        return items, {"ok": True, "stale": False, "items": len(items)}
+    except Exception as exc:
+        failures = _SOURCE_FAILURES.get(name, 0) + 1
+        _SOURCE_FAILURES[name] = failures
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        # 403s from exchange edge protection are stable for long periods.
+        # Retry every 30 minutes rather than on every poll. Other errors use
+        # bounded exponential backoff.
+        delay = 1800 if status_code == 403 else min(900, 30 * (2 ** min(failures - 1, 5)))
+        _SOURCE_RETRY_AFTER[name] = now + delay
+        if cached and now - cached["at"] <= _SOURCE_CACHE_MAX_AGE:
+            items = [dict(item) for item in cached["items"]]
+            log.warning("%s failed; retaining %d cached items for up to one hour: %s",
+                        name, len(items), exc)
+            return items, {
+                "ok": False, "stale": True, "items": len(items),
+                "error": str(exc), "retry_in_seconds": delay,
+            }
+        log.warning("%s failed; retrying in %s seconds: %s", name, delay, exc)
+        return [], {"ok": False, "stale": False, "items": 0,
+                    "error": str(exc), "retry_in_seconds": delay}
+
 
 def fetch_feed(session,url):
     r=session.get(url,timeout=settings.nse_timeout); r.raise_for_status()
@@ -253,15 +317,15 @@ def fetch_all_feeds(allowed=None, company_map=None):
                         "Origin": "https://www.nseindia.com",
                         "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
                     })
-                items=fetch_feed(session,url); health[name]={"ok":True,"items":len(items)}
+                items, feed_health = _fetch_source(
+                    name, lambda url=url: fetch_feed(session, url)
+                )
+                health[name] = feed_health
                 feed_kind = ("board_meetings" if name in {"board_meetings", "bse_board_meetings"} else ("financial_results" if name in {"financial_results", "bse_financial_results"} else "announcements"))
                 for x in items:
                     x["feed_type"]=feed_kind
                     x["source_name"]="BSE RSS" if is_bse else "NSE RSS"
                 output.extend(items)
-            except Exception as exc:
-                health[name]={"ok":False,"error":str(exc)}
-                log.warning("NSE RSS %s failed: %s",name,exc)
     finally: session.close()
 
     # Structured board-meetings API supplies filing timestamps when available.
@@ -279,22 +343,21 @@ def fetch_all_feeds(allowed=None, company_map=None):
             ("board_meetings_api", fetch_board_meetings_api),
             ("event_calendar_api", fetch_event_calendar_api),
         ):
-            try:
-                fetched = fetcher(allowed)
-                unique_items = []
-                for raw in fetched:
-                    event = normalize(raw, allowed, company_map or {})
-                    key = (event["symbol"], event["event_date"], event["category"]) if event and event.get("event_date") else None
-                    if key and key in known:
-                        continue
-                    if key:
-                        known.add(key)
-                    unique_items.append(raw)
-                output.extend(unique_items)
-                health[source_key] = {"ok": True, "items": len(unique_items)}
-            except Exception as exc:
-                health[source_key] = {"ok": False, "error": str(exc)}
-                log.warning("NSE %s unavailable; retaining other sources: %s", source_key, exc)
+            fetched, source_status = _fetch_source(
+                source_key, lambda fetcher=fetcher: fetcher(allowed)
+            )
+            unique_items = []
+            for raw in fetched:
+                event = normalize(raw, allowed, company_map or {})
+                key = (event["symbol"], event["event_date"], event["category"]) if event and event.get("event_date") else None
+                if key and key in known:
+                    continue
+                if key:
+                    known.add(key)
+                unique_items.append(raw)
+            output.extend(unique_items)
+            health[source_key] = dict(source_status)
+            health[source_key]["items"] = len(unique_items)
 
     if not output: raise RuntimeError("All official NSE RSS feeds failed: "+str(health))
     return output,health
