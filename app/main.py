@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 from .config import settings
 from .store import Store
-from .nse import fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
+from .nse import FEEDS, fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
 from .notifier import send_many
 
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +16,7 @@ log.info("ntfy configured=%s",bool(settings.ntfy_topic))
 store=Store(settings.database_path)
 scheduler=BackgroundScheduler(timezone="Asia/Kolkata")
 poll_lock=threading.Lock()
-status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","universe_count":0,"raw_feed_items":0,"matched_feed_items":0,"matched_symbols":[],"feed_match_stats":{},"scanner_state":"starting"}
+status={"last_poll":None,"last_success":None,"last_error":None,"sources":{},"new_events":0,"universe_source":"not checked","universe_count":0,"raw_feed_items":0,"matched_feed_items":0,"matched_symbols":[],"feed_match_stats":{},"scanner_state":"starting","rss_ok_count":0,"rss_total":len(FEEDS),"last_notification_success":None,"last_notification_count":0,"notification_error":None}
 last_known_fno_symbols=set(store.load_fno_universe())
 
 def _fallback_universe(configured, cached):
@@ -109,12 +109,24 @@ def poll_once():
             if send_many(pending):
                 for event in pending:
                     store.mark_notified(event["event_id"])
+                status["last_notification_success"] = datetime.now(timezone.utc).isoformat()
+                status["last_notification_count"] = len(pending)
+                status["notification_error"] = None
             else:
                 # Keep the queue intact on delivery failure; retry on a later poll.
+                status["notification_error"] = "ntfy delivery failed or is rate-limited; priority events remain queued"
                 log.warning("Keeping %d priority events queued after ntfy digest failure", len(pending))
         now=datetime.now(timezone.utc).isoformat()
-        source_ok=any(bool(feed.get("ok")) for feed in source_health.values())
-        poll_ok=bool(symbols) and source_ok
+        rss_ok_count=sum(
+            1 for name in FEEDS
+            if source_health.get(name, {}).get("ok")
+            and not source_health.get(name, {}).get("stale")
+        )
+        poll_ok=bool(symbols) and rss_ok_count > 0
+        scanner_state = (
+            "healthy" if bool(symbols) and rss_ok_count == len(FEEDS)
+            else ("degraded" if poll_ok else "unavailable")
+        )
         for name,feed in source_health.items():
             if not feed.get("ok"):
                 poll_errors.append(f"{name}: {feed.get('error') or 'source unavailable'}")
@@ -130,7 +142,9 @@ def poll_once():
             matched_feed_items=matched_count,
             matched_symbols=sorted(matched_symbols),
             feed_match_stats=feed_match_stats,
-            scanner_state="healthy" if poll_ok else "unavailable",
+            scanner_state=scanner_state,
+            rss_ok_count=rss_ok_count,
+            rss_total=len(FEEDS),
         )
         return {"received":len(rows),"matched":matched_count,"new_events":new_count,
                 "sources":source_health,"scanner_state":status["scanner_state"],
@@ -310,11 +324,22 @@ def events(limit:int=Query(100,ge=1,le=500),symbol:str|None=None,status_filter:s
 # the same successful status as GET; ASGI suppresses the response body for HEAD.
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
-    return {"ok":True,"app":settings.app_name,"database_events":store.count(),
-      "poll_interval_seconds":settings.poll_interval,"ntfy_configured":bool(settings.ntfy_topic),
+    try:
+        database_events=store.count()
+        database_error=None
+    except Exception as exc:
+        database_events=None
+        database_error=str(exc)
+    return {"ok":True,"app":settings.app_name,"database_events":database_events,
+      "database_error":database_error,"poll_interval_seconds":settings.poll_interval,
+      "ntfy_configured":bool(settings.ntfy_topic),
       "last_poll":status["last_poll"],"last_success":status["last_success"],
       "last_error":status["last_error"],"sources":status["sources"],"universe_source":status["universe_source"],
       "scanner_state":status["scanner_state"],"universe_count":status["universe_count"],
+      "rss_ok_count":status["rss_ok_count"],"rss_total":status["rss_total"],
+      "last_notification_success":status["last_notification_success"],
+      "last_notification_count":status["last_notification_count"],
+      "notification_error":status["notification_error"],
       "raw_feed_items":status["raw_feed_items"],"matched_feed_items":status["matched_feed_items"],
       "matched_symbols":status["matched_symbols"],"feed_match_stats":status["feed_match_stats"],
 }
@@ -322,10 +347,19 @@ def health():
 @app.get("/api/ready")
 def readiness():
     from fastapi.responses import JSONResponse
-    payload={"ready":status["scanner_state"]=="healthy",
+    last_success=status["last_success"]
+    try:
+        last_success_age=max(0,int((datetime.now(timezone.utc)-datetime.fromisoformat(
+            str(last_success).replace("Z","+00:00")
+        )).total_seconds())) if last_success else None
+    except (TypeError,ValueError):
+        last_success_age=None
+    fresh=last_success_age is not None and last_success_age <= max(900,settings.poll_interval*3)
+    payload={"ready":status["scanner_state"]=="healthy" and fresh,
              "scanner_state":status["scanner_state"],
              "universe_count":status["universe_count"],
-             "last_success":status["last_success"],
+             "rss_ok_count":status["rss_ok_count"],"rss_total":status["rss_total"],
+             "last_success":last_success,"last_success_age_seconds":last_success_age,
              "sources":status["sources"]}
     return JSONResponse(payload,status_code=200 if payload["ready"] else 503)
 
