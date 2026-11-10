@@ -362,3 +362,65 @@ def test_notification_queue_ignores_stale_unnotified_backlog(tmp_path):
         db.execute("UPDATE events SET created_at=? WHERE event_id=?", (old, "stale-alert"))
         db.commit()
     assert store.pending_notifications(limit=10) == []
+
+
+
+def test_board_meetings_api_does_not_require_blocked_nse_homepage(monkeypatch):
+    from app import nse
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    class Session:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url, **kwargs):
+            assert url == nse.NSE_BOARD_MEETINGS_API
+            return Response()
+
+    monkeypatch.setattr(nse, "_session", lambda: Session())
+    assert nse.fetch_board_meetings_api({"RELIANCE"}) == []
+
+
+def test_nse_rss_uses_browser_user_agent_instead_of_bot_identifier(monkeypatch):
+    from app import nse
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36"
+            }
+            self.calls = 0
+
+        def get(self, url, **kwargs):
+            class Response:
+                content = b"<rss><channel></channel></rss>"
+
+                def raise_for_status(self):
+                    return None
+            self.calls += 1
+            return Response()
+
+        def close(self):
+            return None
+
+    session = FakeSession()
+    monkeypatch.setattr(nse, "_session", lambda: session)
+    monkeypatch.setattr(nse, "fetch_feed", lambda s, url: (
+        [] if "nsearchives.nseindia.com" in url else []
+    ))
+    monkeypatch.setattr(nse, "fetch_board_meetings_api", lambda allowed: [])
+    monkeypatch.setattr(nse, "fetch_event_calendar_api", lambda allowed: [])
+    nse.fetch_all_feeds({"RELIANCE"}, {})
+    assert "Mozilla/5.0" in session.headers["User-Agent"]
+    assert "NSE-Company-News-Monitor" not in session.headers["User-Agent"]
