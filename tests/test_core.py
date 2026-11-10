@@ -427,7 +427,7 @@ def test_nse_rss_uses_browser_user_agent_instead_of_bot_identifier(monkeypatch):
 def test_result_outcome_from_board_meeting_is_published_not_scheduled():
     category, state, direction, rationale = _classify(
         "COCHINSHIP Outcome of Board Meeting for Q2 Results/Interim Dividend/Record Date",
-        "The board approved the financial results for the quarter ended September 30, 2026.",
+        "The board approved the Q2 results for the quarter ended September 30, 2026.",
         "announcements",
     )
     assert category == "Financial Results"
