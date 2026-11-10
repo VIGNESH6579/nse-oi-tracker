@@ -1,4 +1,4 @@
-import logging, threading, re, secrets
+import logging, threading, re, secrets, time
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -102,8 +102,16 @@ def poll_once():
         )
         if unmatched_sample:
             log.info("NSE filing unmatched sample (feed, title): %s",unmatched_sample)
-        for pending in store.pending_notifications(limit=50):
-            if send(pending): store.mark_notified(pending["event_id"])
+        # Bound delivery bursts: ntfy.sh rate-limits aggressive publishing.
+        for index, pending in enumerate(store.pending_notifications(limit=2)):
+            if index:
+                time.sleep(1.2)
+            if send(pending):
+                store.mark_notified(pending["event_id"])
+            else:
+                # Stop this batch on a failure (especially HTTP 429); retry on a later poll.
+                log.warning("Stopping ntfy batch after delivery failure")
+                break
         now=datetime.now(timezone.utc).isoformat()
         source_ok=any(bool(feed.get("ok")) for feed in source_health.values())
         poll_ok=bool(symbols) and source_ok
