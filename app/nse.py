@@ -370,11 +370,11 @@ def _parse_event_date(text):
     return selected.isoformat() if score >= 3 else None
 
 
-def _dedupe_key(symbol, category, headline):
-    # Category may differ between NSE feeds for the same filing; key by symbol + title.
+def _dedupe_key(symbol, category, headline, event_date=None):
+    # Same-date copies from different feeds dedupe; revised meeting dates remain distinct.
     normalized = re.sub(r"[^a-z0-9]+", " ", (headline or "").lower()).strip()
     normalized = re.sub(r"\s+", " ", normalized)
-    return hashlib.sha256(f"{symbol.upper()}|{normalized}".encode()).hexdigest()
+    return hashlib.sha256(f"{symbol.upper()}|{normalized}|{event_date or ''}".encode()).hexdigest()
 
 def _classify(title,details,feed_type,event_date=None):
     text=(title+" "+details).lower()
@@ -395,6 +395,9 @@ def _classify(title,details,feed_type,event_date=None):
     if feed_type=="financial_results" and is_result:
         rationale="Results filing detected. Reported figures and market expectations have not yet been compared, so result direction is not assessed."
         state="RESULT PUBLISHED"
+    elif any(x in text for x in ("rescheduled","postponed","cancelled","canceled")):
+        rationale="Schedule change detected. Verify the revised or cancelled date in the original exchange filing."
+        state="SCHEDULE CHANGE"
     elif is_board and result_agenda:
         rationale="The board notice says financial results are on the agenda. This is a scheduled announcement, not a published result."
         if event_date:
@@ -406,8 +409,6 @@ def _classify(title,details,feed_type,event_date=None):
     elif is_board:
         rationale="Board meeting notice detected. Confirm the meeting date and agenda in the original exchange filing."
         state="BOARD MEETING NOTICE"
-    elif any(x in text for x in ("rescheduled","postponed","cancelled","canceled")):
-        direction="neutral"; rationale="Schedule change; verify the revised date in the source filing."; state="SCHEDULE CHANGE"
     else:
         direction="unclassified"; rationale="Insufficient structured evidence for a directional view."; state="NEW EVENT"
     return category,state,direction,rationale
@@ -480,7 +481,7 @@ def normalize(item,allowed,company_map=None):
     category,state,direction,rationale=_classify(title,details,item.get("feed_type",""),event_date)
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
-    dedupe_key=_dedupe_key(symbol,category,title)
+    dedupe_key=_dedupe_key(symbol,category,title,event_date)
     company = company_map.get(symbol) or KNOWN_COMPANY_NAMES.get(symbol) or symbol
     return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"dedupe_key":dedupe_key,"symbol":symbol,"company":company,"event_date":event_date,
       "category":category,"impact":direction,"headline":title or "NSE filing","details":details,
