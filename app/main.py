@@ -8,7 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from .config import settings
 from .store import Store
 from .nse import fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
-from .notifier import send
+from .notifier import send_many
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger(__name__)
@@ -102,16 +102,16 @@ def poll_once():
         )
         if unmatched_sample:
             log.info("NSE filing unmatched sample (feed, title): %s",unmatched_sample)
-        # Bound delivery bursts: ntfy.sh rate-limits aggressive publishing.
-        for index, pending in enumerate(store.pending_notifications(limit=2)):
-            if index:
-                time.sleep(1.2)
-            if send(pending):
-                store.mark_notified(pending["event_id"])
+        # Publish one compact digest per polling cycle instead of one HTTP
+        # request per filing. This materially reduces ntfy.sh rate-limit bursts.
+        pending = store.pending_notifications(limit=3)
+        if pending:
+            if send_many(pending):
+                for event in pending:
+                    store.mark_notified(event["event_id"])
             else:
-                # Stop this batch on a failure (especially HTTP 429); retry on a later poll.
-                log.warning("Stopping ntfy batch after delivery failure")
-                break
+                # Keep the queue intact on delivery failure; retry on a later poll.
+                log.warning("Keeping %d priority events queued after ntfy digest failure", len(pending))
         now=datetime.now(timezone.utc).isoformat()
         source_ok=any(bool(feed.get("ok")) for feed in source_health.values())
         poll_ok=bool(symbols) and source_ok
