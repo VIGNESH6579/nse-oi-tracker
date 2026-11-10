@@ -20,3 +20,5 @@ services:
         sync: false
       - key: FNO_SYMBOLS
         sync: false
+      - key: FNO_FALLBACK_SYMBOLS
+        sync: false
