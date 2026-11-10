@@ -527,8 +527,12 @@ _COMPANY_MAP_RETRY_AFTER = 0.0
 def get_fno_company_map(allowed):
     global _COMPANY_MAP_CACHE, _COMPANY_MAP_RETRY_AFTER
     now = time.monotonic()
-    if now < _COMPANY_MAP_RETRY_AFTER and _COMPANY_MAP_CACHE:
-        return {symbol: name for symbol, name in _COMPANY_MAP_CACHE.items() if symbol in allowed}
+    if now < _COMPANY_MAP_RETRY_AFTER:
+        cached = {symbol: name for symbol, name in _COMPANY_MAP_CACHE.items() if symbol in allowed}
+        if cached:
+            return cached
+        # Do not hammer the same blocked NSE master on every polling cycle.
+        return {}
     url=NSE_ARCHIVE + "/content/equities/EQUITY_L.csv"
     try:
         with _session() as session:
