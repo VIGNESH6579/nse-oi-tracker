@@ -305,3 +305,37 @@ def test_nse_session_uses_browser_compatible_headers(monkeypatch):
     assert session is fake
     assert "Mozilla/5.0" in session.headers["User-Agent"]
     assert "text/csv" in session.headers["Accept"]
+
+
+
+def test_rescheduled_result_notice_is_classified_before_result_schedule():
+    category, state, _, _ = _classify(
+        "Board Meeting Rescheduled to 12-Nov-2026",
+        "The meeting to consider and approve financial results has been postponed.",
+        "board_meetings",
+        "2026-11-12",
+    )
+    assert category == "Financial Results"
+    assert state == "SCHEDULE CHANGE"
+
+
+def test_same_headline_with_revised_meeting_date_is_not_deduplicated(tmp_path):
+    store = Store(str(tmp_path / "events.db"))
+    now = datetime.now(timezone.utc)
+    base = {
+        "symbol": "XYZ",
+        "company": "XYZ Limited",
+        "category": "Financial Results",
+        "impact": "neutral",
+        "headline": "XYZ Board Meeting Intimation",
+        "details": "To consider financial results",
+        "filed_at": now.isoformat(),
+        "source_url": "https://example.com/filing",
+        "event_status": "RESULT SCHEDULED",
+    }
+    first = dict(base, event_id="schedule-one", event_date="2026-11-12")
+    revised = dict(base, event_id="schedule-two", event_date="2026-11-14",
+                   event_status="SCHEDULE CHANGE",
+                   filed_at=(now + timedelta(minutes=5)).isoformat())
+    assert store.insert(first) is True
+    assert store.insert(revised) is True
