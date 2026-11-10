@@ -379,7 +379,7 @@ def _classify(title,details,feed_type,event_date=None):
     text=(title+" "+details).lower()
     is_board = feed_type in {"board_meetings", "event_calendar"} or "board meeting" in text or "meeting of the board" in text
     result_terms = ("financial results","quarterly results","audited results","unaudited results","standalone results","consolidated results")
-    has_result = any(x in text for x in result_terms) or bool(re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20?\d{2}\s*)?results\b", text))
+    has_result = any(x in text for x in result_terms) or bool(re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20\d{2}|\d{2})?\s*results\b", text))
     result_agenda = has_result and (feed_type=="event_calendar" or any(x in text for x in ("consider","approve","approval","to take on record","meeting","scheduled")))
     is_outcome = any(x in text for x in ("outcome of board meeting","results declared","financial results approved","approved the financial results","statement of standalone and consolidated"))
     result_release = (feed_type=="financial_results") or (has_result and (is_outcome or
@@ -505,7 +505,7 @@ def normalize(item,allowed,company_map=None):
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
     if state=="RESULT PUBLISHED":
-        period_match=re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20?\d{2}\s*)?\b",hay)
+        period_match=re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20\d{2}|\d{2})?\b",hay)
         period=period_match.group(0).strip() if period_match else (filed[:10] if filed else "unknown-period")
         dedupe_key=hashlib.sha256(f"{symbol}|RESULT|{period}".encode()).hexdigest()
     else:
