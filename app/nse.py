@@ -499,7 +499,15 @@ def _classify(title,details,feed_type,event_date=None):
             state="NEW EVENT"
     return category,state,direction,rationale
 
+_COMPANY_MAP_CACHE = {}
+_COMPANY_MAP_RETRY_AFTER = 0.0
+
+
 def get_fno_company_map(allowed):
+    global _COMPANY_MAP_CACHE, _COMPANY_MAP_RETRY_AFTER
+    now = time.monotonic()
+    if now < _COMPANY_MAP_RETRY_AFTER and _COMPANY_MAP_CACHE:
+        return {symbol: name for symbol, name in _COMPANY_MAP_CACHE.items() if symbol in allowed}
     url=NSE_ARCHIVE + "/content/equities/EQUITY_L.csv"
     try:
         with _session() as session:
@@ -509,8 +517,17 @@ def get_fno_company_map(allowed):
             symbol=(row.get("SYMBOL") or "").strip().upper()
             name=(row.get("NAME OF COMPANY") or row.get("NAME_OF_COMPANY") or "").strip()
             if symbol in allowed and name: mapping[symbol]=name
+        if mapping:
+            _COMPANY_MAP_CACHE = dict(mapping)
+            _COMPANY_MAP_RETRY_AFTER = 0.0
         return mapping
     except Exception as exc:
+        _COMPANY_MAP_RETRY_AFTER = now + (1800 if getattr(getattr(exc, "response", None), "status_code", None) == 403 else 300)
+        cached = {symbol: name for symbol, name in _COMPANY_MAP_CACHE.items() if symbol in allowed}
+        if cached:
+            log.warning("NSE equity master unavailable; using %d cached company names for 30 minutes: %s",
+                        len(cached), exc)
+            return cached
         log.warning("Could not load NSE equity company-name map: %s",exc)
         return {}
 
