@@ -53,7 +53,7 @@ def test_board_result_notice_extracts_meeting_date_and_schedules_future_results(
     )
     assert category == "Financial Results"
     assert state == "RESULT SCHEDULED"
-    assert direction == "neutral"
+    assert direction == "unassessed"
 
 
 def test_board_meeting_without_result_agenda_is_not_a_result():
