@@ -504,7 +504,12 @@ def normalize(item,allowed,company_map=None):
     category,state,direction,rationale=_classify(title,details,item.get("feed_type",""),event_date)
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
-    dedupe_key=_dedupe_key(symbol,category,title,event_date)
+    if state=="RESULT PUBLISHED":
+        period_match=re.search(r"\\bq[1-4]\\s*(?:fy\\s*)?(?:20?\\d{2}\\s*)?\\b",hay)
+        period=period_match.group(0).strip() if period_match else (filed[:10] if filed else "unknown-period")
+        dedupe_key=hashlib.sha256(f"{symbol}|RESULT|{period}".encode()).hexdigest()
+    else:
+        dedupe_key=_dedupe_key(symbol,category,title,event_date)
     company = company_map.get(symbol) or KNOWN_COMPANY_NAMES.get(symbol) or symbol
     return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"dedupe_key":dedupe_key,"symbol":symbol,"company":company,"event_date":event_date,
       "category":category,"impact":direction,"headline":title or "NSE filing","details":details,
