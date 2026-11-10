@@ -685,4 +685,4 @@ def test_homepage_route_is_bound_to_dashboard_not_helper():
 
     homepage = next(route for route in app.routes if getattr(route, "path", None) == "/")
     assert homepage.endpoint is dashboard
-    assert homepage.methods == {"GET"}
+    assert homepage.methods == {"GET", "HEAD"}
