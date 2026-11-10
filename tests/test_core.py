@@ -37,8 +37,8 @@ def test_financial_results_feed_marks_published_but_does_not_guess_direction():
     )
     assert category == "Financial Results"
     assert state == "RESULT PUBLISHED"
-    assert direction == "neutral"
-    assert "not yet been compared" in reason
+    assert direction == "unassessed"
+    assert "not assessed" in reason.lower()
 
 
 def test_board_result_notice_extracts_meeting_date_and_schedules_future_results():
