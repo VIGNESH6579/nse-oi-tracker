@@ -16,5 +16,6 @@ class Settings:
     ntfy_base_url: str = os.getenv("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
     ntfy_topic: str = os.getenv("NTFY_TOPIC", "").strip()
     ntfy_token: str = os.getenv("NTFY_TOKEN", "").strip()
+    sync_token: str = os.getenv("SYNC_TOKEN", "").strip()
 
 settings = Settings()
