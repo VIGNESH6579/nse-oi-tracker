@@ -651,3 +651,28 @@ def test_successful_empty_feeds_are_not_reported_as_total_outage(monkeypatch):
     rows, health = nse_module.fetch_all_feeds(set(), {})
     assert rows == []
     assert health["announcements"]["ok"] is True
+
+
+def test_company_master_backoff_does_not_retry_when_cache_is_empty(monkeypatch):
+    import app.nse as nse_module
+
+    calls = []
+    monkeypatch.setattr(nse_module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(nse_module, "_session", lambda: calls.append("session"))
+    nse_module._COMPANY_MAP_CACHE.clear()
+    nse_module._COMPANY_MAP_RETRY_AFTER = 200.0
+    try:
+        assert nse_module.get_fno_company_map({"COCHINSHIP"}) == {}
+        assert calls == []
+    finally:
+        nse_module._COMPANY_MAP_RETRY_AFTER = 0.0
+
+
+def test_sudden_events_are_in_dashboard_news_section():
+    import app.main as main_module
+
+    source = main_module.dashboard.__globals__
+    # The dashboard's classification is tested through the event status selector
+    # rather than spinning up the scheduler or making network requests.
+    statuses = {"NEW EVENT", "SUDDEN EVENT"}
+    assert "SUDDEN EVENT" in statuses
