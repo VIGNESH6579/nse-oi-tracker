@@ -497,3 +497,23 @@ def test_notification_queue_only_contains_results_and_sudden_events(tmp_path):
         store.insert(dict(base, event_id=event_id, event_status=state, headline=event_id))
     pending = store.pending_notifications(limit=10)
     assert {x["event_id"] for x in pending} == {"result", "sudden"}
+
+
+
+def test_same_quarter_result_from_different_feeds_has_same_dedupe_key():
+    allowed = {"XYZ"}
+    first = normalize(
+        {"title": "XYZ Financial Results for Q2 FY27", "description": "Financial results",
+         "published": "Tue, 10 Nov 2026 13:00:00 +0530", "link": "https://example.com/1",
+         "feed_type": "financial_results"},
+        allowed,
+    )
+    second = normalize(
+        {"title": "XYZ Outcome of Board Meeting Q2 FY27 Results", "description": "Board approved results",
+         "published": "Tue, 10 Nov 2026 13:01:00 +0530", "link": "https://example.com/2",
+         "feed_type": "announcements"},
+        allowed,
+    )
+    assert first["event_status"] == "RESULT PUBLISHED"
+    assert second["event_status"] == "RESULT PUBLISHED"
+    assert first["dedupe_key"] == second["dedupe_key"]
