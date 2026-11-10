@@ -359,7 +359,10 @@ def fetch_all_feeds(allowed=None, company_map=None):
             health[source_key] = dict(source_status)
             health[source_key]["items"] = len(unique_items)
 
-    if not output: raise RuntimeError("All official NSE RSS feeds failed: "+str(health))
+    # A successful empty response is a valid quiet-feed result, not an outage.
+    # Raise only when every RSS and supplemental source failed and no cache exists.
+    if not output and not any(feed.get("ok") for feed in health.values()):
+        raise RuntimeError("All official exchange feeds failed: "+str(health))
     return output,health
 
 def _date(value):
