@@ -259,6 +259,11 @@ def _section(title,subtitle,events,empty,anchor):
     </section>"""
 
 @app.get("/",response_class=HTMLResponse)
+def _dashboard_news_events(events):
+    return [event for event in events
+            if event.get("event_status") in {"NEW EVENT", "SUDDEN EVENT"}]
+
+
 def dashboard():
     today=_now_ist().date().isoformat()
     recent=[e for e in store.list_events(500) if _is_recent_or_scheduled(e,today)]
@@ -269,7 +274,7 @@ def dashboard():
     results_published=[e for e in recent if e.get("event_status")=="RESULT PUBLISHED"]
     # Sudden material events are priority alerts and must also appear in
     # the dashboard, not only in the ntfy queue.
-    news=[e for e in recent if e.get("event_status") in {"NEW EVENT","SUDDEN EVENT"}]
+    news=_dashboard_news_events(recent)
     board=[e for e in recent if e.get("event_status") in ("BOARD MEETING NOTICE","UPCOMING","RESULT DATE NOT CONFIRMED","SCHEDULE CHANGE")]
     event_symbols={str(e.get("symbol") or "").upper() for e in recent if e.get("symbol")}
     feeds=[]
