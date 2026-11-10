@@ -229,8 +229,6 @@ def fetch_event_calendar_api(allowed):
             "Referer": NSE_SITE + "/companies-listing/corporate-filings-event-calendar",
             "Origin": NSE_SITE,
         })
-        home = session.get(NSE_SITE, timeout=settings.nse_timeout)
-        home.raise_for_status()
         response = session.get(NSE_SITE + "/api/event-calendar", params=params,
                                timeout=settings.nse_timeout)
         response.raise_for_status()
