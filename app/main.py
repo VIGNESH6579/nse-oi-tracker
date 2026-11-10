@@ -9,6 +9,7 @@ from .config import settings
 from .store import Store
 from .nse import FEEDS, fetch_all_feeds, get_fno_symbols, get_fno_company_map, normalize
 from .notifier import send_many
+from .finance import enrich_result_event
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger(__name__)
@@ -88,9 +89,22 @@ def poll_once():
                 matched_count+=1
                 matched_symbols.add(event["symbol"])
                 matched_by_feed[feed]+=1
-                if store.insert(event): new_count+=1
+                if event.get("event_status")=="RESULT PUBLISHED":
+                    existing=store.get_by_dedupe_key(event.get("dedupe_key"))
+                    needs_doc=("xbrl" in str(event.get("source_url") or "").lower()) and (
+                        not existing or not existing.get("analysis_json")
+                    )
+                    if needs_doc:
+                        event=enrich_result_event(event)
+                if store.insert(event):
+                    new_count+=1
+                elif event.get("event_status")=="RESULT PUBLISHED":
+                    store.merge_result_fields(event)
             elif len(unmatched_sample)<8:
                 unmatched_sample.append((feed,str(row.get("title") or "")[:150]))
+        for pending_result in store.unpublished_result_analysis(limit=3):
+            enriched=enrich_result_event(pending_result)
+            store.merge_result_fields(enriched)
         feed_match_stats={
             name:{"raw":count,"matched":matched_by_feed.get(name,0)}
             for name,count in sorted(raw_by_feed.items())
@@ -220,6 +234,17 @@ def _impact_label(event):
     return ({"bullish":("Potentially positive","positive"),"bearish":("Potentially negative","negative"),
              "mixed":("Mixed indicators","mixed")}.get(impact,("Impact not assessed","neutral")))
 
+def _analysis(event):
+    raw=event.get("analysis_json")
+    if not raw:
+        return {}
+    try:
+        import json
+        data=json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
 def _card(event):
     symbol=str(event.get("symbol") or "")
     company=str(event.get("company") or "")
@@ -228,10 +253,11 @@ def _card(event):
     labels={"RESULT SCHEDULED TODAY":"Results scheduled today","RESULT SCHEDULED":"Results scheduled",
             "RESULT DATE NOT CONFIRMED":"Result agenda · date unclear","RESULT PUBLISHED":"Results published",
             "NEW EVENT":"New company announcement","SUDDEN EVENT":"Sudden material event",
-            "BOARD MEETING NOTICE":"Board meeting notice",
+            "BOARD MEETING NOTICE":"Board meeting notice","ROUTINE":"Routine filing",
             "UPCOMING":"Board meeting notice","SCHEDULE CHANGE":"Schedule changed"}
     status_label=labels.get(state,state.replace("_"," ").title())
     filed=event.get("filed_at")
+    analysis=_analysis(event)
     if state=="RESULT PUBLISHED": date_line="Published on: "+_display_time(filed)
     elif event.get("event_date"):
         date_line="Scheduled date: "+_display_event_date(event.get("event_date"))
@@ -239,13 +265,31 @@ def _card(event):
     else: date_line="Exchange filing date/time: "+_display_time(filed)
     details=str(event.get("details") or "").strip()
     if len(details)>260: details=details[:257].rsplit(" ",1)[0]+"..."
+    period=event.get("result_period") or analysis.get("result_period")
+    statement=event.get("statement_type") or analysis.get("statement_type")
+    extra=[]
+    if period: extra.append("Period: "+str(period))
+    if statement and str(statement).upper() not in {"UNKNOWN",""}: extra.append(str(statement).title())
+    if analysis.get("extraction_status")=="ok":
+        if analysis.get("revenue_current_crore") is not None:
+            yoy=analysis.get("revenue_yoy_pct")
+            extra.append("Revenue: ₹"+f"{analysis['revenue_current_crore']:,.2f}"+" crore"+(f" (YoY {yoy:+.1f}%)" if yoy is not None else " (YoY not in filing)"))
+        if analysis.get("pat_current_crore") is not None:
+            yoy=analysis.get("pat_yoy_pct")
+            extra.append("PAT: ₹"+f"{analysis['pat_current_crore']:,.2f}"+" crore"+(f" (YoY {yoy:+.1f}%)" if yoy is not None else " (YoY not in filing)"))
+        if analysis.get("eps") is not None:
+            extra.append("EPS: ₹"+f"{analysis['eps']:.2f}")
+    elif state=="RESULT PUBLISHED":
+        extra.append("Figures: not extracted yet" if not analysis else "Figures: "+str(analysis.get("reason") or "not available in this document"))
     impact_label,impact_class=_impact_label(event)
-    searchable=_esc(" ".join(str(event.get(k) or "") for k in ("symbol","company","category","headline","details","event_status")))
+    searchable=_esc(" ".join(str(event.get(k) or "") for k in ("symbol","company","category","headline","details","event_status","result_period")))
     link=_esc(event.get("source_url") or "https://www.nseindia.com/")
+    extra_html="".join(f'<p class="details">{_esc(line)}</p>' for line in extra)
     return f"""<article class="event-card" data-search="{searchable}">
       <div class="topline"><span class="symbol">{_esc(symbol)}</span><strong>{_esc(company)}</strong><span class="state">{_esc(status_label)}</span></div>
       <h3>{_esc(event.get("headline") or "Company filing")}</h3>
       {f'<p class="details">{_esc(details)}</p>' if details else ''}
+      {extra_html}
       <p class="date">{_esc(date_line)}</p>
       <div class="impact"><span class="impact-{impact_class}">{_esc(impact_label)}</span></div>
       <div class="foot"><span>{_esc(event.get("source_name") or "NSE")}</span><a href="{link}" target="_blank" rel="noopener noreferrer">Open original filing ↗</a></div>
@@ -259,8 +303,15 @@ def _section(title,subtitle,events,empty,anchor):
     </section>"""
 
 def _dashboard_news_events(events):
-    return [event for event in events
-            if event.get("event_status") in {"NEW EVENT", "SUDDEN EVENT"}]
+    news=[event for event in events
+          if event.get("event_status") in {"NEW EVENT", "SUDDEN EVENT"}]
+    news.sort(key=lambda e: (0 if e.get("event_status")=="SUDDEN EVENT" else 1,
+                             str(e.get("filed_at") or e.get("created_at") or "")), reverse=False)
+    sudden=[e for e in news if e.get("event_status")=="SUDDEN EVENT"]
+    other=[e for e in news if e.get("event_status")!="SUDDEN EVENT"]
+    sudden.sort(key=lambda e: str(e.get("filed_at") or e.get("created_at") or ""), reverse=True)
+    other.sort(key=lambda e: str(e.get("filed_at") or e.get("created_at") or ""), reverse=True)
+    return sudden + other[:40]
 
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
@@ -348,7 +399,16 @@ def health():
     except Exception as exc:
         database_events=None
         database_error=str(exc)
-    return {"ok":True,"app":settings.app_name,"database_events":database_events,
+    scanner=status["scanner_state"]
+    overall="healthy" if scanner=="healthy" and not database_error else ("degraded" if scanner!="unavailable" else "unavailable")
+    timestamp_ist=_now_ist().isoformat()
+    try:
+        pending=store.pending_count()
+    except Exception:
+        pending=None
+    return {"ok":True,"status":overall,"service":"company-news-monitor","app":settings.app_name,
+      "timestamp_ist":timestamp_ist,
+      "database_events":database_events,
       "database_error":database_error,"poll_interval_seconds":settings.poll_interval,
       "ntfy_configured":bool(settings.ntfy_topic),
       "last_poll":status["last_poll"],"last_success":status["last_success"],
@@ -358,6 +418,9 @@ def health():
       "last_notification_success":status["last_notification_success"],
       "last_notification_count":status["last_notification_count"],
       "notification_error":status["notification_error"],
+      "pending_notifications":pending,
+      "database":{"status":"healthy" if database_error is None else "failing","persistent":False,
+                  "note":"SQLite on Render Free is ephemeral and can reset after redeploy or spin-down."},
       "raw_feed_items":status["raw_feed_items"],"matched_feed_items":status["matched_feed_items"],
       "matched_symbols":status["matched_symbols"],"feed_match_stats":status["feed_match_stats"],
 }

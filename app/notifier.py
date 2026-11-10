@@ -27,32 +27,81 @@ def _filed_time(value):
         return str(value)
 
 
+def _analysis(event):
+    raw = event.get("analysis_json")
+    if not raw:
+        return {}
+    try:
+        import json
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _metric_block(label, current, previous, growth):
+    lines = [f"{label}:"]
+    if current is not None:
+        lines.append(f"Current quarter: ₹{current:,.2f} crore")
+    else:
+        lines.append("Current quarter: not disclosed in extracted filing")
+    if previous is not None:
+        lines.append(f"Previous-year quarter: ₹{previous:,.2f} crore")
+    else:
+        lines.append("Previous-year quarter: not in this iXBRL document")
+    if growth is not None:
+        lines.append(f"Growth: {growth:+.1f}%")
+    else:
+        lines.append("Growth: not assessed")
+    return "\n".join(lines)
+
+
 def _alert_text(event):
     status = str(event.get("event_status") or "").upper()
     impact = str(event.get("impact") or "unassessed").upper()
     if impact not in {"BULLISH", "BEARISH", "MIXED"}:
         impact = "NOT ASSESSED"
-    kind = "RESULT" if status == "RESULT PUBLISHED" else "SUDDEN EVENT"
+    kind = "RESULT PUBLISHED" if status == "RESULT PUBLISHED" else "SUDDEN EVENT"
     company = event.get("company") or event.get("symbol") or "Company"
-    headline = event.get("headline") or "Exchange filing"
+    symbol = str(event.get("symbol") or "").strip()
+    if symbol and symbol.upper() not in company.upper():
+        company = f"{company} ({symbol})"
     details = str(event.get("details") or "").strip()
     rationale = str(event.get("rationale") or "").strip()
+    analysis = _analysis(event)
     lines = [
-        f"Company: {company} ({event.get('symbol') or ''})",
-        f"Event: {kind} — {headline}",
-        f"Direction: {impact}",
+        f"COMPANY: {company}",
+        f"EVENT: {kind}",
     ]
-    if rationale:
-        lines.append(f"Why: {rationale}")
-    if details:
-        lines.append(f"Filing info: {details[:900]}")
+    if status == "RESULT PUBLISHED":
+        period = event.get("result_period") or analysis.get("result_period") or "Not identified"
+        statement = event.get("statement_type") or analysis.get("statement_type")
+        lines.append(f"RESULT PERIOD: {period}")
+        if statement:
+            lines.append(f"STATEMENT: {statement}")
+        lines.append(f"PUBLISHED: {_filed_time(event.get('filed_at'))}")
+        if analysis.get("extraction_status") == "ok":
+            lines.append(_metric_block("REVENUE", analysis.get("revenue_current_crore"),
+                                       analysis.get("revenue_yoy_crore"), analysis.get("revenue_yoy_pct")))
+            lines.append(_metric_block("EBITDA", analysis.get("ebitda_current_crore"),
+                                       analysis.get("ebitda_yoy_crore"), analysis.get("ebitda_yoy_pct")))
+            lines.append(_metric_block("PAT", analysis.get("pat_current_crore"),
+                                       analysis.get("pat_yoy_crore"), analysis.get("pat_yoy_pct")))
+            if analysis.get("eps") is not None:
+                lines.append(f"EPS: ₹{analysis['eps']:.2f}")
+        else:
+            lines.append("FINANCIALS: Official figures were not extracted; open the source filing.")
     else:
-        lines.append("Filing info: Feed did not include the detailed figures; open the original filing.")
+        lines.append(f"EVENT DETAILS: {event.get('headline') or 'Exchange filing'}")
+        if details:
+            lines.append(f"FILING INFO: {details[:700]}")
+        lines.append(f"PUBLISHED: {_filed_time(event.get('filed_at'))}")
+    lines.append(f"IMPACT: {impact}")
+    if rationale:
+        lines.append(f"REASON: {rationale}")
     lines.extend([
-        f"Filed: {_filed_time(event.get('filed_at'))}",
-        f"Source: {event.get('source_name') or 'Exchange filing'}",
-        f"Original: {event.get('source_url') or 'Exchange filing link unavailable'}",
-        "Direction is a text-based event assessment, not a guaranteed price move.",
+        f"SOURCE: {event.get('source_url') or 'Exchange filing link unavailable'}",
+        "Impact is a conservative reading of disclosed figures/facts, not a price prediction.",
     ])
     return kind, impact, "\n".join(lines)
 

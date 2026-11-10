@@ -196,7 +196,7 @@ def fetch_feed(session,url):
             for child in item:
                 if child.tag.split("}")[-1].lower()=="link":
                     link=child.attrib.get("href",""); break
-        pub=_tag(item,"pubDate") or _tag(item,"published") or _tag(item,"updated")
+        pub=_tag(item,"pubDate") or _tag(item,"published") or _tag(item,"updated") or _tag(item,"date")
         items.append({"title":title,"description":re.sub("<[^>]+>"," ",desc),
                       "link":urljoin(url,link),"published":pub})
     return items
@@ -460,14 +460,19 @@ def _dedupe_key(symbol, category, headline, event_date=None):
     return hashlib.sha256(f"{symbol.upper()}|{normalized}|{event_date or ''}".encode()).hexdigest()
 
 def _classify(title,details,feed_type,event_date=None):
+    from .finance import is_result_ancillary, is_routine_announcement
     text=(title+" "+details).lower()
     is_board = feed_type in {"board_meetings", "event_calendar"} or "board meeting" in text or "meeting of the board" in text
     result_terms = ("financial results","quarterly results","audited results","unaudited results","standalone results","consolidated results")
     has_result = any(x in text for x in result_terms) or bool(re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20\d{2}|\d{2})?\s*results\b", text))
     result_agenda = has_result and (feed_type=="event_calendar" or any(x in text for x in ("consider","approve","approval","to take on record","meeting","scheduled")))
-    is_outcome = any(x in text for x in ("outcome of board meeting","results declared","financial results approved","approved the financial results","statement of standalone and consolidated"))
-    result_release = (feed_type=="financial_results") or (has_result and (is_outcome or
-        ("financial results" in text and not result_agenda and not is_board)))
+    is_outcome = any(x in text for x in ("outcome of board meeting","results declared","financial results approved","approved the financial results","statement of standalone and consolidated","has submitted to the exchange, the financial results","has submitted to the exchange the financial results"))
+    ancillary_result = is_result_ancillary(title, details) or "issued by" in text and "suzuki" in text
+    result_release = (
+        (feed_type=="financial_results" and not ancillary_result)
+        or (has_result and is_outcome and not ancillary_result)
+        or (has_result and not result_agenda and not is_board and not ancillary_result and "issued by" not in text)
+    )
     if is_board and result_agenda and not is_outcome: category="Financial Results"
     elif has_result: category="Financial Results"
     elif any(x in text for x in ("dividend","record date","split","bonus issue")): category="Corporate Action"
@@ -505,10 +510,15 @@ def _classify(title,details,feed_type,event_date=None):
     elif is_board:
         rationale="Routine board meeting notice; not an alert-worthy result or sudden event."
         state="BOARD MEETING NOTICE"
+    elif is_routine_announcement(title, details):
+        direction="unassessed"; rationale="Routine administrative filing; excluded from push alerts."
+        state="ROUTINE"
     else:
-        positive = ("secured order","bagged order","awarded contract","letter of award","wins contract","order win","acquisition completed","credit rating upgraded","rating upgraded","production resumed")
-        negative = ("fire","explosion","accident","fatal","plant shutdown","production halted","fraud","default","insolvency","bankruptcy","penalty","show cause","investigation","resigned","resignation","order cancelled","contract terminated","credit rating downgraded","rating downgraded","regulatory action","raid")
-        pos=any(x in text for x in positive); neg=any(x in text for x in negative)
+        positive = ("secured order","bagged order","awarded contract","letter of award","wins contract","order win","received an order","order received","major order","acquisition completed","credit rating upgraded","rating upgraded","production resumed")
+        negative = ("fire","explosion","accident","fatal","plant shutdown","production halted","fraud","default","insolvency","bankruptcy","imposition of penalty","show cause","investigation","resigned","resignation","order cancelled","contract terminated","credit rating downgraded","rating downgraded","regulatory action","raid")
+        false_order = any(x in text for x in ("in order to","order of sebi","purchase order","internal order","work order policy","court order seeking","pass an order"))
+        pos=any(x in text for x in positive) and not false_order
+        neg=any(x in text for x in negative)
         sudden=pos or neg
         if sudden:
             state="SUDDEN EVENT"
@@ -604,14 +614,17 @@ def normalize(item,allowed,company_map=None):
                 matches.add(candidate)
         if len(matches)==1: symbol=next(iter(matches))
     if not symbol: return None
+    from .finance import parse_period_from_text
     filed=_date(item.get("published"))
     event_date=_parse_event_date(title+" "+details)
     category,state,direction,rationale=_classify(title,details,item.get("feed_type",""),event_date)
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
+    period_info=parse_period_from_text(title,details)
     if state=="RESULT PUBLISHED":
-        period_match=re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20\d{2}|\d{2})?\b",hay)
-        period=period_match.group(0).strip() if period_match else (filed[:10] if filed else "unknown-period")
+        period_match=re.search(r"\bQ[1-4]\s*(?:FY\s*)?(?:20\d{2}|\d{2})\b",hay)
+        period=(period_info.get("result_period") or (period_match.group(0).upper().replace("  "," ") if period_match else "") or "unknown-period")
+        period=re.sub(r"\s+"," ",period.replace("FY ","FY"))
         dedupe_key=hashlib.sha256(f"{symbol}|RESULT|{period}".encode()).hexdigest()
     else:
         dedupe_key=_dedupe_key(symbol,category,title,event_date)
@@ -619,4 +632,6 @@ def normalize(item,allowed,company_map=None):
     return {"event_id":hashlib.sha256(ident.encode()).hexdigest(),"dedupe_key":dedupe_key,"symbol":symbol,"company":company,"event_date":event_date,
       "category":category,"impact":direction,"headline":title or "NSE filing","details":details,
       "filed_at":filed,"source_url":url,"event_status":state,"rationale":rationale,
-      "source_name":item.get("source_name","NSE RSS"),"feed_type":item.get("feed_type","")}
+      "source_name":item.get("source_name","NSE RSS"),"feed_type":item.get("feed_type",""),
+      "result_period":period_info.get("result_period") if state=="RESULT PUBLISHED" else None,
+      "statement_type":period_info.get("statement_type") if state=="RESULT PUBLISHED" else None}

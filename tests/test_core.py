@@ -553,8 +553,8 @@ def test_ntfy_digest_batches_priority_events_in_one_request(monkeypatch):
     ]
     assert notifier.send_many(events) is True
     assert len(calls) == 1
-    assert "COCHINSHIP" in calls[0][1]
-    assert "RVNL" in calls[0][1]
+    assert "COCHINSHIP" in calls[0][1] or "Cochin Shipyard" in calls[0][1]
+    assert "RVNL" in calls[0][1] or "Rail Vikas Nigam" in calls[0][1]
     assert calls[0][2]["Title"] == "NSE NEWS | 2 ALERT(S)"
 
 

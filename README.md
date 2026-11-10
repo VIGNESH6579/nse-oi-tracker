@@ -10,7 +10,7 @@ Tracks official NSE and BSE RSS filings for NSE F&O companies, separates upcomin
 - NSE's normal JSON API is not used as the only source; if it returns 403, RSS feed health is shown independently. No proxy or anti-bot bypass is used.
 
 ## Direction labels
-Results are explicitly marked RESULT PUBLISHED when the exchange feed identifies a results filing. Until structured reported figures can be extracted and compared with prior periods and expectations, direction remains NEUTRAL / unclassified with an explanation. A filing title alone is not enough to call a result bullish or bearish. This build does not yet claim price-confirmed impact.
+Results are marked RESULT PUBLISHED only for actual result filings, not board-meeting agendas, earnings-call transcripts, or parent-company references. When BSE iXBRL is available, current-period revenue/PAT/EPS/EBITDA are extracted. YoY impact is assigned only when the same document contains a matching previous-year quarter; otherwise impact stays NOT ASSESSED. Headlines are never used to invent figures.
 
 ## Run
 ```bash

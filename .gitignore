@@ -5,3 +5,8 @@ __pycache__/
 *.py[cod]
 data/
 *.db
+.tmp/
+_probe_*.py
+data_sample.pdf
+tests/fixtures/cochin_ifindas.html
+tests/fixtures/kalyan_ifindas.html

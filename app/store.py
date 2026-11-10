@@ -25,7 +25,8 @@ class Store:
               event_date TEXT,dedupe_key TEXT)""")
             cols={r[1] for r in db.execute("PRAGMA table_info(events)").fetchall()}
             for name,typ in {"event_status":"TEXT","rationale":"TEXT","source_name":"TEXT","feed_type":"TEXT",
-                             "event_date":"TEXT","dedupe_key":"TEXT"}.items():
+                             "event_date":"TEXT","dedupe_key":"TEXT","analysis_json":"TEXT",
+                             "result_period":"TEXT","statement_type":"TEXT"}.items():
                 if name not in cols: db.execute(f"ALTER TABLE events ADD COLUMN {name} {typ}")
             # Rebuild keys for every stored event so legacy category-based keys
             # are migrated to the feed-independent symbol + headline fingerprint.
@@ -58,12 +59,54 @@ class Store:
                 return False
             cur=db.execute("""INSERT OR IGNORE INTO events
             (event_id,symbol,company,category,impact,headline,details,filed_at,source_url,created_at,event_status,
-             rationale,source_name,feed_type,event_date,dedupe_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             rationale,source_name,feed_type,event_date,dedupe_key,analysis_json,result_period,statement_type)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (x["event_id"],x["symbol"],x.get("company",x["symbol"]),x["category"],x["impact"],x["headline"],x.get("details",""),
              x.get("filed_at"),x.get("source_url",""),datetime.now(timezone.utc).isoformat(),x.get("event_status"),
-             x.get("rationale"),x.get("source_name"),x.get("feed_type"),x.get("event_date"),key))
+             x.get("rationale"),x.get("source_name"),x.get("feed_type"),x.get("event_date"),key,
+             x.get("analysis_json"),x.get("result_period"),x.get("statement_type")))
             db.commit(); return cur.rowcount==1
+
+    def get_by_dedupe_key(self,key):
+        with self.connect() as db:
+            row=db.execute("""SELECT * FROM events WHERE dedupe_key=?
+              ORDER BY COALESCE(filed_at,created_at) DESC LIMIT 1""",(key,)).fetchone()
+        return dict(row) if row else None
+
+    def merge_result_fields(self,event):
+        key=event.get("dedupe_key")
+        if not key:
+            return False
+        existing=self.get_by_dedupe_key(key)
+        if not existing:
+            return False
+        incoming_url=str(event.get("source_url") or "")
+        existing_url=str(existing.get("source_url") or "")
+        prefer_url = incoming_url if ("xbrl" in incoming_url.lower() and "xbrl" not in existing_url.lower()) else existing_url
+        analysis=event.get("analysis_json") or existing.get("analysis_json")
+        with self.connect() as db:
+            db.execute("""UPDATE events SET
+                source_url=COALESCE(?,source_url),
+                analysis_json=COALESCE(?,analysis_json),
+                result_period=COALESCE(?,result_period),
+                statement_type=COALESCE(?,statement_type),
+                impact=CASE WHEN ? IS NOT NULL AND ? NOT IN ('unassessed','unclassified','') THEN ? ELSE impact END,
+                rationale=COALESCE(?,rationale)
+                WHERE event_id=?""",
+                (prefer_url or None, analysis, event.get("result_period"), event.get("statement_type"),
+                 event.get("impact"), event.get("impact"), event.get("impact"),
+                 event.get("rationale"), existing["event_id"]))
+            db.commit()
+        return True
+
+    def unpublished_result_analysis(self,limit=5):
+        with self.connect() as db:
+            rows=db.execute("""SELECT * FROM events
+              WHERE event_status='RESULT PUBLISHED'
+                AND (analysis_json IS NULL OR analysis_json='')
+                AND julianday(COALESCE(filed_at,created_at))>=julianday('now','-2 days')
+              ORDER BY COALESCE(filed_at,created_at) DESC LIMIT ?""",(limit,)).fetchall()
+        return [dict(row) for row in rows]
     def mark_notified(self,event_id):
         with self.connect() as db: db.execute("UPDATE events SET notified=1 WHERE event_id=?",(event_id,)); db.commit()
     def pending_notifications(self,limit=50):
@@ -124,3 +167,5 @@ class Store:
         return [row["symbol"] for row in rows if row["symbol"] not in {"SYMBOL", "UNDERLYING", "CONTRACT"}]
     def count(self):
         with self.connect() as db: return db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    def pending_count(self):
+        return len(self.pending_notifications(limit=50))
