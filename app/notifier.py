@@ -12,8 +12,14 @@ _rate_limited_until = 0.0
 def _filed_time(value):
     if not value:
         return "Time not supplied by exchange"
+    raw = str(value).strip()
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").strftime("%d %b %Y") + " · time not supplied by exchange"
+        except ValueError:
+            pass
     try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y, %I:%M:%S %p IST")
