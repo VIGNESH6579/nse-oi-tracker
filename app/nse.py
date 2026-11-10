@@ -391,6 +391,7 @@ def _classify(title,details,feed_type,event_date=None):
     elif any(x in text for x in ("resignation","appointed as","ceo","managing director","key managerial")): category="Management Change"
     elif any(x in text for x in ("sebi","nclt","court","penalty","investigation","show cause","default")): category="Regulatory / Legal"
     elif any(x in text for x in ("acquisition","merger","amalgamation","buyback","fund raising","qip","rights issue","credit rating")): category="Corporate Action"
+    elif is_board: category="Board Meeting"
     else: category="Corporate Announcement"
 
     direction="unassessed"
