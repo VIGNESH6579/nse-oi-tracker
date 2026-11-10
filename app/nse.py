@@ -505,7 +505,7 @@ def normalize(item,allowed,company_map=None):
     url=item.get("link") or "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
     ident="|".join((symbol,filed or "",title,url))
     if state=="RESULT PUBLISHED":
-        period_match=re.search(r"\\bq[1-4]\\s*(?:fy\\s*)?(?:20?\\d{2}\\s*)?\\b",hay)
+        period_match=re.search(r"\bq[1-4]\s*(?:fy\s*)?(?:20?\d{2}\s*)?\b",hay)
         period=period_match.group(0).strip() if period_match else (filed[:10] if filed else "unknown-period")
         dedupe_key=hashlib.sha256(f"{symbol}|RESULT|{period}".encode()).hexdigest()
     else:
