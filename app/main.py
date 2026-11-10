@@ -236,7 +236,7 @@ def dashboard():
     results_future.sort(key=lambda e:(e.get("event_date") or "9999-12-31",e.get("symbol") or ""))
     results_published=[e for e in recent if e.get("event_status")=="RESULT PUBLISHED"]
     news=[e for e in recent if e.get("event_status")=="NEW EVENT"]
-    board=[e for e in recent if e.get("event_status") in ("BOARD MEETING NOTICE","UPCOMING","RESULT DATE NOT CONFIRMED")]
+    board=[e for e in recent if e.get("event_status") in ("BOARD MEETING NOTICE","UPCOMING","RESULT DATE NOT CONFIRMED","SCHEDULE CHANGE")]
     event_symbols={str(e.get("symbol") or "").upper() for e in recent if e.get("symbol")}
     feeds=[]
     for name,feed in status.get("sources",{}).items():
