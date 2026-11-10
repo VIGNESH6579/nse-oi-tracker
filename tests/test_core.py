@@ -561,3 +561,69 @@ def test_ntfy_digest_batches_priority_events_in_one_request(monkeypatch):
 def test_ntfy_date_only_filing_does_not_invent_midnight_time():
     from app.notifier import _filed_time
     assert _filed_time("2026-11-10") == "10 Nov 2026 · time not supplied by exchange"
+
+
+def test_static_fno_fallback_is_used_when_live_csv_and_cache_are_unavailable(monkeypatch):
+    from types import SimpleNamespace
+    import requests
+    import app.nse as nse_module
+
+    class Session:
+        def get(self, *args, **kwargs):
+            response = requests.Response()
+            response.status_code = 403
+            raise requests.HTTPError("403 forbidden", response=response)
+
+    monkeypatch.setattr(nse_module, "settings", SimpleNamespace(
+        fno_symbols=frozenset(),
+        fallback_fno_symbols=frozenset({"COCHINSHIP", "RVNL", "NIFTY BANK"}),
+        universe_csv_url="https://example.com/fno.csv",
+        nse_timeout=5,
+    ))
+    symbols, source = nse_module.get_fno_symbols(Session())
+    assert symbols == {"COCHINSHIP", "RVNL"}
+    assert "FNO_FALLBACK_SYMBOLS" in source
+
+
+def test_source_backoff_reuses_recent_cache_without_repeating_blocked_request(monkeypatch):
+    import requests
+    import app.nse as nse_module
+
+    nse_module._SOURCE_CACHE.clear()
+    nse_module._SOURCE_RETRY_AFTER.clear()
+    nse_module._SOURCE_FAILURES.clear()
+    monkeypatch.setattr(nse_module.time, "monotonic", lambda: 100.0)
+    nse_module._SOURCE_CACHE["blocked"] = {
+        "at": 90.0, "items": [{"title": "Cached filing", "feed_type": "announcements"}]
+    }
+    nse_module._SOURCE_RETRY_AFTER["blocked"] = 200.0
+    calls = []
+    items, health = nse_module._fetch_source(
+        "blocked", lambda: calls.append("called") or []
+    )
+    assert calls == []
+    assert len(items) == 1
+    assert items[0]["title"] == "Cached filing"
+    assert health["stale"] is True
+    assert health["ok"] is False
+
+
+def test_source_403_uses_thirty_minute_retry_backoff(monkeypatch):
+    import requests
+    import app.nse as nse_module
+
+    nse_module._SOURCE_CACHE.clear()
+    nse_module._SOURCE_RETRY_AFTER.clear()
+    nse_module._SOURCE_FAILURES.clear()
+    monkeypatch.setattr(nse_module.time, "monotonic", lambda: 500.0)
+
+    def fail():
+        response = requests.Response()
+        response.status_code = 403
+        raise requests.HTTPError("403 forbidden", response=response)
+
+    items, health = nse_module._fetch_source("blocked-new", fail)
+    assert items == []
+    assert health["ok"] is False
+    assert health["retry_in_seconds"] == 1800
+    assert nse_module._SOURCE_RETRY_AFTER["blocked-new"] == 2300.0
