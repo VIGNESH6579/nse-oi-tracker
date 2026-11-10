@@ -352,7 +352,7 @@ def test_notification_queue_ignores_stale_unnotified_backlog(tmp_path):
         "impact": "unclassified",
         "headline": "Old filing",
         "details": "",
-        "filed_at": None,
+        "filed_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
         "source_url": "https://example.com/old",
         "event_status": "NEW EVENT",
     }
