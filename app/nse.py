@@ -300,32 +300,31 @@ def fetch_all_feeds(allowed=None, company_map=None):
     session=_session(); output=[]; health={}
     try:
         for name,url in FEEDS.items():
-            try:
-                is_bse = name.startswith("bse_")
-                if is_bse:
-                    session.headers.update({
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
-                        "Referer": "https://www.bseindia.com/",
-                        "Origin": "https://www.bseindia.com",
-                    })
-                else:
-                    # NSE's edge protection rejects generic bot-style RSS user agents.
-                    # Keep a mainstream browser UA and identify the NSE site as the referrer.
-                    session.headers.update({
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-                        "Referer": "https://www.nseindia.com/",
-                        "Origin": "https://www.nseindia.com",
-                        "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
-                    })
-                items, feed_health = _fetch_source(
-                    name, lambda url=url: fetch_feed(session, url)
-                )
-                health[name] = feed_health
-                feed_kind = ("board_meetings" if name in {"board_meetings", "bse_board_meetings"} else ("financial_results" if name in {"financial_results", "bse_financial_results"} else "announcements"))
-                for x in items:
-                    x["feed_type"]=feed_kind
-                    x["source_name"]="BSE RSS" if is_bse else "NSE RSS"
-                output.extend(items)
+            is_bse = name.startswith("bse_")
+            if is_bse:
+                session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+                    "Referer": "https://www.bseindia.com/",
+                    "Origin": "https://www.bseindia.com",
+                })
+            else:
+                # NSE's edge protection rejects generic bot-style RSS user agents.
+                # Keep a mainstream browser UA and identify the NSE site as the referrer.
+                session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+                    "Referer": "https://www.nseindia.com/",
+                    "Origin": "https://www.nseindia.com",
+                    "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
+                })
+            items, feed_health = _fetch_source(
+                name, lambda url=url: fetch_feed(session, url)
+            )
+            health[name] = feed_health
+            feed_kind = ("board_meetings" if name in {"board_meetings", "bse_board_meetings"} else ("financial_results" if name in {"financial_results", "bse_financial_results"} else "announcements"))
+            for x in items:
+                x["feed_type"]=feed_kind
+                x["source_name"]="BSE RSS" if is_bse else "NSE RSS"
+            output.extend(items)
     finally: session.close()
 
     # Structured board-meetings API supplies filing timestamps when available.
