@@ -51,7 +51,12 @@ def _is_index_underlying(value):
     }
 
 
+_FNO_SYMBOLS_CACHE = set()
+_FNO_SYMBOLS_RETRY_AFTER = 0.0
+
+
 def get_fno_symbols(session=None):
+    global _FNO_SYMBOLS_CACHE, _FNO_SYMBOLS_RETRY_AFTER
     # The official file has both UNDERLYING (display name) and SYMBOL (ticker).
     # Always use SYMBOL. The current file places UNDERLYING first, so reading
     # the first matching column silently loads company names instead of tickers.
@@ -65,6 +70,15 @@ def get_fno_symbols(session=None):
         valid for item in getattr(settings, "fallback_fno_symbols", ())
         if (valid := _valid_stock_symbol(item))
     }
+    now = time.monotonic()
+    if session is None and now < _FNO_SYMBOLS_RETRY_AFTER:
+        if _FNO_SYMBOLS_CACHE:
+            cached = set(_FNO_SYMBOLS_CACHE) | configured
+            return cached, "in-memory last-known-good F&O universe (NSE retry cooldown)"
+        if configured:
+            return configured, "FNO_SYMBOLS environment fallback (NSE retry cooldown)"
+        if fallback:
+            return fallback, "FNO_FALLBACK_SYMBOLS static recovery universe (NSE retry cooldown)"
     try:
         r=s.get(settings.universe_csv_url,headers={
             "Accept":"text/csv,application/csv,*/*;q=0.8",
@@ -89,11 +103,16 @@ def get_fno_symbols(session=None):
         if not symbols:
             raise RuntimeError("NSE F&O market-lot CSV parsed but contained no valid stock symbols")
         symbols.update(configured)
+        _FNO_SYMBOLS_CACHE = set(symbols)
+        _FNO_SYMBOLS_RETRY_AFTER = 0.0
         source="NSE F&O market-lot CSV (SYMBOL column; stock underlyings only)"
         if configured:
             source+=" + valid FNO_SYMBOLS additions"
         return symbols,source
-    except Exception:
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        delay = 1800 if getattr(response, "status_code", None) == 403 else 300
+        _FNO_SYMBOLS_RETRY_AFTER = now + delay
         if configured:
             return configured,"FNO_SYMBOLS environment fallback (NSE CSV unavailable; valid tickers only)"
         if fallback:
