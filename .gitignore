@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 data/
+.tmp-pytest/
 *.db
 .tmp/
 _probe_*.py

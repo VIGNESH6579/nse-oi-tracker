@@ -115,6 +115,27 @@ def parse_period_from_text(*parts: str) -> dict:
     if start and end:
         label = indian_fy_quarter(start, end)
     if not label:
+        ended = re.search(
+            r"(?:quarter|period|half[-\s]?year)\s+ended\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}|\d{1,2}[-/][A-Za-z]{3,}[-/]\d{4}|[A-Za-z]{3,}\s+\d{1,2},\s+\d{4})",
+            text,
+            flags=re.I,
+        )
+        if ended:
+            raw = ended.group(1).replace(",", "")
+            end = _parse_display_date(raw)
+            if end is None:
+                for fmt in ("%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+                    try:
+                        end = datetime.strptime(raw, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+            if end:
+                quarter = {6: "Q1", 9: "Q2", 12: "Q3", 3: "Q4"}.get(end.month)
+                if quarter:
+                    fy = end.year + 1 if end.month >= 4 else end.year
+                    label = f"{quarter} FY{str(fy)[2:]}"
+    if not label:
         qmatch = re.search(r"\b(Q[1-4])\s*(?:FY\s*)?(20\d{2}|\d{2})\b", text, flags=re.I)
         if qmatch:
             year = qmatch.group(2)
