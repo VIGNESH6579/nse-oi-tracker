@@ -17,9 +17,15 @@ def send(event: dict) -> bool:
         headers["Authorization"] = f"Bearer {settings.ntfy_token}"
     try:
         response = requests.post(url, data=body.encode("utf-8"), headers=headers, timeout=15)
+        if response.status_code == 429:
+            log.warning(
+                "ntfy rate limited delivery for event_id=%s retry_after=%s",
+                event.get("event_id"), response.headers.get("Retry-After", "not supplied")
+            )
+            return False
         response.raise_for_status()
         log.info("ntfy delivery succeeded: symbol=%s event_id=%s",event.get("symbol"),event.get("event_id"))
         return True
-    except requests.RequestException:
-        log.exception("ntfy delivery failed for %s", event.get("event_id"))
+    except requests.RequestException as exc:
+        log.warning("ntfy delivery failed for event_id=%s error=%s", event.get("event_id"), exc)
         return False
