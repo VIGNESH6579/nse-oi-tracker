@@ -1,8 +1,8 @@
-import logging, threading, re
+import logging, threading, re, secrets
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 from .config import settings
@@ -282,7 +282,7 @@ nav{{display:flex;gap:5px;overflow:auto;position:sticky;top:0;background:#f4f6fa
 <section class="panel" id="data-status"><div class="panel-head"><div><h2>Data status</h2><p>Check this when a result, announcement or share price is missing.</p></div></div><div class="feeds">{"".join(feeds)}</div>{error_html}
 <div class="note">A scheduled results notice is not a published result. A result’s direction is left unassessed until the financial figures can be compared.</div>
 <div class="footer"><span>Last poll: {poll_time}</span><span>Exchange publication time may differ from the instant a filing became visible to every investor.</span><span><a href="/api/health">Technical status</a></span></div></section>
-</div><script>(function(){{const s=document.getElementById("quickSearch"),f=document.getElementById("searchFeedback");if(!s)return;s.addEventListener("input",function(){{const q=s.value.trim().toLowerCase();let n=0;document.querySelectorAll("[data-search]").forEach(function(x){{const ok=!q||(x.getAttribute("data-search")||"").toLowerCase().includes(q);x.classList.toggle("hide",!ok);if(ok)n++;}});f.textContent=q?("Showing "+n+" matching company events."):"Filters company events and filings.";}});}})();</script>
+</div><script>(function(){{const s=document.getElementById("quickSearch"),f=document.getElementById("searchFeedback");if(!s)return;s.addEventListener("input",function(){{const q=s.value.trim().toLowerCase();let n=0;document.querySelectorAll("[data-search]").forEach(function(x){{const ok=!q||(x.getAttribute("data-search")||"").toLowerCase().includes(q);x.classList.toggle("hide",!ok);if(ok)n++;}});f.textContent=q?("Showing "+n+" matching company events."):"Filters company events and filings.";}});setTimeout(function(){{window.location.reload();}},{max(60,settings.poll_interval)*1000});}})();</script>
 </body></html>"""
 
 @app.get("/api/events")
@@ -313,4 +313,10 @@ def readiness():
     return JSONResponse(payload,status_code=200 if payload["ready"] else 503)
 
 @app.post("/api/sync")
-def sync(): return poll_once()
+def sync(x_sync_token: str | None = Header(default=None, alias="X-Sync-Token")):
+    # Fail closed: when SYNC_TOKEN is unset, public manual triggering is disabled.
+    if not settings.sync_token or not x_sync_token or not secrets.compare_digest(
+        settings.sync_token, x_sync_token
+    ):
+        raise HTTPException(status_code=404, detail="Not found")
+    return poll_once()
