@@ -421,3 +421,79 @@ def test_nse_rss_uses_browser_user_agent_instead_of_bot_identifier(monkeypatch):
     assert observed
     assert all("Mozilla/5.0" in ua and "NSE-Company-News-Monitor" not in ua for ua, _ in observed)
     assert all(referer == "https://www.nseindia.com/" for _, referer in observed)
+
+
+
+def test_result_outcome_from_board_meeting_is_published_not_scheduled():
+    category, state, direction, rationale = _classify(
+        "COCHINSHIP Outcome of Board Meeting for Q2 Results/Interim Dividend/Record Date",
+        "The board approved the financial results for the quarter ended September 30, 2026.",
+        "announcements",
+    )
+    assert category == "Financial Results"
+    assert state == "RESULT PUBLISHED"
+    assert direction == "unassessed"
+    assert "not assessed" in rationale.lower()
+
+
+def test_sudden_company_order_event_is_directionally_classified():
+    category, state, direction, rationale = _classify(
+        "Company secures major work order",
+        "The company received a letter of award for a significant contract.",
+        "announcements",
+    )
+    assert category == "Order / Contract"
+    assert state == "SUDDEN EVENT"
+    assert direction == "bullish"
+
+
+def test_result_board_meeting_notice_is_not_misclassified_as_published():
+    category, state, direction, _ = _classify(
+        "Board Meeting Intimation for Unaudited Financial Results",
+        "The board will consider and approve the financial results at its meeting.",
+        "board_meetings",
+        "2099-12-15",
+    )
+    assert category == "Financial Results"
+    assert state == "RESULT SCHEDULED"
+    assert direction == "unassessed"
+
+
+def test_nse_financial_results_rss_is_tagged_as_financial_results(monkeypatch):
+    from app import nse
+
+    class FakeSession:
+        headers = {}
+        def close(self):
+            return None
+
+    monkeypatch.setattr(nse, "FEEDS", {"financial_results": "https://example.com/results.xml"})
+    monkeypatch.setattr(nse, "_session", lambda: FakeSession())
+    monkeypatch.setattr(nse, "fetch_feed", lambda session, url: [
+        {"title": "XYZ financial results", "description": "", "link": url, "published": ""}
+    ])
+    monkeypatch.setattr(nse, "fetch_board_meetings_api", lambda allowed: [])
+    monkeypatch.setattr(nse, "fetch_event_calendar_api", lambda allowed: [])
+    rows, health = nse.fetch_all_feeds({"XYZ"}, {})
+    assert rows[0]["feed_type"] == "financial_results"
+    assert rows[0]["source_name"] == "NSE RSS"
+
+
+def test_notification_queue_only_contains_results_and_sudden_events(tmp_path):
+    store = Store(str(tmp_path / "events.db"))
+    now = datetime.now(timezone.utc).isoformat()
+    base = {
+        "symbol": "XYZ", "company": "XYZ Limited", "category": "Financial Results",
+        "impact": "unassessed", "headline": "Filing", "details": "",
+        "filed_at": now, "source_url": "https://example.com", "rationale": "",
+        "source_name": "BSE RSS", "feed_type": "announcements",
+    }
+    for event_id, state in [
+        ("scheduled", "RESULT SCHEDULED"),
+        ("routine", "NEW EVENT"),
+        ("result", "RESULT PUBLISHED"),
+        ("sudden", "SUDDEN EVENT"),
+    ]:
+        store.insert(dict(base, event_id=event_id, event_status=state, headline=event_id))
+    pending = store.pending_notifications(limit=10)
+    assert {x["event_id"] for x in pending} == {"result", "sudden"}
