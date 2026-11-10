@@ -517,3 +517,47 @@ def test_same_quarter_result_from_different_feeds_has_same_dedupe_key():
     assert first["event_status"] == "RESULT PUBLISHED"
     assert second["event_status"] == "RESULT PUBLISHED"
     assert first["dedupe_key"] == second["dedupe_key"]
+
+
+def test_ntfy_digest_batches_priority_events_in_one_request(monkeypatch):
+    from types import SimpleNamespace
+    from app import notifier
+
+    monkeypatch.setattr(notifier, "settings", SimpleNamespace(
+        ntfy_topic="Nse_News_Alert", ntfy_token="", ntfy_base_url="https://ntfy.sh"
+    ))
+    calls = []
+
+    class Response:
+        status_code = 200
+        headers = {}
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, data, headers, timeout):
+        calls.append((url, data.decode("utf-8"), headers))
+        return Response()
+
+    monkeypatch.setattr(notifier.requests, "post", fake_post)
+    events = [
+        {"event_id": "r1", "symbol": "COCHINSHIP", "company": "Cochin Shipyard",
+         "event_status": "RESULT PUBLISHED", "impact": "unassessed",
+         "headline": "Q2 results filed", "details": "Results approved",
+         "rationale": "Figures not supplied", "filed_at": None, "source_name": "BSE RSS",
+         "source_url": "https://example.com/result"},
+        {"event_id": "e1", "symbol": "RVNL", "company": "Rail Vikas Nigam",
+         "event_status": "SUDDEN EVENT", "impact": "bullish",
+         "headline": "Major order won", "details": "Order awarded",
+         "rationale": "Positive contract event", "filed_at": "2026-11-10T09:00:00+00:00",
+         "source_name": "NSE RSS", "source_url": "https://example.com/order"},
+    ]
+    assert notifier.send_many(events) is True
+    assert len(calls) == 1
+    assert "COCHINSHIP" in calls[0][1]
+    assert "RVNL" in calls[0][1]
+    assert calls[0][2]["Title"] == "NSE NEWS | 2 ALERT(S)"
+
+
+def test_ntfy_date_only_filing_does_not_invent_midnight_time():
+    from app.notifier import _filed_time
+    assert _filed_time("2026-11-10") == "10 Nov 2026 · time not supplied by exchange"
