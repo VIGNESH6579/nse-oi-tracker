@@ -227,7 +227,8 @@ def _card(event):
     state=str(event.get("event_status") or "")
     labels={"RESULT SCHEDULED TODAY":"Results scheduled today","RESULT SCHEDULED":"Results scheduled",
             "RESULT DATE NOT CONFIRMED":"Result agenda · date unclear","RESULT PUBLISHED":"Results published",
-            "NEW EVENT":"New company announcement","BOARD MEETING NOTICE":"Board meeting notice",
+            "NEW EVENT":"New company announcement","SUDDEN EVENT":"Sudden material event",
+            "BOARD MEETING NOTICE":"Board meeting notice",
             "UPCOMING":"Board meeting notice","SCHEDULE CHANGE":"Schedule changed"}
     status_label=labels.get(state,state.replace("_"," ").title())
     filed=event.get("filed_at")
@@ -266,14 +267,26 @@ def dashboard():
     results_future=[e for e in recent if e.get("event_status")=="RESULT SCHEDULED" and e.get("event_date") and e.get("event_date")>today]
     results_future.sort(key=lambda e:(e.get("event_date") or "9999-12-31",e.get("symbol") or ""))
     results_published=[e for e in recent if e.get("event_status")=="RESULT PUBLISHED"]
-    news=[e for e in recent if e.get("event_status")=="NEW EVENT"]
+    # Sudden material events are priority alerts and must also appear in
+    # the dashboard, not only in the ntfy queue.
+    news=[e for e in recent if e.get("event_status") in {"NEW EVENT","SUDDEN EVENT"}]
     board=[e for e in recent if e.get("event_status") in ("BOARD MEETING NOTICE","UPCOMING","RESULT DATE NOT CONFIRMED","SCHEDULE CHANGE")]
     event_symbols={str(e.get("symbol") or "").upper() for e in recent if e.get("symbol")}
     feeds=[]
     for name,feed in status.get("sources",{}).items():
         ok=bool(feed.get("ok"))
-        detail=f'{int(feed.get("items",0))} items received' if ok else str(feed.get("error") or "Source unavailable")
-        feeds.append(f'<div class="feed"><i class="dot {"green" if ok else "red"}"></i><div><b>{_esc(name.replace("_"," ").title())}</b><small>{_esc(detail)}</small></div><span class="badge {"good" if ok else "bad"}">{"OK" if ok else "Issue"}</span></div>')
+        stale=bool(feed.get("stale"))
+        count=int(feed.get("items",0))
+        if stale:
+            detail=f'{count} cached items · source temporarily unavailable'
+            label,css="STALE","warn"
+        elif ok:
+            detail=f'{count} items received'
+            label,css="OK","good"
+        else:
+            detail=str(feed.get("error") or "Source unavailable")
+            label,css="Issue","bad"
+        feeds.append(f'<div class="feed"><i class="dot {"green" if ok else "red"}"></i><div><b>{_esc(name.replace("_"," ").title())}</b><small>{_esc(detail)}</small></div><span class="badge {css}">{label}</span></div>')
     if not feeds: feeds.append('<div class="empty">Feed status will appear after the first poll.</div>')
     poll_time=_esc(_display_time(status.get("last_poll")))
     interval=max(1,round(settings.poll_interval/60))
@@ -296,7 +309,7 @@ nav{{display:flex;gap:5px;overflow:auto;position:sticky;top:0;background:#f4f6fa
 @media(max-width:720px){{.metrics{{grid-template-columns:repeat(2,minmax(0,1fr))}}.cards{{grid-template-columns:1fr}}.feeds{{grid-template-columns:1fr}}.wrap{{padding:12px 10px 35px}}.hero{{padding:16px}}}}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand"><span class="mark">N</span><div>Intraday News Watch<small>NSE F&O company monitor</small></div></div><span class="subtop">Poll: {interval} min · Last check: {poll_time}</span></div>
-<section class="hero"><div class="eyebrow">Stock-specific exchange filings only</div><h1>Today’s Company Events</h1><p>Results expected today, results already published, and fresh company announcements — for NSE F&O companies.</p><div class="chips"><span class="chip {_esc(notify_class)}">{_esc(notification)}</span><span class="chip">All dates / times in IST</span></div></section>
+<section class="hero"><div class="eyebrow">Stock-specific exchange filings only</div><h1>Today’s Company Events</h1><p>Results expected today, results already published, and fresh company announcements — for NSE F&O companies.</p><div class="chips"><span class="chip {_esc(notify_class)}">{_esc(notification)}</span><span class="chip {_esc("good" if status.get("scanner_state")=="healthy" else "warn" if status.get("scanner_state")=="degraded" else "bad")}">Scanner: {_esc(str(status.get("scanner_state","starting")).upper())} · {int(status.get("rss_ok_count",0))}/{int(status.get("rss_total",len(FEEDS)))} RSS feeds OK</span><span class="chip">All dates / times in IST</span></div></section>
 <nav><a href="#today-results">Results today</a><a href="#published-results">Published results</a><a href="#company-news">Fresh news</a><a href="#upcoming-results">Upcoming results</a><a href="#data-status">Data status</a></nav>
 <div class="metrics">
 <div class="metric"><label>Results scheduled today</label><b>{len(results_today)}</b><small>From board meeting notices</small></div>
